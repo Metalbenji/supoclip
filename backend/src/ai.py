@@ -10,6 +10,7 @@ import re
 from pydantic_ai import Agent, NativeOutput
 from pydantic import BaseModel, Field
 
+from .ai_focus_tags import build_ai_focus_guidance
 from .config import Config
 
 logger = logging.getLogger(__name__)
@@ -333,7 +334,10 @@ def _build_analysis_prompt(
     transcript: str,
     *,
     chunk_metadata: Optional[Dict[str, Any]] = None,
+    ai_focus_tags: Optional[List[str]] = None,
 ) -> str:
+    focus_guidance = build_ai_focus_guidance(ai_focus_tags or [])
+    focus_section = f"\n\n{focus_guidance}" if focus_guidance else ""
     if chunk_metadata and int(chunk_metadata.get("total") or 1) > 1:
         chunk_index = int(chunk_metadata.get("index") or 1)
         total_chunks = int(chunk_metadata.get("total") or 1)
@@ -347,14 +351,14 @@ Return up to {CHUNK_ANALYSIS_SEGMENT_TARGET} high-quality candidate segments fro
 Excerpt window: {chunk_start} to {chunk_end}
 
 Transcript excerpt:
-{transcript}"""
+{transcript}{focus_section}"""
 
     return f"""Analyze this video transcript and identify the most engaging segments for short-form content.
 
 Find segments that would be compelling as standalone clips for social media.
 
 Transcript:
-{transcript}"""
+{transcript}{focus_section}"""
 
 
 def _dedupe_candidate_segments(segments: List[TranscriptSegment]) -> List[TranscriptSegment]:
@@ -463,14 +467,20 @@ def _combine_key_topics(analyses: List[TranscriptAnalysis]) -> List[str]:
     return deduped_topics
 
 
-def _build_rerank_prompt(candidates_text: str, candidate_count: int) -> str:
+def _build_rerank_prompt(
+    candidates_text: str,
+    candidate_count: int,
+    ai_focus_tags: Optional[List[str]] = None,
+) -> str:
+    focus_guidance = build_ai_focus_guidance(ai_focus_tags or [])
+    focus_section = f"\n\n{focus_guidance}" if focus_guidance else ""
     return f"""Globally rank these clip candidates from best to worst.
 
 Return exactly {candidate_count} entries in ranked_candidates, one per candidate_id, with no duplicates.
 Every candidate_id from 1 to {candidate_count} must appear exactly once.
 
 Candidates:
-{candidates_text}"""
+{candidates_text}{focus_section}"""
 
 
 def _build_rerank_candidates_text(segments: List[TranscriptSegment]) -> str:
@@ -493,6 +503,7 @@ async def _rerank_segments_globally(
     ai_api_key: Optional[str] = None,
     ai_base_url: Optional[str] = None,
     ai_model: Optional[str] = None,
+    ai_focus_tags: Optional[List[str]] = None,
     ai_request_options: Optional[Dict[str, Any]] = None,
     enabled: bool = True,
 ) -> Tuple[List[TranscriptSegment], Dict[str, Any]]:
@@ -529,7 +540,7 @@ async def _rerank_segments_globally(
     diagnostics["model"] = resolved_model
 
     candidates_text = _build_rerank_candidates_text(candidate_segments)
-    prompt = _build_rerank_prompt(candidates_text, candidate_count)
+    prompt = _build_rerank_prompt(candidates_text, candidate_count, ai_focus_tags=ai_focus_tags)
 
     try:
         result = await rerank_agent.run(prompt)
@@ -893,6 +904,7 @@ async def get_most_relevant_parts_by_transcript(
     ai_api_key: Optional[str] = None,
     ai_base_url: Optional[str] = None,
     ai_model: Optional[str] = None,
+    ai_focus_tags: Optional[List[str]] = None,
     ai_request_options: Optional[Dict[str, Any]] = None,
 ) -> TranscriptAnalysis:
     """Get the most relevant parts of a transcript for creating clips - simplified version."""
@@ -940,7 +952,11 @@ async def get_most_relevant_parts_by_transcript(
                 chunk.get("start_line"),
                 chunk.get("end_line"),
             )
-            prompt = _build_analysis_prompt(chunk_text, chunk_metadata=chunk if chunked_mode else None)
+            prompt = _build_analysis_prompt(
+                chunk_text,
+                chunk_metadata=chunk if chunked_mode else None,
+                ai_focus_tags=ai_focus_tags,
+            )
 
             try:
                 result = await transcript_agent.run(prompt)
@@ -998,6 +1014,7 @@ async def get_most_relevant_parts_by_transcript(
             ai_api_key=ai_api_key,
             ai_base_url=ai_base_url,
             ai_model=ai_model,
+            ai_focus_tags=ai_focus_tags,
             ai_request_options=ai_request_options,
             enabled=chunked_mode,
         )
@@ -1032,6 +1049,7 @@ async def get_most_relevant_parts_by_transcript(
                     "results": chunk_results,
                     "failures": chunk_failures,
                 },
+                "ai_focus_tags": list(ai_focus_tags or []),
             },
         )
 

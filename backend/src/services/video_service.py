@@ -16,6 +16,7 @@ from ..youtube_utils import (
     get_youtube_video_title,
     get_youtube_video_id
 )
+from ..ai_focus_tags import build_ai_focus_guidance
 from ..ai import get_most_relevant_parts_by_transcript
 from ..config import Config
 from ..transcription_limits import (
@@ -252,6 +253,7 @@ class VideoService:
         ai_api_key: Optional[str] = None,
         ai_base_url: Optional[str] = None,
         ai_model: Optional[str] = None,
+        ai_focus_tags: Optional[List[str]] = None,
         ai_request_options: Optional[Dict[str, Any]] = None,
     ) -> Any:
         """
@@ -265,6 +267,7 @@ class VideoService:
             ai_api_key=ai_api_key,
             ai_base_url=ai_base_url,
             ai_model=ai_model,
+            ai_focus_tags=ai_focus_tags,
             ai_request_options=ai_request_options,
         )
         logger.info(f"AI analysis complete: {len(relevant_parts.most_relevant_segments)} segments found")
@@ -277,6 +280,7 @@ class VideoService:
         ai_api_key: Optional[str] = None,
         ai_base_url: Optional[str] = None,
         ai_model: Optional[str] = None,
+        ai_focus_tags: Optional[List[str]] = None,
         ai_request_options: Optional[Dict[str, Any]] = None,
         progress_callback: Optional[callable] = None,
     ) -> Any:
@@ -319,6 +323,7 @@ class VideoService:
                 ai_api_key=ai_api_key,
                 ai_base_url=ai_base_url,
                 ai_model=ai_model,
+                ai_focus_tags=ai_focus_tags,
                 ai_request_options=ai_request_options,
             )
         finally:
@@ -820,6 +825,7 @@ class VideoService:
         ai_key_labels: Optional[List[str]],
         ai_routing_mode: Optional[str],
         ai_model: Optional[str],
+        ai_focus_tags: Optional[List[str]],
         ai_request_options: Optional[Dict[str, Any]] = None,
         progress_callback: Optional[callable] = None,
     ) -> tuple[Any, List[str]]:
@@ -858,6 +864,7 @@ class VideoService:
                         ai_api_key=key_candidate,
                         ai_base_url=ai_base_url,
                         ai_model=ai_model,
+                        ai_focus_tags=ai_focus_tags,
                         ai_request_options=ai_request_options,
                         progress_callback=progress_callback,
                     )
@@ -933,6 +940,8 @@ class VideoService:
             diagnostics["ollama_network_backoff_ms"] = ollama_backoff_ms
         if ai_routing_mode:
             diagnostics["ai_routing_mode"] = ai_routing_mode
+        if ai_focus_tags:
+            diagnostics["ai_focus_tags"] = list(ai_focus_tags)
         relevant_parts.diagnostics = diagnostics
 
         return relevant_parts, attempted_labels
@@ -952,6 +961,7 @@ class VideoService:
         ai_model: Optional[str] = None,
         ai_request_options: Optional[Dict[str, Any]] = None,
         transcription_options: Optional[Dict[str, Any]] = None,
+        ai_focus_tags: Optional[List[str]] = None,
         progress_callback: Optional[callable] = None,
         cancel_check: Optional[Callable[[], Awaitable[None]]] = None,
     ) -> Dict[str, Any]:
@@ -1035,14 +1045,17 @@ class VideoService:
         await ensure_not_cancelled()
 
         if progress_callback:
+            focus_guidance = build_ai_focus_guidance(ai_focus_tags or [])
+            guidance_suffix = " with focus tags" if focus_guidance else ""
             await progress_callback(
                 50,
-                f"Analyzing content with AI ({ai_provider})...",
+                f"Analyzing content with AI ({ai_provider}){guidance_suffix}...",
                 {
                     "stage": "analysis",
                     "stage_progress": 0,
                     "overall_progress": 50,
                     "ai_provider": ai_provider,
+                    "ai_focus_tags": list(ai_focus_tags or []),
                 },
             )
 
@@ -1055,6 +1068,7 @@ class VideoService:
             ai_key_labels=ai_key_labels,
             ai_routing_mode=ai_routing_mode,
             ai_model=ai_model,
+            ai_focus_tags=ai_focus_tags,
             ai_request_options=ai_request_options,
             progress_callback=progress_callback,
         )
@@ -1084,6 +1098,7 @@ class VideoService:
             "summary": relevant_parts.summary if relevant_parts else None,
             "key_topics": relevant_parts.key_topics if relevant_parts else None,
             "analysis_diagnostics": relevant_parts.diagnostics if relevant_parts else None,
+            "ai_focus_tags": list(ai_focus_tags or []),
             "requested_transcription_provider": requested_transcription_provider,
             "effective_transcription_provider": effective_transcription_provider,
             "transcription_provider_resolution": provider_resolution,
@@ -1162,6 +1177,7 @@ class VideoService:
         ai_model: Optional[str] = None,
         ai_request_options: Optional[Dict[str, Any]] = None,
         transcription_options: Optional[Dict[str, Any]] = None,
+        ai_focus_tags: Optional[List[str]] = None,
         progress_callback: Optional[callable] = None,
         cancel_check: Optional[Callable[[], Awaitable[None]]] = None,
     ) -> Dict[str, Any]:
@@ -1184,6 +1200,7 @@ class VideoService:
                 ai_model=ai_model,
                 ai_request_options=ai_request_options,
                 transcription_options=transcription_options,
+                ai_focus_tags=ai_focus_tags,
                 progress_callback=progress_callback,
                 cancel_check=cancel_check,
             )
@@ -1205,6 +1222,7 @@ class VideoService:
                 "clips": render_result.get("clips", []),
                 "summary": analysis_result.get("summary"),
                 "key_topics": analysis_result.get("key_topics"),
+                "ai_focus_tags": analysis_result.get("ai_focus_tags") or [],
                 "analysis_diagnostics": analysis_result.get("analysis_diagnostics"),
                 "clip_generation_diagnostics": render_result.get("clip_generation_diagnostics", {}),
                 "video_path": analysis_result.get("video_path"),

@@ -132,6 +132,14 @@ async def init_db():
         await conn.execute(
             text(
                 """
+                ALTER TABLE tasks
+                ADD COLUMN IF NOT EXISTS ai_focus_tags JSONB
+                """
+            )
+        )
+        await conn.execute(
+            text(
+                """
                 DO $$
                 BEGIN
                     IF EXISTS (
@@ -694,6 +702,9 @@ async def init_db():
                     original_text TEXT,
                     edited_text TEXT,
                     relevance_score FLOAT NOT NULL,
+                    review_score FLOAT NOT NULL DEFAULT 0,
+                    feedback_score_adjustment FLOAT NOT NULL DEFAULT 0,
+                    feedback_signals_json JSONB,
                     reasoning TEXT,
                     created_by_user BOOLEAN NOT NULL DEFAULT false,
                     is_selected BOOLEAN NOT NULL DEFAULT true,
@@ -748,10 +759,44 @@ async def init_db():
         await conn.execute(
             text(
                 """
+                ALTER TABLE IF EXISTS task_clip_drafts
+                ADD COLUMN IF NOT EXISTS review_score FLOAT NOT NULL DEFAULT 0
+                """
+            )
+        )
+        await conn.execute(
+            text(
+                """
+                ALTER TABLE IF EXISTS task_clip_drafts
+                ADD COLUMN IF NOT EXISTS feedback_score_adjustment FLOAT NOT NULL DEFAULT 0
+                """
+            )
+        )
+        await conn.execute(
+            text(
+                """
+                ALTER TABLE IF EXISTS task_clip_drafts
+                ADD COLUMN IF NOT EXISTS feedback_signals_json JSONB
+                """
+            )
+        )
+        await conn.execute(
+            text(
+                """
                 UPDATE task_clip_drafts
                 SET original_start_time = COALESCE(original_start_time, start_time),
                     original_end_time = COALESCE(original_end_time, end_time),
                     original_duration = COALESCE(original_duration, duration)
+                """
+            )
+        )
+        await conn.execute(
+            text(
+                """
+                UPDATE task_clip_drafts
+                SET review_score = COALESCE(review_score, relevance_score),
+                    feedback_score_adjustment = COALESCE(feedback_score_adjustment, 0),
+                    feedback_signals_json = COALESCE(feedback_signals_json, '{}'::jsonb)
                 """
             )
         )

@@ -18,6 +18,7 @@ from ...services.ai_model_catalog_service import ModelCatalogError
 from ...workers.job_queue import JobQueue
 from ...workers.progress import ProgressTracker
 from ...config import Config
+from ...ai_focus_tags import normalize_ai_focus_tags
 from ...subtitle_style import DEFAULT_SUBTITLE_STYLE, normalize_subtitle_style
 from ...task_subtitle_style import build_normalized_subtitle_style_for_task
 from ...transcription_limits import (
@@ -1163,6 +1164,10 @@ async def create_task(request: Request, db: AsyncSession = Depends(get_db)):
         ai_model = ai_model_raw.strip() or None
     else:
         raise HTTPException(status_code=400, detail="ai_options.model must be a string")
+    try:
+        ai_focus_tags = normalize_ai_focus_tags(ai_options.get("focus_tags"))
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
     if not user_id:
         raise HTTPException(status_code=401, detail="User authentication required")
 
@@ -1245,6 +1250,7 @@ async def create_task(request: Request, db: AsyncSession = Depends(get_db)):
             transitions_enabled=transitions_enabled,
             transcription_provider=transcription_provider,
             ai_provider=ai_provider,
+            ai_focus_tags=ai_focus_tags,
             review_before_render_enabled=review_before_render_enabled,
             timeline_editor_enabled=timeline_editor_enabled,
         )
@@ -1297,6 +1303,7 @@ async def create_task(request: Request, db: AsyncSession = Depends(get_db)):
             "transcription_options": transcription_runtime_options,
             "ai_provider": ai_provider,
             "ai_routing_mode": resolved_zai_routing_mode,
+            "ai_focus_tags": ai_focus_tags,
             "review_before_render_enabled": review_before_render_enabled,
             "timeline_editor_enabled": timeline_editor_enabled,
             "message": "Task created and queued for processing"

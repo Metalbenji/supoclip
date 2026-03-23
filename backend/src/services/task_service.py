@@ -54,6 +54,13 @@ MAX_OLLAMA_RETRY_BACKOFF_MS = 30000
 DRAFT_MIN_DURATION_SECONDS = 3
 DRAFT_MAX_DURATION_SECONDS = 180
 TIMELINE_INCREMENT_SECONDS = 0.5
+REVIEW_DESELECT_PENALTY = -0.35
+REVIEW_DELETE_PENALTY = -0.4
+REVIEW_MANUAL_CLIP_BONUS = 0.25
+REVIEW_TEXT_EDIT_BONUS = 0.07
+REVIEW_TIMING_EDIT_BASE_BONUS = 0.03
+REVIEW_TIMING_EDIT_PER_SECOND = 0.01
+REVIEW_TIMING_EDIT_MAX_BONUS = 0.12
 _TIMESTAMP_SECONDS_RE = re.compile(r"^\d+(?:\.\d+)?$")
 DEFAULT_OLLAMA_VIABILITY_ATTEMPTS = 2
 MIN_OLLAMA_VIABILITY_ATTEMPTS = 1
@@ -155,6 +162,7 @@ class TaskService:
         transitions_enabled: bool = False,
         transcription_provider: str = "local",
         ai_provider: str = "openai",
+        ai_focus_tags: Optional[List[str]] = None,
         review_before_render_enabled: bool = True,
         timeline_editor_enabled: bool = True,
     ) -> str:
@@ -192,6 +200,7 @@ class TaskService:
             transitions_enabled=transitions_enabled,
             transcription_provider=transcription_provider,
             ai_provider=ai_provider,
+            ai_focus_tags=ai_focus_tags,
             review_before_render_enabled=review_before_render_enabled,
             timeline_editor_enabled=timeline_editor_enabled,
         )
@@ -610,6 +619,63 @@ class TaskService:
     @staticmethod
     def _normalize_text_for_compare(value: Optional[str]) -> str:
         return " ".join((value or "").split()).strip().lower()
+
+    @staticmethod
+    def _clamp_review_score(value: Any) -> float:
+        return round(max(0.0, min(1.0, float(value or 0.0))), 4)
+
+    def _build_draft_feedback_state(self, draft: Dict[str, Any]) -> Dict[str, Any]:
+        base_score = self._clamp_review_score(draft.get("relevance_score"))
+        is_selected = bool(draft.get("is_selected", True))
+        is_deleted = bool(draft.get("is_deleted", False))
+        created_by_user = bool(draft.get("created_by_user", False))
+
+        current_start = self._parse_timestamp_to_seconds_strict(str(draft.get("start_time") or "00:00"))
+        current_end = self._parse_timestamp_to_seconds_strict(str(draft.get("end_time") or "00:00"))
+        original_start = self._parse_timestamp_to_seconds_strict(
+            str(draft.get("original_start_time") or draft.get("start_time") or "00:00")
+        )
+        original_end = self._parse_timestamp_to_seconds_strict(
+            str(draft.get("original_end_time") or draft.get("end_time") or "00:00")
+        )
+
+        timing_shift_seconds = round(abs(current_start - original_start) + abs(current_end - original_end), 3)
+        timing_changed = timing_shift_seconds > 1e-6
+        text_edited = (
+            self._normalize_text_for_compare(draft.get("edited_text"))
+            != self._normalize_text_for_compare(draft.get("original_text"))
+        )
+
+        adjustment = 0.0
+        if created_by_user:
+            adjustment += REVIEW_MANUAL_CLIP_BONUS
+        if timing_changed:
+            adjustment += min(
+                REVIEW_TIMING_EDIT_MAX_BONUS,
+                REVIEW_TIMING_EDIT_BASE_BONUS + (timing_shift_seconds * REVIEW_TIMING_EDIT_PER_SECOND),
+            )
+        if text_edited:
+            adjustment += REVIEW_TEXT_EDIT_BONUS
+        if not is_selected:
+            adjustment += REVIEW_DESELECT_PENALTY
+        if is_deleted:
+            adjustment += REVIEW_DELETE_PENALTY
+
+        adjustment = round(adjustment, 4)
+        return {
+            "review_score": self._clamp_review_score(base_score + adjustment),
+            "feedback_score_adjustment": adjustment,
+            "feedback_signals_json": {
+                "version": 1,
+                "selected": is_selected,
+                "deselected": not is_selected,
+                "deleted": is_deleted,
+                "created_by_user": created_by_user,
+                "timing_changed": timing_changed,
+                "timing_shift_seconds": timing_shift_seconds,
+                "text_edited": text_edited,
+            },
+        }
 
     @staticmethod
     def _parse_timestamp_to_seconds_strict(raw_timestamp: Any) -> float:
@@ -1048,6 +1114,7 @@ class TaskService:
         ai_model: Optional[str],
         ai_routing_mode: Optional[str],
         transcription_options: Optional[Dict[str, Any]],
+        ai_focus_tags: Optional[List[str]],
         subtitle_style: Optional[Dict[str, Any]],
         progress_callback: Optional[Callable],
         cancel_check: Optional[Callable[[], Awaitable[None]]],
@@ -1085,6 +1152,7 @@ class TaskService:
             ai_model=ai_model,
             ai_request_options=ai_request_options,
             transcription_options=transcription_options,
+            ai_focus_tags=ai_focus_tags,
             progress_callback=update_progress,
             cancel_check=cancel_check,
         )
@@ -1139,6 +1207,7 @@ class TaskService:
                     "edited_word_timings_json": None,
                 }
             )
+            drafts_payload[-1].update(self._build_draft_feedback_state(drafts_payload[-1]))
 
         await self.draft_clip_repo.replace_task_drafts(self.db, task_id, drafts_payload)
         await self.task_repo.update_task_status(
@@ -1174,6 +1243,7 @@ class TaskService:
         ai_model: Optional[str],
         ai_routing_mode: Optional[str],
         transcription_options: Optional[Dict[str, Any]],
+        ai_focus_tags: Optional[List[str]],
         subtitle_style: Optional[Dict[str, Any]],
         progress_callback: Optional[Callable],
         cancel_check: Optional[Callable[[], Awaitable[None]]],
@@ -1215,6 +1285,7 @@ class TaskService:
             ai_model=ai_model,
             ai_request_options=ai_request_options,
             transcription_options=transcription_options,
+            ai_focus_tags=ai_focus_tags,
             subtitle_style=subtitle_style,
             progress_callback=update_progress,
             cancel_check=cancel_check,
@@ -1355,7 +1426,11 @@ class TaskService:
                     "end_time": self._format_seconds_to_timestamp(end_seconds),
                     "duration": duration_seconds,
                     "text": edited_text,
-                    "relevance_score": float(draft.get("relevance_score") or 0.0),
+                    "relevance_score": float(
+                        draft.get("review_score")
+                        if draft.get("review_score") is not None
+                        else draft.get("relevance_score") or 0.0
+                    ),
                     "reasoning": draft.get("reasoning"),
                     "subtitle_word_timings": word_timings_override,
                 }
@@ -1483,6 +1558,7 @@ class TaskService:
             review_before_render_enabled = bool(
                 (task_record or {}).get("review_before_render_enabled", True)
             )
+            ai_focus_tags = list((task_record or {}).get("ai_focus_tags") or [])
 
             if review_before_render_enabled:
                 return await self._process_review_enabled_analysis(
@@ -1494,6 +1570,7 @@ class TaskService:
                     ai_model=ai_model,
                     ai_routing_mode=ai_routing_mode,
                     transcription_options=transcription_options,
+                    ai_focus_tags=ai_focus_tags,
                     subtitle_style=subtitle_style,
                     progress_callback=progress_callback,
                     cancel_check=cancel_check,
@@ -1514,6 +1591,7 @@ class TaskService:
                 ai_model=ai_model,
                 ai_routing_mode=ai_routing_mode,
                 transcription_options=transcription_options,
+                ai_focus_tags=ai_focus_tags,
                 subtitle_style=subtitle_style,
                 progress_callback=progress_callback,
                 cancel_check=cancel_check,
@@ -1600,8 +1678,9 @@ class TaskService:
             if text_changed or timing_changed:
                 normalized_update["edited_word_timings_json"] = None
 
-            normalized_updates.append(normalized_update)
             draft_state[draft_id].update(normalized_update)
+            normalized_update.update(self._build_draft_feedback_state(draft_state[draft_id]))
+            normalized_updates.append(normalized_update)
 
         self._validate_non_overlapping_draft_windows(list(draft_state.values()))
 
@@ -1661,6 +1740,7 @@ class TaskService:
             "is_deleted": False,
             "edited_word_timings_json": None,
         }
+        payload.update(self._build_draft_feedback_state(payload))
         created_id = await self.draft_clip_repo.create_draft(self.db, task_id, payload)
 
         draft_map = await self.draft_clip_repo.get_draft_map_by_task(self.db, task_id)
@@ -1671,12 +1751,42 @@ class TaskService:
 
     async def delete_task_draft_clip(self, task_id: str, draft_id: str) -> None:
         existing = await self.draft_clip_repo.get_draft_map_by_task(self.db, task_id)
-        if draft_id not in existing:
+        draft = existing.get(draft_id)
+        if not draft:
             raise ValueError("Draft clip not found")
-        await self.draft_clip_repo.soft_delete_draft(self.db, task_id=task_id, draft_id=draft_id)
+        deleted_draft = dict(draft)
+        deleted_draft["is_selected"] = False
+        deleted_draft["is_deleted"] = True
+        await self.draft_clip_repo.bulk_update_drafts(
+            self.db,
+            task_id,
+            [
+                {
+                    "id": draft_id,
+                    "is_selected": False,
+                    "is_deleted": True,
+                    **self._build_draft_feedback_state(deleted_draft),
+                }
+            ],
+        )
 
     async def restore_task_draft_clips(self, task_id: str) -> List[Dict[str, Any]]:
         await self.draft_clip_repo.restore_task_drafts(self.db, task_id)
+        restored_all = await self.draft_clip_repo.get_drafts_by_task(self.db, task_id, include_deleted=True)
+        feedback_updates = [
+            {
+                "id": str(draft["id"]),
+                **self._build_draft_feedback_state(draft),
+            }
+            for draft in restored_all
+        ]
+        if feedback_updates:
+            await self.draft_clip_repo.bulk_update_drafts(
+                self.db,
+                task_id,
+                feedback_updates,
+                include_deleted=True,
+            )
         restored = await self.draft_clip_repo.get_drafts_by_task(self.db, task_id)
         self._validate_non_overlapping_draft_windows(restored)
         return restored

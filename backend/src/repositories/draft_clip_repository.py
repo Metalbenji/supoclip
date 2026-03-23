@@ -43,6 +43,9 @@ class DraftClipRepository:
                         original_text,
                         edited_text,
                         relevance_score,
+                        review_score,
+                        feedback_score_adjustment,
+                        feedback_signals_json,
                         reasoning,
                         created_by_user,
                         is_selected,
@@ -64,6 +67,9 @@ class DraftClipRepository:
                         :original_text,
                         :edited_text,
                         :relevance_score,
+                        :review_score,
+                        :feedback_score_adjustment,
+                        :feedback_signals_json,
                         :reasoning,
                         :created_by_user,
                         :is_selected,
@@ -88,6 +94,13 @@ class DraftClipRepository:
                     "original_text": draft.get("original_text"),
                     "edited_text": draft.get("edited_text"),
                     "relevance_score": float(draft["relevance_score"]),
+                    "review_score": float(
+                        draft.get("review_score")
+                        if draft.get("review_score") is not None
+                        else draft["relevance_score"]
+                    ),
+                    "feedback_score_adjustment": float(draft.get("feedback_score_adjustment") or 0.0),
+                    "feedback_signals_json": draft.get("feedback_signals_json") or {},
                     "reasoning": draft.get("reasoning"),
                     "created_by_user": bool(draft.get("created_by_user", False)),
                     "is_selected": bool(draft.get("is_selected", True)),
@@ -123,6 +136,9 @@ class DraftClipRepository:
                     original_text,
                     edited_text,
                     relevance_score,
+                    review_score,
+                    feedback_score_adjustment,
+                    feedback_signals_json,
                     reasoning,
                     created_by_user,
                     is_selected,
@@ -155,6 +171,9 @@ class DraftClipRepository:
                     "original_text": row.original_text,
                     "edited_text": row.edited_text,
                     "relevance_score": float(row.relevance_score),
+                    "review_score": float(row.review_score),
+                    "feedback_score_adjustment": float(row.feedback_score_adjustment),
+                    "feedback_signals_json": row.feedback_signals_json or {},
                     "reasoning": row.reasoning,
                     "created_by_user": bool(row.created_by_user),
                     "is_selected": bool(row.is_selected),
@@ -181,6 +200,8 @@ class DraftClipRepository:
         db: AsyncSession,
         task_id: str,
         updates: List[Dict[str, Any]],
+        *,
+        include_deleted: bool = False,
     ) -> None:
         for update in updates:
             draft_id = str(update["id"])
@@ -208,16 +229,29 @@ class DraftClipRepository:
             if "is_selected" in update:
                 set_clauses.append("is_selected = :is_selected")
                 params["is_selected"] = bool(update["is_selected"])
+            if "is_deleted" in update:
+                set_clauses.append("is_deleted = :is_deleted")
+                params["is_deleted"] = bool(update["is_deleted"])
             if "edited_word_timings_json" in update:
                 set_clauses.append("edited_word_timings_json = :edited_word_timings_json")
                 params["edited_word_timings_json"] = update.get("edited_word_timings_json")
+            if "review_score" in update:
+                set_clauses.append("review_score = :review_score")
+                params["review_score"] = float(update["review_score"])
+            if "feedback_score_adjustment" in update:
+                set_clauses.append("feedback_score_adjustment = :feedback_score_adjustment")
+                params["feedback_score_adjustment"] = float(update["feedback_score_adjustment"])
+            if "feedback_signals_json" in update:
+                set_clauses.append("feedback_signals_json = :feedback_signals_json")
+                params["feedback_signals_json"] = update.get("feedback_signals_json")
 
             await db.execute(
                 sql_text(
                     f"""
                     UPDATE task_clip_drafts
                     SET {', '.join(set_clauses)}
-                    WHERE task_id = :task_id AND id = :draft_id AND is_deleted = false
+                    WHERE task_id = :task_id AND id = :draft_id
+                    {"AND is_deleted = false" if not include_deleted else ""}
                     """
                 ),
                 params,
@@ -312,6 +346,9 @@ class DraftClipRepository:
                     original_text,
                     edited_text,
                     relevance_score,
+                    review_score,
+                    feedback_score_adjustment,
+                    feedback_signals_json,
                     reasoning,
                     created_by_user,
                     is_selected,
@@ -333,6 +370,9 @@ class DraftClipRepository:
                     :original_text,
                     :edited_text,
                     :relevance_score,
+                    :review_score,
+                    :feedback_score_adjustment,
+                    :feedback_signals_json,
                     :reasoning,
                     :created_by_user,
                     :is_selected,
@@ -357,6 +397,13 @@ class DraftClipRepository:
                 "original_text": draft.get("original_text"),
                 "edited_text": draft.get("edited_text"),
                 "relevance_score": float(draft.get("relevance_score") or 0.0),
+                "review_score": float(
+                    draft.get("review_score")
+                    if draft.get("review_score") is not None
+                    else draft.get("relevance_score") or 0.0
+                ),
+                "feedback_score_adjustment": float(draft.get("feedback_score_adjustment") or 0.0),
+                "feedback_signals_json": draft.get("feedback_signals_json") or {},
                 "reasoning": draft.get("reasoning"),
                 "created_by_user": bool(draft.get("created_by_user", False)),
                 "is_selected": bool(draft.get("is_selected", True)),

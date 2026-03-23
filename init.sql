@@ -72,6 +72,7 @@ CREATE TABLE tasks (
     transitions_enabled BOOLEAN NOT NULL DEFAULT false,
     transcription_provider VARCHAR(20) NOT NULL DEFAULT 'local' CHECK (transcription_provider IN ('local', 'assemblyai')),
     ai_provider VARCHAR(20) NOT NULL DEFAULT 'openai' CHECK (ai_provider IN ('openai', 'google', 'anthropic', 'zai')),
+    ai_focus_tags JSONB,
 
     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
@@ -108,6 +109,9 @@ CREATE TABLE task_clip_drafts (
     original_text TEXT,
     edited_text TEXT,
     relevance_score FLOAT NOT NULL,
+    review_score FLOAT NOT NULL DEFAULT 0,
+    feedback_score_adjustment FLOAT NOT NULL DEFAULT 0,
+    feedback_signals_json JSONB,
     reasoning TEXT,
     created_by_user BOOLEAN NOT NULL DEFAULT false,
     is_selected BOOLEAN NOT NULL DEFAULT true,

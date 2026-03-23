@@ -5,6 +5,7 @@ FastAPI service responsible for:
 - transcription + transcript analysis
 - clip rendering and storage
 - task progress/status APIs
+- optional AI focus tags that bias clip selection toward requested moment types
 
 ## Prerequisites
 
@@ -118,6 +119,8 @@ When running locally or via Docker:
   - `POST /tasks/{task_id}/draft-clips` (create)
   - `PUT /tasks/{task_id}/draft-clips`
   - `DELETE /tasks/{task_id}/draft-clips/{draft_id}` (soft delete)
+- Task creation:
+  - `POST /tasks/` accepts `ai_options.focus_tags` as an optional array of soft-preference tags used to bias transcript analysis and reranking
   - `POST /tasks/{task_id}/draft-clips/restore`
   - `POST /tasks/{task_id}/finalize`
   - `PATCH /tasks/{task_id}` supports per-task `timeline_editor_enabled`

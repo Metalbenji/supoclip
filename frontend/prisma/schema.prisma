@@ -81,6 +81,7 @@ model Task {
   font_family          String?   @default("TikTokSans-Regular") @db.VarChar(100)
   font_size            Int?      @default(24)
   font_color           String?   @default("#FFFFFF") @db.VarChar(7)
+  ai_focus_tags        Json?
 
   created_at           DateTime  @default(now()) @db.Timestamptz
   updated_at           DateTime  @default(now()) @updatedAt @db.Timestamptz

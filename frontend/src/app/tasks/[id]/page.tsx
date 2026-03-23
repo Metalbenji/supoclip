@@ -23,6 +23,7 @@ import { ArrowLeft, Download, Clock, Timer, Star, AlertCircle, Trash2, Edit2, X,
 import Link from "next/link";
 import DynamicVideoPlayer from "@/components/dynamic-video-player";
 import DraftTimelineEditor, { type TimelineZoomLevel } from "@/components/draft-timeline-editor";
+import { formatAiFocusTag } from "@/lib/ai-focus-tags";
 import { formatSourceTypeLabel, formatTaskRuntime, isHttpUrl } from "@/lib/task-metadata";
 
 interface Clip {
@@ -49,6 +50,18 @@ interface DraftClip {
   original_text: string;
   edited_text: string;
   relevance_score: number;
+  review_score?: number;
+  feedback_score_adjustment?: number;
+  feedback_signals_json?: {
+    version?: number;
+    selected?: boolean;
+    deselected?: boolean;
+    deleted?: boolean;
+    created_by_user?: boolean;
+    timing_changed?: boolean;
+    timing_shift_seconds?: number;
+    text_edited?: boolean;
+  } | null;
   reasoning: string;
   is_selected: boolean;
   created_by_user?: boolean;
@@ -74,6 +87,7 @@ interface TaskDetails {
   font_size?: number;
   font_color?: string;
   transitions_enabled?: boolean;
+  ai_focus_tags?: string[];
   review_before_render_enabled?: boolean;
   timeline_editor_enabled?: boolean;
 }
@@ -1220,6 +1234,16 @@ export default function TaskPage() {
                   </Badge>
                 )}
               </div>
+              {task.ai_focus_tags && task.ai_focus_tags.length > 0 ? (
+                <div className="mt-3 flex flex-wrap items-center gap-2">
+                  <span className="text-xs font-medium uppercase tracking-wide text-gray-500">AI Focus</span>
+                  {task.ai_focus_tags.map((tag) => (
+                    <Badge key={tag} variant="outline" className="bg-white">
+                      {formatAiFocusTag(tag)}
+                    </Badge>
+                  ))}
+                </div>
+              ) : null}
             </div>
           )}
         </div>
@@ -1522,6 +1546,10 @@ export default function TaskPage() {
                       const isActive = activeDraftClipId === draft.id;
                       const isExpanded = expandedDraftClipId === draft.id;
                       const isReasoningVisible = Boolean(reasoningExpandedByClipId[draft.id]);
+                      const reviewScore = typeof draft.review_score === "number" ? draft.review_score : draft.relevance_score;
+                      const scoreAdjustment = typeof draft.feedback_score_adjustment === "number" ? draft.feedback_score_adjustment : 0;
+                      const feedbackSignals = draft.feedback_signals_json || null;
+                      const hasScoreAdjustment = Math.abs(scoreAdjustment) >= 0.005;
                       return (
                         <div
                           key={draft.id}
@@ -1558,11 +1586,20 @@ export default function TaskPage() {
                             >
                               <div className="flex flex-wrap items-center gap-2">
                                 <h3 className="font-semibold text-slate-900 dark:text-slate-100">Clip {displayIndex + 1}</h3>
-                                <Badge className={getScoreColor(draft.relevance_score)}>
+                                <Badge className={getScoreColor(reviewScore)}>
                                   <Star className="mr-1 h-3 w-3" />
-                                  {(draft.relevance_score * 100).toFixed(0)}%
+                                  {(reviewScore * 100).toFixed(0)}%
                                 </Badge>
+                                {hasScoreAdjustment ? (
+                                  <Badge variant="outline">
+                                    {scoreAdjustment > 0 ? "+" : ""}
+                                    {(scoreAdjustment * 100).toFixed(0)}% review
+                                  </Badge>
+                                ) : null}
                                 {draft.created_by_user && <Badge variant="outline">Manual</Badge>}
+                                {feedbackSignals?.timing_changed ? <Badge variant="outline">Retimed</Badge> : null}
+                                {feedbackSignals?.text_edited ? <Badge variant="outline">Text Edited</Badge> : null}
+                                {feedbackSignals?.deselected ? <Badge variant="outline">Deselected</Badge> : null}
                               </div>
                               <div className="mt-1.5 flex flex-wrap items-center gap-2 text-xs">
                                 <span className="rounded-full border border-slate-200 bg-slate-50 px-2 py-0.5 font-medium text-slate-700 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-200">
@@ -1573,6 +1610,11 @@ export default function TaskPage() {
                                 <span className="rounded-full border border-slate-200 bg-slate-50 px-2 py-0.5 text-slate-600 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-300">
                                   Duration {formatDuration(getDraftDurationSeconds(draft))}
                                 </span>
+                                {hasScoreAdjustment ? (
+                                  <span className="rounded-full border border-slate-200 bg-slate-50 px-2 py-0.5 text-slate-600 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-300">
+                                    AI {(draft.relevance_score * 100).toFixed(0)}% {"->"} Review {(reviewScore * 100).toFixed(0)}%
+                                  </span>
+                                ) : null}
                               </div>
                             </button>
 

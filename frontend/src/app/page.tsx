@@ -18,6 +18,7 @@ import Link from "next/link";
 import Image from "next/image";
 import { ArrowRight, Youtube, CheckCircle, AlertCircle, Loader2, Palette, Type, Paintbrush, Clock, Timer } from "lucide-react";
 import { formatSourceTypeLabel, formatTaskRuntime, isHttpUrl } from "@/lib/task-metadata";
+import { AI_FOCUS_TAG_OPTIONS, formatAiFocusTag, type AiFocusTag } from "@/lib/ai-focus-tags";
 import {
   normalizeFontSize,
   normalizeFontStyleOptions,
@@ -67,6 +68,7 @@ const MIN_WHISPER_CHUNK_OVERLAP_SECONDS = 0;
 const MAX_WHISPER_CHUNK_OVERLAP_SECONDS = 120;
 const MIN_TASK_TIMEOUT_SECONDS = 300;
 const MAX_TASK_TIMEOUT_SECONDS = 86400;
+const MAX_AI_FOCUS_TAGS = 4;
 
 function isAiProvider(value: unknown): value is AiProvider {
   return typeof value === "string" && AI_PROVIDERS.includes(value as AiProvider);
@@ -169,6 +171,7 @@ export default function Home() {
   );
   const [aiProvider, setAiProvider] = useState<AiProvider>("openai");
   const [aiModel, setAiModel] = useState<string>(DEFAULT_AI_MODELS.openai);
+  const [aiFocusTags, setAiFocusTags] = useState<AiFocusTag[]>([]);
 
   // Latest task state
   const [latestTask, setLatestTask] = useState<LatestTask | null>(null);
@@ -177,6 +180,18 @@ export default function Home() {
   const [previewContainerWidth, setPreviewContainerWidth] = useState(0);
 
   const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
+
+  const toggleAiFocusTag = (tag: AiFocusTag) => {
+    setAiFocusTags((current) => {
+      if (current.includes(tag)) {
+        return current.filter((value) => value !== tag);
+      }
+      if (current.length >= MAX_AI_FOCUS_TAGS) {
+        return current;
+      }
+      return [...current, tag];
+    });
+  };
 
   const loadFonts = useCallback(async () => {
     try {
@@ -603,6 +618,7 @@ export default function Home() {
           ai_options: {
             provider: aiProvider,
             model: aiModel.trim() || DEFAULT_AI_MODELS[aiProvider],
+            focus_tags: aiFocusTags,
           }
         }),
       });
@@ -1041,6 +1057,68 @@ export default function Home() {
                 )}
               </div>
             )}
+
+            <div className="space-y-4 rounded-lg border bg-gray-50 p-4">
+              <div className="flex items-start justify-between gap-4">
+                <div>
+                  <h3 className="text-sm font-medium text-black">AI Focus Tags</h3>
+                  <p className="text-xs text-gray-600">
+                    Bias clip selection toward the kinds of moments you want. These are soft preferences, not hard filters.
+                  </p>
+                </div>
+                <Badge variant="outline" className="shrink-0">
+                  {aiFocusTags.length}/{MAX_AI_FOCUS_TAGS} selected
+                </Badge>
+              </div>
+
+              <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-3">
+                {AI_FOCUS_TAG_OPTIONS.map((option) => {
+                  const isSelected = aiFocusTags.includes(option.value);
+                  const atLimit = aiFocusTags.length >= MAX_AI_FOCUS_TAGS && !isSelected;
+                  return (
+                    <button
+                      key={option.value}
+                      type="button"
+                      onClick={() => toggleAiFocusTag(option.value)}
+                      disabled={isLoading || atLimit}
+                      className={[
+                        "rounded-lg border px-3 py-3 text-left transition-colors",
+                        isSelected
+                          ? "border-black bg-black text-white"
+                          : "border-gray-200 bg-white text-black hover:border-gray-400",
+                        atLimit ? "cursor-not-allowed opacity-50" : "",
+                      ].join(" ")}
+                    >
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="text-sm font-medium">{option.label}</span>
+                        {isSelected ? <Badge className="bg-white text-black">On</Badge> : null}
+                      </div>
+                      <p className={`mt-1 text-xs ${isSelected ? "text-gray-200" : "text-gray-600"}`}>
+                        {option.description}
+                      </p>
+                    </button>
+                  );
+                })}
+              </div>
+
+              {aiFocusTags.length > 0 ? (
+                <div className="flex flex-wrap items-center gap-2">
+                  {aiFocusTags.map((tag) => (
+                    <Badge key={tag} variant="outline" className="bg-white">
+                      {formatAiFocusTag(tag)}
+                    </Badge>
+                  ))}
+                  <button
+                    type="button"
+                    onClick={() => setAiFocusTags([])}
+                    disabled={isLoading}
+                    className="text-xs text-gray-500 underline underline-offset-2"
+                  >
+                    Clear
+                  </button>
+                </div>
+              ) : null}
+            </div>
 
             {/* Font Customization Section */}
             <div className="space-y-4 border rounded-lg p-4 bg-gray-50">

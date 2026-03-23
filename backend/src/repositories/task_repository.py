@@ -36,6 +36,7 @@ class TaskRepository:
         transitions_enabled: bool = False,
         transcription_provider: str = "local",
         ai_provider: str = "openai",
+        ai_focus_tags: Optional[List[str]] = None,
         review_before_render_enabled: bool = True,
         timeline_editor_enabled: bool = True,
     ) -> str:
@@ -53,6 +54,7 @@ class TaskRepository:
                     transitions_enabled,
                     transcription_provider,
                     ai_provider,
+                    ai_focus_tags,
                     review_before_render_enabled,
                     timeline_editor_enabled,
                     created_at,
@@ -69,13 +71,17 @@ class TaskRepository:
                     :transitions_enabled,
                     :transcription_provider,
                     :ai_provider,
+                    :ai_focus_tags,
                     :review_before_render_enabled,
                     :timeline_editor_enabled,
                     NOW(),
                     NOW()
                 )
                 RETURNING id
-            """).bindparams(bindparam("subtitle_style", type_=JSONB)),
+            """).bindparams(
+                bindparam("subtitle_style", type_=JSONB),
+                bindparam("ai_focus_tags", type_=JSONB),
+            ),
             {
                 "user_id": user_id,
                 "source_id": source_id,
@@ -87,6 +93,7 @@ class TaskRepository:
                 "transitions_enabled": transitions_enabled,
                 "transcription_provider": transcription_provider,
                 "ai_provider": ai_provider,
+                "ai_focus_tags": ai_focus_tags or None,
                 "review_before_render_enabled": review_before_render_enabled,
                 "timeline_editor_enabled": timeline_editor_enabled,
             }
@@ -131,6 +138,7 @@ class TaskRepository:
             "transitions_enabled": bool(getattr(row, "transitions_enabled", False)),
             "transcription_provider": getattr(row, "transcription_provider", "local"),
             "ai_provider": getattr(row, "ai_provider", "openai"),
+            "ai_focus_tags": list(getattr(row, "ai_focus_tags", None) or []),
             "review_before_render_enabled": bool(getattr(row, "review_before_render_enabled", True)),
             "timeline_editor_enabled": bool(getattr(row, "timeline_editor_enabled", True)),
             "created_at": row.created_at,
@@ -385,6 +393,7 @@ class TaskRepository:
                 "transitions_enabled": bool(getattr(row, "transitions_enabled", False)),
                 "transcription_provider": getattr(row, "transcription_provider", "local"),
                 "ai_provider": getattr(row, "ai_provider", "openai"),
+                "ai_focus_tags": list(getattr(row, "ai_focus_tags", None) or []),
                 "review_before_render_enabled": bool(getattr(row, "review_before_render_enabled", True)),
                 "timeline_editor_enabled": bool(getattr(row, "timeline_editor_enabled", True)),
                 "clips_count": row.clips_count,

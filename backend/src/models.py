@@ -113,6 +113,7 @@ class Task(Base):
     transitions_enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("false"))
     transcription_provider: Mapped[str] = mapped_column(String(20), nullable=False, server_default=text("'local'"))
     ai_provider: Mapped[str] = mapped_column(String(20), nullable=False, server_default=text("'openai'"))
+    ai_focus_tags: Mapped[Optional[list[str]]] = mapped_column(JSONB, nullable=True)
 
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
@@ -184,6 +185,9 @@ class TaskClipDraft(Base):
     original_text: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     edited_text: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     relevance_score: Mapped[float] = mapped_column(Float, nullable=False)
+    review_score: Mapped[float] = mapped_column(Float, nullable=False, server_default=text("0"))
+    feedback_score_adjustment: Mapped[float] = mapped_column(Float, nullable=False, server_default=text("0"))
+    feedback_signals_json: Mapped[Optional[dict]] = mapped_column(JSONB, nullable=True)
     reasoning: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     created_by_user: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("false"))
     is_selected: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("true"))

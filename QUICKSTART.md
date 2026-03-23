@@ -28,6 +28,8 @@ That's it! The script will:
 - Start all services
 - Show you where to access the app
 
+In the create-task UI, you can optionally choose AI focus tags such as `Funny`, `Clutch`, or `Educational` to bias clip selection toward those moments.
+
 ## First Time Setup
 
 ### 1. Configure Environment Variables
