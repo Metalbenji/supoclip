@@ -27,7 +27,7 @@ Related allowlist variable:
 |---|---|---|
 | `FRONTEND_HOST_PORT` | `3000` | `${FRONTEND_HOST_PORT}:3000` |
 | `BACKEND_HOST_PORT` | `8000` | `${BACKEND_HOST_PORT}:8000` |
-| `POSTGRES_HOST_PORT` | `5432` | `${POSTGRES_HOST_PORT}:5432` |
+| `POSTGRES_HOST_PORT` | `5433` | `${POSTGRES_HOST_PORT}:5432` |
 | `REDIS_HOST_PORT` | `6379` | `${REDIS_HOST_PORT}:6379` |
 
 ## Validation

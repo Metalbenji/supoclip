@@ -13,6 +13,15 @@ class Config:
         # - still accept legacy names used in older revisions
         self.whisper_model = os.getenv("WHISPER_MODEL_SIZE") or os.getenv("WHISPER_MODEL", "medium")
         self.whisper_device = (os.getenv("WHISPER_DEVICE", "auto") or "auto").strip().lower()
+        raw_whisper_gpu_index = os.getenv("WHISPER_GPU_INDEX")
+        if raw_whisper_gpu_index is None or not raw_whisper_gpu_index.strip():
+            self.whisper_gpu_index = None
+        else:
+            try:
+                parsed_gpu_index = int(raw_whisper_gpu_index)
+            except ValueError:
+                parsed_gpu_index = None
+            self.whisper_gpu_index = parsed_gpu_index if parsed_gpu_index is None or parsed_gpu_index >= 0 else None
         self.whisper_chunking_enabled = env_bool("WHISPER_CHUNKING_ENABLED", "true")
         self.whisper_chunk_duration_seconds = int(os.getenv("WHISPER_CHUNK_DURATION_SECONDS", "1200"))
         self.whisper_chunk_overlap_seconds = int(os.getenv("WHISPER_CHUNK_OVERLAP_SECONDS", "8"))
@@ -47,8 +56,12 @@ class Config:
         self.redis_port = int(os.getenv("REDIS_PORT", "6379"))
         self.worker_max_jobs = int(os.getenv("WORKER_MAX_JOBS", "2"))
         self.worker_job_timeout_seconds = int(os.getenv("WORKER_JOB_TIMEOUT_SECONDS", "21600"))
+        self.enable_gpu_worker = env_bool("ENABLE_GPU_WORKER", "false")
         self.arq_queue_name = (os.getenv("ARQ_QUEUE_NAME", "arq:queue:local") or "arq:queue:local").strip()
         self.arq_local_queue_name = (os.getenv("ARQ_QUEUE_NAME_LOCAL", "arq:queue:local") or "arq:queue:local").strip()
+        self.arq_local_gpu_queue_name = (
+            os.getenv("ARQ_QUEUE_NAME_LOCAL_GPU", "arq:queue:local-gpu") or "arq:queue:local-gpu"
+        ).strip()
         self.arq_assembly_queue_name = (os.getenv("ARQ_QUEUE_NAME_ASSEMBLY", "arq:queue:assembly") or "arq:queue:assembly").strip()
 
         backend_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))

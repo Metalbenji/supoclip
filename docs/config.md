@@ -27,6 +27,7 @@ This is the single source of truth for MrglSnips runtime environment variables.
 | `OLLAMA_RETRY_BACKOFF_MS` | No | `400` | backend, worker | Env fallback backoff (milliseconds) for Ollama retries when user-level override is not set. |
 | `WHISPER_MODEL_SIZE` | No | `medium` | backend, worker | Whisper size: `tiny`, `base`, `small`, `medium`, `large`. |
 | `WHISPER_DEVICE` | No | `auto` | backend, worker | Whisper execution target: `auto`, `cuda`, or `cpu`. |
+| `WHISPER_GPU_INDEX` | No | unset | backend, worker | Preferred GPU index for local Whisper when GPU execution is selected; leave unset to use the first visible GPU. |
 | `WHISPER_CHUNKING_ENABLED` | No | `true` | backend, worker | Enable chunked local Whisper transcription for long videos. |
 | `WHISPER_CHUNK_DURATION_SECONDS` | No | `1200` | backend, worker | Chunk length (seconds) for local Whisper transcription when chunking is enabled. |
 | `WHISPER_CHUNK_OVERLAP_SECONDS` | No | `8` | backend, worker | Overlap duration (seconds) between local Whisper chunks to preserve boundary context. |
@@ -38,12 +39,13 @@ This is the single source of truth for MrglSnips runtime environment variables.
 | `WORKER_GPU_WHISPER_DEVICE` | No | `cuda` | worker-gpu (optional) | Whisper target device for optional GPU worker profile. |
 | `ENABLE_GPU_WORKER` | No | `false` | start.sh | When true, `./start.sh` runs Docker Compose with profile `gpu-worker` to include `worker-gpu`. |
 | `ARQ_QUEUE_NAME_LOCAL` | No | `arq:queue:local` | backend, workers | Queue name for local Whisper jobs. |
+| `ARQ_QUEUE_NAME_LOCAL_GPU` | No | `arq:queue:local-gpu` | backend, workers | Queue name for local Whisper jobs that should prefer the GPU worker. |
 | `ARQ_QUEUE_NAME_ASSEMBLY` | No | `arq:queue:assembly` | backend, workers | Queue name for AssemblyAI jobs. |
 | `ADMIN_API_KEY` | No | - | backend | Optional key for admin task-management endpoints (send as `x-admin-key`). |
 | `APP_HOST` | No | `localhost` | docs, startup output | Hostname used to build default browser-facing local URLs. |
 | `FRONTEND_HOST_PORT` | No | `3000` | docker-compose, startup output | Host port published for frontend container port `3000`. |
 | `BACKEND_HOST_PORT` | No | `8000` | docker-compose, startup output | Host port published for backend container port `8000`. |
-| `POSTGRES_HOST_PORT` | No | `5432` | docker-compose | Host port published for PostgreSQL container port `5432`. |
+| `POSTGRES_HOST_PORT` | No | `5433` | docker-compose | Host port published for PostgreSQL container port `5432`. |
 | `REDIS_HOST_PORT` | No | `6379` | docker-compose | Host port published for Redis container port `6379`. |
 | `BETTER_AUTH_TRUSTED_ORIGINS` | No | `http://localhost:3000,http://127.0.0.1:3000` | frontend | Comma-separated Better Auth origin allowlist for local/dev. |
 | `DOCKER_GPU_REQUEST` | No | `all` | docker-compose | GPU device request for backend/worker (`all` or `0`). |

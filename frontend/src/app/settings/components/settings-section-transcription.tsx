@@ -3,7 +3,19 @@ import { Cloud, Cpu } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import type { TranscriptionProvider } from "../settings-section-types";
+import type { TranscriptionProvider, WhisperDevicePreference } from "../settings-section-types";
+
+interface WhisperGpuDeviceSummary {
+  index: number;
+  name: string;
+  total_memory_bytes?: number | null;
+}
+
+interface LocalWhisperRuntimeInfo {
+  cuda_available?: boolean;
+  gpu_devices?: WhisperGpuDeviceSummary[];
+  probe_source?: string;
+}
 
 interface SettingsSectionTranscriptionProps {
   isSaving: boolean;
@@ -13,6 +25,9 @@ interface SettingsSectionTranscriptionProps {
   whisperChunkOverlapSeconds: number;
   taskTimeoutSeconds: number;
   taskTimeoutMaxSeconds: number;
+  whisperDevice: WhisperDevicePreference;
+  whisperGpuIndex: number | null;
+  localWhisperRuntime?: LocalWhisperRuntimeInfo | null;
   isSavingAssemblyKey: boolean;
   assemblyApiKey: string;
   hasSavedAssemblyKey: boolean;
@@ -26,6 +41,8 @@ interface SettingsSectionTranscriptionProps {
   onWhisperChunkDurationSecondsChange: (seconds: number) => void;
   onWhisperChunkOverlapSecondsChange: (seconds: number) => void;
   onTaskTimeoutSecondsChange: (seconds: number) => void;
+  onWhisperDeviceChange: (device: WhisperDevicePreference) => void;
+  onWhisperGpuIndexChange: (gpuIndex: number | null) => void;
   onAssemblyApiKeyChange: (value: string) => void;
   onSaveAssemblyKey: () => void;
   onDeleteAssemblyKey: () => void;
@@ -39,6 +56,9 @@ export function SettingsSectionTranscription({
   whisperChunkOverlapSeconds,
   taskTimeoutSeconds,
   taskTimeoutMaxSeconds,
+  whisperDevice,
+  whisperGpuIndex,
+  localWhisperRuntime,
   isSavingAssemblyKey,
   assemblyApiKey,
   hasSavedAssemblyKey,
@@ -52,6 +72,8 @@ export function SettingsSectionTranscription({
   onWhisperChunkDurationSecondsChange,
   onWhisperChunkOverlapSecondsChange,
   onTaskTimeoutSecondsChange,
+  onWhisperDeviceChange,
+  onWhisperGpuIndexChange,
   onAssemblyApiKeyChange,
   onSaveAssemblyKey,
   onDeleteAssemblyKey,
@@ -59,6 +81,7 @@ export function SettingsSectionTranscription({
   const [taskTimeoutInput, setTaskTimeoutInput] = useState(String(taskTimeoutSeconds));
   const [chunkDurationInput, setChunkDurationInput] = useState(String(whisperChunkDurationSeconds));
   const [chunkOverlapInput, setChunkOverlapInput] = useState(String(whisperChunkOverlapSeconds));
+  const [gpuIndexInput, setGpuIndexInput] = useState(whisperGpuIndex === null ? "" : String(whisperGpuIndex));
 
   useEffect(() => {
     setTaskTimeoutInput(String(taskTimeoutSeconds));
@@ -71,6 +94,10 @@ export function SettingsSectionTranscription({
   useEffect(() => {
     setChunkOverlapInput(String(whisperChunkOverlapSeconds));
   }, [whisperChunkOverlapSeconds]);
+
+  useEffect(() => {
+    setGpuIndexInput(whisperGpuIndex === null ? "" : String(whisperGpuIndex));
+  }, [whisperGpuIndex]);
 
   const commitTaskTimeoutInput = () => {
     const parsed = Number(taskTimeoutInput);
@@ -99,6 +126,20 @@ export function SettingsSectionTranscription({
     onWhisperChunkOverlapSecondsChange(parsed);
   };
 
+  const commitGpuIndexInput = () => {
+    const trimmed = gpuIndexInput.trim();
+    if (!trimmed) {
+      onWhisperGpuIndexChange(null);
+      return;
+    }
+    const parsed = Number(trimmed);
+    if (!Number.isFinite(parsed) || parsed < 0 || !Number.isInteger(parsed)) {
+      setGpuIndexInput(whisperGpuIndex === null ? "" : String(whisperGpuIndex));
+      return;
+    }
+    onWhisperGpuIndexChange(parsed);
+  };
+
   const formatSizeGiB = (bytes: number): string => {
     if (!Number.isFinite(bytes) || bytes <= 0) {
       return "unknown";
@@ -112,6 +153,8 @@ export function SettingsSectionTranscription({
     }
     return `${(seconds / 3600).toFixed(1)}h`;
   };
+
+  const detectedGpuDevices = Array.isArray(localWhisperRuntime?.gpu_devices) ? localWhisperRuntime.gpu_devices : [];
 
   return (
     <div className="space-y-4">
@@ -173,6 +216,61 @@ export function SettingsSectionTranscription({
 
         {transcriptionProvider === "local" && (
           <div className="space-y-2 rounded border border-gray-100 bg-gray-50 p-3">
+            <div className="space-y-1">
+              <label className="text-xs font-medium text-black">Local Whisper Device</label>
+              <Select
+                value={whisperDevice}
+                onValueChange={(value) => onWhisperDeviceChange(value as WhisperDevicePreference)}
+                disabled={isSaving || isSavingAssemblyKey}
+              >
+                <SelectTrigger className="w-full">
+                  <SelectValue placeholder="Select device mode" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="auto">Auto: prefer GPU, fall back to CPU</SelectItem>
+                  <SelectItem value="cpu">CPU only</SelectItem>
+                  <SelectItem value="gpu">GPU only, fall back to CPU if unavailable</SelectItem>
+                </SelectContent>
+              </Select>
+              <p className="text-xs text-gray-500">
+                Auto mode checks GPU availability at transcription time inside the worker and prefers the GPU worker
+                queue when that profile is enabled.
+              </p>
+              {detectedGpuDevices.length > 0 ? (
+                <p className="text-xs text-gray-500">
+                  Detected in this runtime: {detectedGpuDevices.map((device) => `GPU ${device.index} (${device.name})`).join(", ")}.
+                </p>
+              ) : (
+                <p className="text-xs text-gray-500">
+                  No GPUs were detected from the current API runtime probe. Worker runtime may differ.
+                </p>
+              )}
+            </div>
+
+            {whisperDevice !== "cpu" && (
+              <div className="space-y-1">
+                <label className="text-xs font-medium text-black">Preferred GPU Index (optional)</label>
+                <Input
+                  type="number"
+                  min={0}
+                  step={1}
+                  value={gpuIndexInput}
+                  onChange={(event) => setGpuIndexInput(event.target.value)}
+                  onBlur={commitGpuIndexInput}
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter") {
+                      event.currentTarget.blur();
+                    }
+                  }}
+                  disabled={isSaving || isSavingAssemblyKey}
+                  placeholder="Leave blank to use the first available GPU"
+                />
+                <p className="text-xs text-gray-500">
+                  Use `0` for the first GPU, `1` for the second, and so on.
+                </p>
+              </div>
+            )}
+
             <label className="flex items-center gap-2 text-xs font-medium text-black">
               <input
                 type="checkbox"

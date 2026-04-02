@@ -136,6 +136,7 @@ Local URL/port mapping reference: `docs/local-host-mappings.md`
 |----------|---------|-------------|
 | `WHISPER_MODEL_SIZE` | `medium` | Whisper model size (tiny/base/small/medium/large) |
 | `WHISPER_DEVICE` | `auto` | Whisper device target (`auto`, `cuda`, `cpu`) |
+| `WHISPER_GPU_INDEX` | unset | Preferred GPU index for local Whisper; leave unset to use the first available GPU |
 | `WHISPER_CHUNKING_ENABLED` | `true` | Enable chunked local Whisper transcription for long videos |
 | `WHISPER_CHUNK_DURATION_SECONDS` | `1200` | Chunk duration in seconds for local Whisper (default 20 minutes) |
 | `WHISPER_CHUNK_OVERLAP_SECONDS` | `8` | Overlap in seconds between chunks for boundary continuity |
@@ -155,12 +156,13 @@ Local URL/port mapping reference: `docs/local-host-mappings.md`
 | `WORKER_GPU_WHISPER_DEVICE` | `cuda` | Device target for optional `worker-gpu` profile |
 | `ENABLE_GPU_WORKER` | `false` | When `true`, `./start.sh` automatically enables `worker-gpu` profile |
 | `ARQ_QUEUE_NAME_LOCAL` | `arq:queue:local` | Queue name for local Whisper jobs |
+| `ARQ_QUEUE_NAME_LOCAL_GPU` | `arq:queue:local-gpu` | Queue name for local Whisper jobs that should prefer the GPU worker |
 | `ARQ_QUEUE_NAME_ASSEMBLY` | `arq:queue:assembly` | Queue name for AssemblyAI jobs |
 | `ADMIN_API_KEY` | - | Optional key for admin endpoints (send via `x-admin-key`) |
 | `APP_HOST` | `localhost` | Hostname used for local URL defaults |
 | `FRONTEND_HOST_PORT` | `3000` | Host port bound to frontend container port `3000` |
 | `BACKEND_HOST_PORT` | `8000` | Host port bound to backend container port `8000` |
-| `POSTGRES_HOST_PORT` | `5432` | Host port bound to PostgreSQL container port `5432` |
+| `POSTGRES_HOST_PORT` | `5433` | Host port bound to PostgreSQL container port `5432` |
 | `REDIS_HOST_PORT` | `6379` | Host port bound to Redis container port `6379` |
 | `BETTER_AUTH_TRUSTED_ORIGINS` | `http://localhost:3000,http://127.0.0.1:3000` | Better Auth origin allowlist |
 | `DOCKER_GPU_REQUEST` | `all` | Docker GPU request for backend/worker (`all` or `0`) |
@@ -178,7 +180,7 @@ Local URL/port mapping reference: `docs/local-host-mappings.md`
 | `OLLAMA_MAX_RETRIES` | `2` | Env fallback retry count for Ollama requests |
 | `OLLAMA_RETRY_BACKOFF_MS` | `400` | Env fallback retry backoff (ms) for Ollama requests |
 
-Note: with `TRANSCRIPTION_PROVIDER=local`, the first transcription downloads the Whisper model (size depends on `WHISPER_MODEL_SIZE`) into `WHISPER_CACHE_HOST_DIR` on your host filesystem.
+Note: with `TRANSCRIPTION_PROVIDER=local`, the first transcription downloads the Whisper model (size depends on `WHISPER_MODEL_SIZE`) into `WHISPER_CACHE_HOST_DIR` on your host filesystem. At runtime, local Whisper can auto-select GPU when available, or you can force CPU/GPU and optionally pin a GPU index from Settings. When `ENABLE_GPU_WORKER=true`, local jobs using `auto` or `gpu` are queued to the dedicated GPU worker queue.
 
 AssemblyAI limits enforced by backend:
 - max audio duration: 10 hours

@@ -40,6 +40,7 @@ import {
   isAiProvider,
   isSettingsSection,
   isTranscriptionProvider,
+  isWhisperDevicePreference,
   isZaiRoutingMode,
   normalizeTaskTimeoutSeconds,
   normalizeFontSize,
@@ -58,6 +59,16 @@ import {
 
 interface SavePreferencesOptions {
   keepalive?: boolean;
+}
+
+interface LocalWhisperRuntimeInfo {
+  cuda_available?: boolean;
+  gpu_devices?: Array<{
+    index: number;
+    name: string;
+    total_memory_bytes?: number | null;
+  }>;
+  probe_source?: string;
 }
 
 function getActiveSection(sectionValue: string | null): SettingsSection {
@@ -88,6 +99,7 @@ function SettingsPageContent() {
     Math.floor(2.2 * 1024 * 1024 * 1024),
   );
   const [workerTimeoutCapSeconds, setWorkerTimeoutCapSeconds] = useState(MAX_TASK_TIMEOUT_SECONDS);
+  const [localWhisperRuntime, setLocalWhisperRuntime] = useState<LocalWhisperRuntimeInfo | null>(null);
   const [isSavingAssemblyKey, setIsSavingAssemblyKey] = useState(false);
   const [assemblyKeyStatus, setAssemblyKeyStatus] = useState<string | null>(null);
   const [assemblyKeyError, setAssemblyKeyError] = useState<string | null>(null);
@@ -337,8 +349,12 @@ function SettingsPageContent() {
                 const ensuredModels = Array.isArray(ensureData.models)
                   ? ensureData.models.filter((value: unknown): value is string => typeof value === "string")
                   : [];
-                const normalizedEnsuredModels = Array.from(
-                  new Set(ensuredModels.map((value) => value.trim()).filter((value) => value.length > 0)),
+                const normalizedEnsuredModels: string[] = Array.from(
+                  new Set<string>(
+                    ensuredModels
+                      .map((value: string) => value.trim())
+                      .filter((value: string) => value.length > 0),
+                  ),
                 );
                 if (normalizedEnsuredModels.length > 0) {
                   models = normalizedEnsuredModels;
@@ -1219,6 +1235,14 @@ function SettingsPageContent() {
           whisperChunkDurationSeconds: normalizedWhisperChunkDuration,
           whisperChunkOverlapSeconds: normalizedWhisperChunkOverlap,
           taskTimeoutSeconds: normalizeTaskTimeoutSeconds(data.taskTimeoutSeconds),
+          whisperDevice:
+            typeof data.whisperDevice === "string" && isWhisperDevicePreference(data.whisperDevice)
+              ? data.whisperDevice
+              : DEFAULT_USER_PREFERENCES.whisperDevice,
+          whisperGpuIndex:
+            typeof data.whisperGpuIndex === "number" && Number.isInteger(data.whisperGpuIndex) && data.whisperGpuIndex >= 0
+              ? data.whisperGpuIndex
+              : DEFAULT_USER_PREFERENCES.whisperGpuIndex,
           aiProvider: resolvedAiProvider,
           aiModel:
             typeof data.aiModel === "string" && data.aiModel.trim().length > 0
@@ -1262,6 +1286,9 @@ function SettingsPageContent() {
         const data = await response.json();
         setHasSavedAssemblyKey(Boolean(data.has_assembly_key));
         setHasAssemblyEnvFallback(Boolean(data.has_env_fallback));
+        if (data.local_whisper_runtime && typeof data.local_whisper_runtime === "object") {
+          setLocalWhisperRuntime(data.local_whisper_runtime as LocalWhisperRuntimeInfo);
+        }
         if (typeof data.assemblyai_max_duration_seconds === "number" && Number.isFinite(data.assemblyai_max_duration_seconds)) {
           setAssemblyMaxDurationSeconds(Math.max(1, Math.round(data.assemblyai_max_duration_seconds)));
         }
@@ -1582,6 +1609,9 @@ function SettingsPageContent() {
                 whisperChunkOverlapSeconds={preferencesDraft.whisperChunkOverlapSeconds}
                 taskTimeoutSeconds={preferencesDraft.taskTimeoutSeconds}
                 taskTimeoutMaxSeconds={workerTimeoutCapSeconds}
+                whisperDevice={preferencesDraft.whisperDevice}
+                whisperGpuIndex={preferencesDraft.whisperGpuIndex}
+                localWhisperRuntime={localWhisperRuntime}
                 isSavingAssemblyKey={isSavingAssemblyKey}
                 assemblyApiKey={assemblyApiKey}
                 hasSavedAssemblyKey={hasSavedAssemblyKey}
@@ -1624,6 +1654,19 @@ function SettingsPageContent() {
                   setPreferencesDraft((prev) => ({
                     ...prev,
                     taskTimeoutSeconds: Math.min(workerTimeoutCapSeconds, normalizeTaskTimeoutSeconds(seconds)),
+                  }));
+                }}
+                onWhisperDeviceChange={(device) => {
+                  setPreferencesDraft((prev) => ({
+                    ...prev,
+                    whisperDevice: device,
+                    whisperGpuIndex: device === "cpu" ? null : prev.whisperGpuIndex,
+                  }));
+                }}
+                onWhisperGpuIndexChange={(gpuIndex) => {
+                  setPreferencesDraft((prev) => ({
+                    ...prev,
+                    whisperGpuIndex: gpuIndex,
                   }));
                 }}
                 onAssemblyApiKeyChange={setAssemblyApiKey}

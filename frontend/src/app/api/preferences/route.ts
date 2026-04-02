@@ -19,6 +19,7 @@ import {
 } from "@/lib/font-style-options";
 
 const SUPPORTED_TRANSCRIPTION_PROVIDERS = new Set(["local", "assemblyai"]);
+const SUPPORTED_WHISPER_DEVICES = new Set(["auto", "cpu", "gpu"]);
 const SUPPORTED_AI_PROVIDERS = new Set(["openai", "google", "anthropic", "zai", "ollama"]);
 const MIN_WHISPER_CHUNK_DURATION_SECONDS = 300;
 const MAX_WHISPER_CHUNK_DURATION_SECONDS = 3600;
@@ -26,6 +27,50 @@ const MIN_WHISPER_CHUNK_OVERLAP_SECONDS = 0;
 const MAX_WHISPER_CHUNK_OVERLAP_SECONDS = 120;
 const MIN_TASK_TIMEOUT_SECONDS = 300;
 const MAX_TASK_TIMEOUT_SECONDS = 86400;
+
+type WhisperPreferenceRow = {
+  default_whisper_device: string | null;
+  default_whisper_gpu_index: number | null;
+};
+
+async function getStoredWhisperPreferences(userId: string): Promise<WhisperPreferenceRow> {
+  const rows = await prisma.$queryRaw<WhisperPreferenceRow[]>`
+    SELECT
+      "default_whisper_device",
+      "default_whisper_gpu_index"
+    FROM "users"
+    WHERE "id" = ${userId}
+    LIMIT 1
+  `;
+
+  return rows[0] ?? { default_whisper_device: null, default_whisper_gpu_index: null };
+}
+
+async function updateStoredWhisperPreferences(
+  userId: string,
+  whisperDevice: string | undefined,
+  whisperGpuIndex: number | null | undefined,
+): Promise<void> {
+  if (whisperDevice === undefined && whisperGpuIndex === undefined) {
+    return;
+  }
+
+  await prisma.$executeRaw`
+    UPDATE "users"
+    SET
+      "default_whisper_device" = CASE
+        WHEN ${whisperDevice !== undefined}
+          THEN CAST(${whisperDevice ?? null} AS VARCHAR(20))
+        ELSE "default_whisper_device"
+      END,
+      "default_whisper_gpu_index" = CASE
+        WHEN ${whisperGpuIndex !== undefined}
+          THEN CAST(${whisperGpuIndex} AS INTEGER)
+        ELSE "default_whisper_gpu_index"
+      END
+    WHERE "id" = ${userId}
+  `;
+}
 
 // GET /api/preferences - Get user preferences
 export async function GET() {
@@ -81,6 +126,7 @@ export async function GET() {
     const textAlign = isTextAlign(user.default_text_align)
       ? user.default_text_align
       : DEFAULT_FONT_STYLE_OPTIONS.textAlign;
+    const whisperPreferences = await getStoredWhisperPreferences(session.user.id);
 
     return NextResponse.json({
       fontFamily: user.default_font_family || DEFAULT_FONT_STYLE_OPTIONS.fontFamily,
@@ -116,6 +162,16 @@ export async function GET() {
       whisperChunkDurationSeconds: user.default_whisper_chunk_duration_seconds || 1200,
       whisperChunkOverlapSeconds: user.default_whisper_chunk_overlap_seconds || 8,
       taskTimeoutSeconds: user.default_task_timeout_seconds || 21600,
+      whisperDevice:
+        typeof whisperPreferences.default_whisper_device === "string" &&
+        SUPPORTED_WHISPER_DEVICES.has(whisperPreferences.default_whisper_device)
+          ? whisperPreferences.default_whisper_device
+          : "auto",
+      whisperGpuIndex:
+        typeof whisperPreferences.default_whisper_gpu_index === "number" &&
+        Number.isInteger(whisperPreferences.default_whisper_gpu_index)
+          ? whisperPreferences.default_whisper_gpu_index
+          : null,
       aiProvider: user.default_ai_provider || "openai",
       aiModel: user.default_ai_model || "",
     });
@@ -171,6 +227,8 @@ export async function PATCH(request: NextRequest) {
       whisperChunkDurationSeconds,
       whisperChunkOverlapSeconds,
       taskTimeoutSeconds,
+      whisperDevice,
+      whisperGpuIndex,
       aiProvider,
       aiModel,
     } = body;
@@ -310,6 +368,25 @@ export async function PATCH(request: NextRequest) {
       );
     }
     if (
+      whisperDevice !== undefined &&
+      (typeof whisperDevice !== "string" || !SUPPORTED_WHISPER_DEVICES.has(whisperDevice))
+    ) {
+      return NextResponse.json(
+        { error: "Invalid whisperDevice (must be auto, cpu, or gpu)" },
+        { status: 400 },
+      );
+    }
+    if (
+      whisperGpuIndex !== undefined &&
+      whisperGpuIndex !== null &&
+      !isIntegerInRange(whisperGpuIndex, 0, Number.MAX_SAFE_INTEGER)
+    ) {
+      return NextResponse.json(
+        { error: "Invalid whisperGpuIndex (must be a non-negative integer or null)" },
+        { status: 400 },
+      );
+    }
+    if (
       whisperChunkDurationSeconds !== undefined &&
       whisperChunkOverlapSeconds !== undefined &&
       whisperChunkOverlapSeconds >= whisperChunkDurationSeconds
@@ -388,6 +465,9 @@ export async function PATCH(request: NextRequest) {
       },
     });
 
+    await updateStoredWhisperPreferences(session.user.id, whisperDevice, whisperGpuIndex);
+    const whisperPreferences = await getStoredWhisperPreferences(session.user.id);
+
     return NextResponse.json({
       fontFamily: updatedUser.default_font_family || DEFAULT_FONT_STYLE_OPTIONS.fontFamily,
       fontSize: normalizeFontSize(updatedUser.default_font_size || DEFAULT_FONT_STYLE_OPTIONS.fontSize),
@@ -426,6 +506,16 @@ export async function PATCH(request: NextRequest) {
       whisperChunkDurationSeconds: updatedUser.default_whisper_chunk_duration_seconds || 1200,
       whisperChunkOverlapSeconds: updatedUser.default_whisper_chunk_overlap_seconds || 8,
       taskTimeoutSeconds: updatedUser.default_task_timeout_seconds || 21600,
+      whisperDevice:
+        typeof whisperPreferences.default_whisper_device === "string" &&
+        SUPPORTED_WHISPER_DEVICES.has(whisperPreferences.default_whisper_device)
+          ? whisperPreferences.default_whisper_device
+          : "auto",
+      whisperGpuIndex:
+        typeof whisperPreferences.default_whisper_gpu_index === "number" &&
+        Number.isInteger(whisperPreferences.default_whisper_gpu_index)
+          ? whisperPreferences.default_whisper_gpu_index
+          : null,
       aiProvider: updatedUser.default_ai_provider || "openai",
       aiModel: updatedUser.default_ai_model || "",
     });

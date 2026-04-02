@@ -31,6 +31,7 @@ from datetime import timedelta
 
 from .config import Config
 from .subtitle_style import normalize_subtitle_style
+from .whisper_runtime import resolve_whisper_device
 
 logger = logging.getLogger(__name__)
 config = Config()
@@ -80,32 +81,6 @@ def _get_transcription_provider(provider_override: Optional[str] = None) -> str:
         logger.warning(f"Unknown transcription provider '{provider}', falling back to local")
         return "local"
     return provider
-
-
-def _resolve_whisper_device() -> Tuple[str, bool]:
-    desired = (getattr(config, "whisper_device", "auto") or "auto").strip().lower()
-    if desired not in {"auto", "cuda", "gpu", "cpu"}:
-        logger.warning(f"Unknown WHISPER_DEVICE '{desired}', defaulting to auto")
-        desired = "auto"
-
-    try:
-        import torch  # type: ignore
-        cuda_available = bool(torch.cuda.is_available())
-    except Exception as exc:
-        logger.warning(f"Torch CUDA probe failed ({exc}); using CPU")
-        cuda_available = False
-
-    if desired in {"cuda", "gpu"}:
-        if cuda_available:
-            return "cuda", True
-        logger.warning("WHISPER_DEVICE requested CUDA but no GPU is available; falling back to CPU")
-        return "cpu", False
-
-    if desired == "cpu":
-        return "cpu", False
-
-    # Auto mode.
-    return ("cuda", True) if cuda_available else ("cpu", False)
 
 
 def _get_whisper_model(model_name: str, device: str):
@@ -601,10 +576,15 @@ def _transcribe_with_local_whisper(
     chunking_enabled_override: Optional[bool] = None,
     chunk_duration_seconds_override: Optional[int] = None,
     chunk_overlap_seconds_override: Optional[int] = None,
+    device_preference_override: Optional[str] = None,
+    gpu_index_override: Optional[int] = None,
     progress_callback: Optional[Callable[[Dict[str, Any]], None]] = None,
 ) -> Dict[str, Any]:
     model_name = config.whisper_model or "medium"
-    device, use_fp16 = _resolve_whisper_device()
+    device, use_fp16 = resolve_whisper_device(
+        device_preference_override=device_preference_override,
+        gpu_index_override=gpu_index_override,
+    )
     model = _get_whisper_model(model_name, device)
     logger.info(
         f"Starting local Whisper transcription using model '{model_name}' "
@@ -732,6 +712,8 @@ def get_video_transcript(
     whisper_chunking_enabled: Optional[bool] = None,
     whisper_chunk_duration_seconds: Optional[int] = None,
     whisper_chunk_overlap_seconds: Optional[int] = None,
+    whisper_device_preference: Optional[str] = None,
+    whisper_gpu_index: Optional[int] = None,
     progress_callback: Optional[Callable[[Dict[str, Any]], None]] = None,
 ) -> str:
     """Get transcript using configured provider with word-level timings."""
@@ -750,6 +732,8 @@ def get_video_transcript(
                 chunking_enabled_override=whisper_chunking_enabled,
                 chunk_duration_seconds_override=whisper_chunk_duration_seconds,
                 chunk_overlap_seconds_override=whisper_chunk_overlap_seconds,
+                device_preference_override=whisper_device_preference,
+                gpu_index_override=whisper_gpu_index,
                 progress_callback=progress_callback,
             )
 
@@ -1262,7 +1246,7 @@ def _extract_clip_words_for_alignment(
         raise ValueError("Invalid clip range for subtitle alignment")
 
     model_name = config.whisper_model or "medium"
-    device, use_fp16 = _resolve_whisper_device()
+    device, use_fp16 = resolve_whisper_device()
     model = _get_whisper_model(model_name, device)
 
     with tempfile.TemporaryDirectory(prefix=f"{video_path.stem}_align_", dir=str(video_path.parent)) as temp_dir:

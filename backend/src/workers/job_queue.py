@@ -23,6 +23,7 @@ class JobQueue:
 
     _pool: Optional[ArqRedis] = None
     _local_queue_name = config.arq_local_queue_name
+    _local_gpu_queue_name = config.arq_local_gpu_queue_name
     _assembly_queue_name = config.arq_assembly_queue_name
     _legacy_queue_name = "arq:queue:supoclip_tasks"
     _legacy_default_queue_name = "arq:queue"
@@ -132,6 +133,7 @@ class JobQueue:
         pool = await cls.get_pool()
         queue_names = [
             cls._local_queue_name,
+            cls._local_gpu_queue_name,
             cls._assembly_queue_name,
             cls._legacy_default_queue_name,
             cls._legacy_queue_name,

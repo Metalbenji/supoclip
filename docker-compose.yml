@@ -82,7 +82,9 @@ services:
       - MEDIAPIPE_FACE_MODEL_AUTO_DOWNLOAD=${MEDIAPIPE_FACE_MODEL_AUTO_DOWNLOAD:-true}
       - WORKER_MAX_JOBS=${WORKER_MAX_JOBS:-2}
       - WORKER_JOB_TIMEOUT_SECONDS=${WORKER_JOB_TIMEOUT_SECONDS:-21600}
+      - ENABLE_GPU_WORKER=${ENABLE_GPU_WORKER:-false}
       - ARQ_QUEUE_NAME_LOCAL=${ARQ_QUEUE_NAME_LOCAL:-arq:queue:local}
+      - ARQ_QUEUE_NAME_LOCAL_GPU=${ARQ_QUEUE_NAME_LOCAL_GPU:-arq:queue:local-gpu}
       - ARQ_QUEUE_NAME_ASSEMBLY=${ARQ_QUEUE_NAME_ASSEMBLY:-arq:queue:assembly}
       - SECRET_ENCRYPTION_KEY=${SECRET_ENCRYPTION_KEY:-}
       - NVIDIA_VISIBLE_DEVICES=all
@@ -150,6 +152,7 @@ services:
       - WORKER_JOB_TIMEOUT_SECONDS=${WORKER_JOB_TIMEOUT_SECONDS:-21600}
       - ARQ_QUEUE_NAME=${ARQ_QUEUE_NAME_LOCAL:-arq:queue:local}
       - ARQ_QUEUE_NAME_LOCAL=${ARQ_QUEUE_NAME_LOCAL:-arq:queue:local}
+      - ARQ_QUEUE_NAME_LOCAL_GPU=${ARQ_QUEUE_NAME_LOCAL_GPU:-arq:queue:local-gpu}
       - ARQ_QUEUE_NAME_ASSEMBLY=${ARQ_QUEUE_NAME_ASSEMBLY:-arq:queue:assembly}
       - NVIDIA_VISIBLE_DEVICES=all
       - NVIDIA_DRIVER_CAPABILITIES=compute,utility,video
@@ -205,6 +208,7 @@ services:
       - WORKER_JOB_TIMEOUT_SECONDS=${WORKER_JOB_TIMEOUT_SECONDS:-21600}
       - ARQ_QUEUE_NAME=${ARQ_QUEUE_NAME_LOCAL:-arq:queue:local}
       - ARQ_QUEUE_NAME_LOCAL=${ARQ_QUEUE_NAME_LOCAL:-arq:queue:local}
+      - ARQ_QUEUE_NAME_LOCAL_GPU=${ARQ_QUEUE_NAME_LOCAL_GPU:-arq:queue:local-gpu}
       - ARQ_QUEUE_NAME_ASSEMBLY=${ARQ_QUEUE_NAME_ASSEMBLY:-arq:queue:assembly}
       - NVIDIA_VISIBLE_DEVICES=all
       - NVIDIA_DRIVER_CAPABILITIES=compute,utility,video
@@ -266,8 +270,9 @@ services:
       - MEDIAPIPE_FACE_MODEL_AUTO_DOWNLOAD=${MEDIAPIPE_FACE_MODEL_AUTO_DOWNLOAD:-true}
       - WORKER_MAX_JOBS=${WORKER_MAX_JOBS:-2}
       - WORKER_JOB_TIMEOUT_SECONDS=${WORKER_JOB_TIMEOUT_SECONDS:-21600}
-      - ARQ_QUEUE_NAME=${ARQ_QUEUE_NAME_LOCAL:-arq:queue:local}
+      - ARQ_QUEUE_NAME=${ARQ_QUEUE_NAME_LOCAL_GPU:-arq:queue:local-gpu}
       - ARQ_QUEUE_NAME_LOCAL=${ARQ_QUEUE_NAME_LOCAL:-arq:queue:local}
+      - ARQ_QUEUE_NAME_LOCAL_GPU=${ARQ_QUEUE_NAME_LOCAL_GPU:-arq:queue:local-gpu}
       - ARQ_QUEUE_NAME_ASSEMBLY=${ARQ_QUEUE_NAME_ASSEMBLY:-arq:queue:assembly}
       - NVIDIA_VISIBLE_DEVICES=all
       - NVIDIA_DRIVER_CAPABILITIES=compute,utility,video
@@ -322,6 +327,7 @@ services:
       - WORKER_JOB_TIMEOUT_SECONDS=${WORKER_JOB_TIMEOUT_SECONDS:-21600}
       - ARQ_QUEUE_NAME=${ARQ_QUEUE_NAME_ASSEMBLY:-arq:queue:assembly}
       - ARQ_QUEUE_NAME_LOCAL=${ARQ_QUEUE_NAME_LOCAL:-arq:queue:local}
+      - ARQ_QUEUE_NAME_LOCAL_GPU=${ARQ_QUEUE_NAME_LOCAL_GPU:-arq:queue:local-gpu}
       - ARQ_QUEUE_NAME_ASSEMBLY=${ARQ_QUEUE_NAME_ASSEMBLY:-arq:queue:assembly}
       - NVIDIA_VISIBLE_DEVICES=all
       - NVIDIA_DRIVER_CAPABILITIES=compute,utility,video
@@ -358,7 +364,7 @@ services:
       POSTGRES_USER: supoclip
       POSTGRES_PASSWORD: supoclip_password
     ports:
-      - "${POSTGRES_HOST_PORT:-5432}:5432"
+      - "${POSTGRES_HOST_PORT:-5433}:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
       - ./init.sql:/docker-entrypoint-initdb.d/init.sql

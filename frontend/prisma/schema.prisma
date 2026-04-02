@@ -56,6 +56,8 @@ model User {
   default_whisper_chunk_duration_seconds Int? @default(1200)
   default_whisper_chunk_overlap_seconds Int? @default(8)
   default_task_timeout_seconds Int? @default(21600)
+  default_whisper_device String? @default("auto") @db.VarChar(20)
+  default_whisper_gpu_index Int?
   default_ai_provider String? @default("openai") @db.VarChar(20)
   default_ai_model String? @db.VarChar(100)
   default_zai_key_routing_mode String? @default("auto") @db.VarChar(20)

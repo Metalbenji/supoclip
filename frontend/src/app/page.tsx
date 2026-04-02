@@ -49,6 +49,7 @@ interface LatestTask {
 
 const AI_PROVIDERS = ["openai", "google", "anthropic", "zai", "ollama"] as const;
 type AiProvider = (typeof AI_PROVIDERS)[number];
+type WhisperDevicePreference = "auto" | "cpu" | "gpu";
 
 const DEFAULT_AI_MODELS = {
   openai: "gpt-5",
@@ -166,6 +167,8 @@ export default function Home() {
   const [whisperChunkOverlapSeconds, setWhisperChunkOverlapSeconds] = useState(DEFAULT_WHISPER_CHUNK_OVERLAP_SECONDS);
   const [taskTimeoutSeconds, setTaskTimeoutSeconds] = useState(DEFAULT_TASK_TIMEOUT_SECONDS);
   const [taskTimeoutCapSeconds, setTaskTimeoutCapSeconds] = useState(MAX_TASK_TIMEOUT_SECONDS);
+  const [whisperDevice, setWhisperDevice] = useState<WhisperDevicePreference>("auto");
+  const [whisperGpuIndex, setWhisperGpuIndex] = useState<number | null>(null);
   const [assemblyMaxLocalUploadSizeBytes, setAssemblyMaxLocalUploadSizeBytes] = useState(
     Math.floor(2.2 * 1024 * 1024 * 1024),
   );
@@ -271,6 +274,8 @@ export default function Home() {
             whisperChunkDurationSeconds?: unknown;
             whisperChunkOverlapSeconds?: unknown;
             taskTimeoutSeconds?: unknown;
+            whisperDevice?: unknown;
+            whisperGpuIndex?: unknown;
             aiProvider?: unknown;
             aiModel?: unknown;
           } = await response.json();
@@ -314,6 +319,16 @@ export default function Home() {
           setWhisperChunkDurationSeconds(normalizedChunkDuration);
           setWhisperChunkOverlapSeconds(normalizedChunkOverlap);
           setTaskTimeoutSeconds(normalizeTaskTimeoutSecondsOnForm(data.taskTimeoutSeconds, taskTimeoutCapSeconds));
+          setWhisperDevice(
+            data.whisperDevice === "auto" || data.whisperDevice === "cpu" || data.whisperDevice === "gpu"
+              ? data.whisperDevice
+              : "auto",
+          );
+          setWhisperGpuIndex(
+            typeof data.whisperGpuIndex === "number" && Number.isInteger(data.whisperGpuIndex) && data.whisperGpuIndex >= 0
+              ? data.whisperGpuIndex
+              : null,
+          );
 
           const savedAiProvider = isAiProvider(data.aiProvider) ? data.aiProvider : undefined;
           if (savedAiProvider) {
@@ -614,6 +629,8 @@ export default function Home() {
             whisper_chunk_duration_seconds: normalizedChunkDuration,
             whisper_chunk_overlap_seconds: normalizedChunkOverlap,
             task_timeout_seconds: normalizedTaskTimeoutSeconds,
+            whisper_device: whisperDevice,
+            whisper_gpu_index: whisperGpuIndex,
           },
           ai_options: {
             provider: aiProvider,

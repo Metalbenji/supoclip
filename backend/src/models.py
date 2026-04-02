@@ -74,6 +74,15 @@ class User(Base):
         nullable=False,
         server_default=text("21600"),
     )
+    default_whisper_device: Mapped[str] = mapped_column(
+        String(20),
+        nullable=False,
+        server_default=text("'auto'"),
+    )
+    default_whisper_gpu_index: Mapped[Optional[int]] = mapped_column(
+        Integer,
+        nullable=True,
+    )
     default_ai_provider: Mapped[str] = mapped_column(
         String(20),
         nullable=False,

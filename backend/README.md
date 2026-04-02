@@ -68,6 +68,9 @@ Backend compatibility behavior:
 - z.ai supports user key profiles in Settings (`subscription`, `metered`) with routing mode (`auto`, `subscription`, `metered`)
 - preferred Whisper var: `WHISPER_MODEL_SIZE`
 - legacy Whisper var: `WHISPER_MODEL`
+- local Whisper device vars:
+  - `WHISPER_DEVICE`
+  - `WHISPER_GPU_INDEX`
 - local long-form Whisper vars:
   - `WHISPER_CHUNKING_ENABLED`
   - `WHISPER_CHUNK_DURATION_SECONDS`

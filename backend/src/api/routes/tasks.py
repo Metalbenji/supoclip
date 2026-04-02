@@ -32,6 +32,7 @@ logger = logging.getLogger(__name__)
 config = Config()
 router = APIRouter(prefix="/tasks", tags=["tasks"])
 SUPPORTED_TRANSCRIPTION_PROVIDERS = {"local", "assemblyai"}
+SUPPORTED_WHISPER_DEVICE_PREFERENCES = {"auto", "cpu", "gpu"}
 SUPPORTED_AI_PROVIDERS = {"openai", "google", "anthropic", "zai", "ollama"}
 AI_KEY_REQUIRED_PROVIDERS = {"openai", "google", "anthropic", "zai"}
 SUPPORTED_ZAI_KEY_PROFILES = {"subscription", "metered"}
@@ -50,6 +51,7 @@ MIN_WHISPER_CHUNK_DURATION_SECONDS = 300
 MAX_WHISPER_CHUNK_DURATION_SECONDS = 3600
 MIN_WHISPER_CHUNK_OVERLAP_SECONDS = 0
 MAX_WHISPER_CHUNK_OVERLAP_SECONDS = 120
+MIN_WHISPER_GPU_INDEX = 0
 MIN_TASK_TIMEOUT_SECONDS = 300
 MAX_TASK_TIMEOUT_SECONDS = 86400
 DRAFT_UPDATE_FIELDS = {"id", "start_time", "end_time", "edited_text", "is_selected"}
@@ -129,6 +131,48 @@ def _resolve_task_timeout_seconds(raw: object) -> Optional[int]:
     return timeout_seconds
 
 
+def _resolve_whisper_device_preference(raw: object) -> Optional[str]:
+    if raw is None:
+        return None
+    if not isinstance(raw, str):
+        raise HTTPException(
+            status_code=400,
+            detail="transcription_options.whisper_device must be auto, cpu, or gpu",
+        )
+    normalized = raw.strip().lower()
+    if normalized == "cuda":
+        normalized = "gpu"
+    if normalized not in SUPPORTED_WHISPER_DEVICE_PREFERENCES:
+        raise HTTPException(
+            status_code=400,
+            detail="transcription_options.whisper_device must be auto, cpu, or gpu",
+        )
+    return normalized
+
+
+def _resolve_whisper_gpu_index(raw: object) -> Optional[int]:
+    if raw is None or raw == "":
+        return None
+    gpu_index = _coerce_int(raw, "transcription_options.whisper_gpu_index")
+    if gpu_index < MIN_WHISPER_GPU_INDEX:
+        raise HTTPException(
+            status_code=400,
+            detail=f"transcription_options.whisper_gpu_index must be >= {MIN_WHISPER_GPU_INDEX}",
+        )
+    return gpu_index
+
+
+def _resolve_local_queue_name(transcription_runtime_options: Dict[str, Any]) -> str:
+    whisper_device = str(transcription_runtime_options.get("whisper_device") or "auto").strip().lower()
+    if whisper_device == "cuda":
+        whisper_device = "gpu"
+    if whisper_device == "cpu":
+        return config.arq_local_queue_name
+    if config.enable_gpu_worker:
+        return config.arq_local_gpu_queue_name
+    return config.arq_local_queue_name
+
+
 def _resolve_transcription_runtime_options(
     transcription_options: Dict[str, Any],
     provider: str,
@@ -146,6 +190,16 @@ def _resolve_transcription_runtime_options(
         options["whisper_chunking_enabled"] = _coerce_bool(
             transcription_options.get("whisper_chunking_enabled"),
             default=True,
+        )
+
+    if "whisper_device" in transcription_options:
+        options["whisper_device"] = _resolve_whisper_device_preference(
+            transcription_options.get("whisper_device")
+        )
+
+    if "whisper_gpu_index" in transcription_options:
+        options["whisper_gpu_index"] = _resolve_whisper_gpu_index(
+            transcription_options.get("whisper_gpu_index")
         )
 
     if "whisper_chunk_duration_seconds" in transcription_options:
@@ -379,10 +433,14 @@ async def get_transcription_settings(request: Request, db: AsyncSession = Depend
     """Get user transcription settings (key presence only, never returns the key)."""
     user_id = _require_user_id(request)
     try:
+        from ...whisper_runtime import get_local_whisper_runtime_info
+
         task_service = TaskService(db)
         settings = await task_service.get_user_transcription_settings(user_id)
+        runtime_info = get_local_whisper_runtime_info()
         return {
             "provider_options": sorted(SUPPORTED_TRANSCRIPTION_PROVIDERS),
+            "local_whisper_device_options": sorted(SUPPORTED_WHISPER_DEVICE_PREFERENCES),
             "has_assembly_key": bool(settings.get("has_assembly_key")),
             "has_env_fallback": bool((config.assembly_ai_api_key or "").strip()),
             "assemblyai_max_duration_seconds": ASSEMBLYAI_MAX_DURATION_SECONDS,
@@ -396,6 +454,7 @@ async def get_transcription_settings(request: Request, db: AsyncSession = Depend
             "max_whisper_chunk_duration_seconds": MAX_WHISPER_CHUNK_DURATION_SECONDS,
             "min_whisper_chunk_overlap_seconds": MIN_WHISPER_CHUNK_OVERLAP_SECONDS,
             "max_whisper_chunk_overlap_seconds": MAX_WHISPER_CHUNK_OVERLAP_SECONDS,
+            "local_whisper_runtime": runtime_info,
         }
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
@@ -1261,7 +1320,7 @@ async def create_task(request: Request, db: AsyncSession = Depends(get_db)):
         queue_name = (
             config.arq_assembly_queue_name
             if transcription_provider == "assemblyai"
-            else config.arq_local_queue_name
+            else _resolve_local_queue_name(transcription_runtime_options)
         )
 
         # Enqueue job for worker

@@ -118,6 +118,8 @@ class VideoService:
         whisper_chunking_enabled: Optional[bool] = None,
         whisper_chunk_duration_seconds: Optional[int] = None,
         whisper_chunk_overlap_seconds: Optional[int] = None,
+        whisper_device_preference: Optional[str] = None,
+        whisper_gpu_index: Optional[int] = None,
         progress_callback: Optional[Callable[[Dict[str, Any]], None]] = None,
     ) -> str:
         """
@@ -134,6 +136,8 @@ class VideoService:
             whisper_chunking_enabled,
             whisper_chunk_duration_seconds,
             whisper_chunk_overlap_seconds,
+            whisper_device_preference,
+            whisper_gpu_index,
             progress_callback,
         )
         logger.info(f"Transcript generated: {len(transcript)} characters")
@@ -148,6 +152,8 @@ class VideoService:
         whisper_chunking_enabled: Optional[bool] = None,
         whisper_chunk_duration_seconds: Optional[int] = None,
         whisper_chunk_overlap_seconds: Optional[int] = None,
+        whisper_device_preference: Optional[str] = None,
+        whisper_gpu_index: Optional[int] = None,
     ) -> str:
         """
         Generate transcript and emit heartbeat progress while waiting for transcription.
@@ -238,6 +244,8 @@ class VideoService:
                 whisper_chunking_enabled=whisper_chunking_enabled,
                 whisper_chunk_duration_seconds=whisper_chunk_duration_seconds,
                 whisper_chunk_overlap_seconds=whisper_chunk_overlap_seconds,
+                whisper_device_preference=whisper_device_preference,
+                whisper_gpu_index=whisper_gpu_index,
                 progress_callback=on_transcription_progress,
             )
             return transcript
@@ -1038,6 +1046,16 @@ class VideoService:
             ),
             whisper_chunk_overlap_seconds=(
                 transcription_options.get("whisper_chunk_overlap_seconds")
+                if transcription_options
+                else None
+            ),
+            whisper_device_preference=(
+                transcription_options.get("whisper_device")
+                if transcription_options
+                else None
+            ),
+            whisper_gpu_index=(
+                transcription_options.get("whisper_gpu_index")
                 if transcription_options
                 else None
             ),
