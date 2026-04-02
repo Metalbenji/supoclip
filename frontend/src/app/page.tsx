@@ -49,7 +49,9 @@ interface LatestTask {
 
 const AI_PROVIDERS = ["openai", "google", "anthropic", "zai", "ollama"] as const;
 type AiProvider = (typeof AI_PROVIDERS)[number];
+const WHISPER_MODEL_SIZES = ["tiny", "base", "small", "medium", "large", "turbo"] as const;
 type WhisperDevicePreference = "auto" | "cpu" | "gpu";
+type WhisperModelSize = (typeof WHISPER_MODEL_SIZES)[number];
 
 const DEFAULT_AI_MODELS = {
   openai: "gpt-5",
@@ -73,6 +75,10 @@ const MAX_AI_FOCUS_TAGS = 4;
 
 function isAiProvider(value: unknown): value is AiProvider {
   return typeof value === "string" && AI_PROVIDERS.includes(value as AiProvider);
+}
+
+function isWhisperModelSize(value: unknown): value is WhisperModelSize {
+  return typeof value === "string" && WHISPER_MODEL_SIZES.includes(value as WhisperModelSize);
 }
 
 function applyTextTransform(text: string, mode: TextTransformOption): string {
@@ -167,6 +173,7 @@ export default function Home() {
   const [whisperChunkOverlapSeconds, setWhisperChunkOverlapSeconds] = useState(DEFAULT_WHISPER_CHUNK_OVERLAP_SECONDS);
   const [taskTimeoutSeconds, setTaskTimeoutSeconds] = useState(DEFAULT_TASK_TIMEOUT_SECONDS);
   const [taskTimeoutCapSeconds, setTaskTimeoutCapSeconds] = useState(MAX_TASK_TIMEOUT_SECONDS);
+  const [whisperModelSize, setWhisperModelSize] = useState<WhisperModelSize>("medium");
   const [whisperDevice, setWhisperDevice] = useState<WhisperDevicePreference>("auto");
   const [whisperGpuIndex, setWhisperGpuIndex] = useState<number | null>(null);
   const [assemblyMaxLocalUploadSizeBytes, setAssemblyMaxLocalUploadSizeBytes] = useState(
@@ -274,6 +281,7 @@ export default function Home() {
             whisperChunkDurationSeconds?: unknown;
             whisperChunkOverlapSeconds?: unknown;
             taskTimeoutSeconds?: unknown;
+            whisperModelSize?: unknown;
             whisperDevice?: unknown;
             whisperGpuIndex?: unknown;
             aiProvider?: unknown;
@@ -319,6 +327,7 @@ export default function Home() {
           setWhisperChunkDurationSeconds(normalizedChunkDuration);
           setWhisperChunkOverlapSeconds(normalizedChunkOverlap);
           setTaskTimeoutSeconds(normalizeTaskTimeoutSecondsOnForm(data.taskTimeoutSeconds, taskTimeoutCapSeconds));
+          setWhisperModelSize(isWhisperModelSize(data.whisperModelSize) ? data.whisperModelSize : "medium");
           setWhisperDevice(
             data.whisperDevice === "auto" || data.whisperDevice === "cpu" || data.whisperDevice === "gpu"
               ? data.whisperDevice
@@ -629,6 +638,7 @@ export default function Home() {
             whisper_chunk_duration_seconds: normalizedChunkDuration,
             whisper_chunk_overlap_seconds: normalizedChunkOverlap,
             task_timeout_seconds: normalizedTaskTimeoutSeconds,
+            whisper_model_size: whisperModelSize,
             whisper_device: whisperDevice,
             whisper_gpu_index: whisperGpuIndex,
           },

@@ -33,6 +33,7 @@ config = Config()
 router = APIRouter(prefix="/tasks", tags=["tasks"])
 SUPPORTED_TRANSCRIPTION_PROVIDERS = {"local", "assemblyai"}
 SUPPORTED_WHISPER_DEVICE_PREFERENCES = {"auto", "cpu", "gpu"}
+SUPPORTED_WHISPER_MODEL_SIZES = {"tiny", "base", "small", "medium", "large", "turbo"}
 SUPPORTED_AI_PROVIDERS = {"openai", "google", "anthropic", "zai", "ollama"}
 AI_KEY_REQUIRED_PROVIDERS = {"openai", "google", "anthropic", "zai"}
 SUPPORTED_ZAI_KEY_PROFILES = {"subscription", "metered"}
@@ -162,6 +163,23 @@ def _resolve_whisper_gpu_index(raw: object) -> Optional[int]:
     return gpu_index
 
 
+def _resolve_whisper_model_size(raw: object) -> Optional[str]:
+    if raw is None:
+        return None
+    if not isinstance(raw, str):
+        raise HTTPException(
+            status_code=400,
+            detail="transcription_options.whisper_model_size must be tiny, base, small, medium, large, or turbo",
+        )
+    normalized = raw.strip().lower()
+    if normalized not in SUPPORTED_WHISPER_MODEL_SIZES:
+        raise HTTPException(
+            status_code=400,
+            detail="transcription_options.whisper_model_size must be tiny, base, small, medium, large, or turbo",
+        )
+    return normalized
+
+
 def _resolve_local_queue_name(transcription_runtime_options: Dict[str, Any]) -> str:
     whisper_device = str(transcription_runtime_options.get("whisper_device") or "auto").strip().lower()
     if whisper_device == "cuda":
@@ -195,6 +213,11 @@ def _resolve_transcription_runtime_options(
     if "whisper_device" in transcription_options:
         options["whisper_device"] = _resolve_whisper_device_preference(
             transcription_options.get("whisper_device")
+        )
+
+    if "whisper_model_size" in transcription_options:
+        options["whisper_model_size"] = _resolve_whisper_model_size(
+            transcription_options.get("whisper_model_size")
         )
 
     if "whisper_gpu_index" in transcription_options:
@@ -441,6 +464,7 @@ async def get_transcription_settings(request: Request, db: AsyncSession = Depend
         return {
             "provider_options": sorted(SUPPORTED_TRANSCRIPTION_PROVIDERS),
             "local_whisper_device_options": sorted(SUPPORTED_WHISPER_DEVICE_PREFERENCES),
+            "local_whisper_model_options": ["turbo", "medium", "large", "small", "base", "tiny"],
             "has_assembly_key": bool(settings.get("has_assembly_key")),
             "has_env_fallback": bool((config.assembly_ai_api_key or "").strip()),
             "assemblyai_max_duration_seconds": ASSEMBLYAI_MAX_DURATION_SECONDS,

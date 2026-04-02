@@ -120,6 +120,7 @@ class VideoService:
         whisper_chunk_overlap_seconds: Optional[int] = None,
         whisper_device_preference: Optional[str] = None,
         whisper_gpu_index: Optional[int] = None,
+        whisper_model_size: Optional[str] = None,
         progress_callback: Optional[Callable[[Dict[str, Any]], None]] = None,
     ) -> str:
         """
@@ -138,6 +139,7 @@ class VideoService:
             whisper_chunk_overlap_seconds,
             whisper_device_preference,
             whisper_gpu_index,
+            whisper_model_size,
             progress_callback,
         )
         logger.info(f"Transcript generated: {len(transcript)} characters")
@@ -154,6 +156,7 @@ class VideoService:
         whisper_chunk_overlap_seconds: Optional[int] = None,
         whisper_device_preference: Optional[str] = None,
         whisper_gpu_index: Optional[int] = None,
+        whisper_model_size: Optional[str] = None,
     ) -> str:
         """
         Generate transcript and emit heartbeat progress while waiting for transcription.
@@ -246,6 +249,7 @@ class VideoService:
                 whisper_chunk_overlap_seconds=whisper_chunk_overlap_seconds,
                 whisper_device_preference=whisper_device_preference,
                 whisper_gpu_index=whisper_gpu_index,
+                whisper_model_size=whisper_model_size,
                 progress_callback=on_transcription_progress,
             )
             return transcript
@@ -1056,6 +1060,11 @@ class VideoService:
             ),
             whisper_gpu_index=(
                 transcription_options.get("whisper_gpu_index")
+                if transcription_options
+                else None
+            ),
+            whisper_model_size=(
+                transcription_options.get("whisper_model_size")
                 if transcription_options
                 else None
             ),

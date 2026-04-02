@@ -578,9 +578,10 @@ def _transcribe_with_local_whisper(
     chunk_overlap_seconds_override: Optional[int] = None,
     device_preference_override: Optional[str] = None,
     gpu_index_override: Optional[int] = None,
+    model_name_override: Optional[str] = None,
     progress_callback: Optional[Callable[[Dict[str, Any]], None]] = None,
 ) -> Dict[str, Any]:
-    model_name = config.whisper_model or "medium"
+    model_name = (model_name_override or config.whisper_model or "medium").strip().lower()
     device, use_fp16 = resolve_whisper_device(
         device_preference_override=device_preference_override,
         gpu_index_override=gpu_index_override,
@@ -714,6 +715,7 @@ def get_video_transcript(
     whisper_chunk_overlap_seconds: Optional[int] = None,
     whisper_device_preference: Optional[str] = None,
     whisper_gpu_index: Optional[int] = None,
+    whisper_model_size: Optional[str] = None,
     progress_callback: Optional[Callable[[Dict[str, Any]], None]] = None,
 ) -> str:
     """Get transcript using configured provider with word-level timings."""
@@ -734,6 +736,7 @@ def get_video_transcript(
                 chunk_overlap_seconds_override=whisper_chunk_overlap_seconds,
                 device_preference_override=whisper_device_preference,
                 gpu_index_override=whisper_gpu_index,
+                model_name_override=whisper_model_size,
                 progress_callback=progress_callback,
             )
 

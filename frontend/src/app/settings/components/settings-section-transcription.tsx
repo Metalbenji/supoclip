@@ -3,7 +3,7 @@ import { Cloud, Cpu } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import type { TranscriptionProvider, WhisperDevicePreference } from "../settings-section-types";
+import type { TranscriptionProvider, WhisperDevicePreference, WhisperModelSize } from "../settings-section-types";
 
 interface WhisperGpuDeviceSummary {
   index: number;
@@ -25,6 +25,7 @@ interface SettingsSectionTranscriptionProps {
   whisperChunkOverlapSeconds: number;
   taskTimeoutSeconds: number;
   taskTimeoutMaxSeconds: number;
+  whisperModelSize: WhisperModelSize;
   whisperDevice: WhisperDevicePreference;
   whisperGpuIndex: number | null;
   localWhisperRuntime?: LocalWhisperRuntimeInfo | null;
@@ -41,6 +42,7 @@ interface SettingsSectionTranscriptionProps {
   onWhisperChunkDurationSecondsChange: (seconds: number) => void;
   onWhisperChunkOverlapSecondsChange: (seconds: number) => void;
   onTaskTimeoutSecondsChange: (seconds: number) => void;
+  onWhisperModelSizeChange: (modelSize: WhisperModelSize) => void;
   onWhisperDeviceChange: (device: WhisperDevicePreference) => void;
   onWhisperGpuIndexChange: (gpuIndex: number | null) => void;
   onAssemblyApiKeyChange: (value: string) => void;
@@ -56,6 +58,7 @@ export function SettingsSectionTranscription({
   whisperChunkOverlapSeconds,
   taskTimeoutSeconds,
   taskTimeoutMaxSeconds,
+  whisperModelSize,
   whisperDevice,
   whisperGpuIndex,
   localWhisperRuntime,
@@ -72,6 +75,7 @@ export function SettingsSectionTranscription({
   onWhisperChunkDurationSecondsChange,
   onWhisperChunkOverlapSecondsChange,
   onTaskTimeoutSecondsChange,
+  onWhisperModelSizeChange,
   onWhisperDeviceChange,
   onWhisperGpuIndexChange,
   onAssemblyApiKeyChange,
@@ -155,6 +159,14 @@ export function SettingsSectionTranscription({
   };
 
   const detectedGpuDevices = Array.isArray(localWhisperRuntime?.gpu_devices) ? localWhisperRuntime.gpu_devices : [];
+  const whisperModelOptions: Array<{ value: WhisperModelSize; label: string; note: string }> = [
+    { value: "turbo", label: "Turbo", note: "Recommended. Fastest high-quality transcription." },
+    { value: "medium", label: "Medium", note: "Balanced accuracy and speed. Higher VRAM than turbo." },
+    { value: "large", label: "Large", note: "Highest quality, slowest, and the heaviest on VRAM." },
+    { value: "small", label: "Small", note: "Lower VRAM use and faster, with a quality drop." },
+    { value: "base", label: "Base", note: "Lightweight and noticeably lower quality." },
+    { value: "tiny", label: "Tiny", note: "Smallest download and fastest low-end option." },
+  ];
 
   return (
     <div className="space-y-4">
@@ -216,6 +228,30 @@ export function SettingsSectionTranscription({
 
         {transcriptionProvider === "local" && (
           <div className="space-y-2 rounded border border-gray-100 bg-gray-50 p-3">
+            <div className="space-y-1">
+              <label className="text-xs font-medium text-black">Local Whisper Quality</label>
+              <Select
+                value={whisperModelSize}
+                onValueChange={(value) => onWhisperModelSizeChange(value as WhisperModelSize)}
+                disabled={isSaving || isSavingAssemblyKey}
+              >
+                <SelectTrigger className="w-full">
+                  <SelectValue placeholder="Select Whisper model quality" />
+                </SelectTrigger>
+                <SelectContent>
+                  {whisperModelOptions.map((option) => (
+                    <SelectItem key={option.value} value={option.value}>
+                      {option.label}: {option.note}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              <p className="text-xs text-gray-500">
+                This controls the local Whisper model used for future tasks. If that model is not cached yet, the first
+                run will download it before transcription starts.
+              </p>
+            </div>
+
             <div className="space-y-1">
               <label className="text-xs font-medium text-black">Local Whisper Device</label>
               <Select

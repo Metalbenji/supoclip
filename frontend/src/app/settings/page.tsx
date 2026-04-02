@@ -41,6 +41,7 @@ import {
   isSettingsSection,
   isTranscriptionProvider,
   isWhisperDevicePreference,
+  isWhisperModelSize,
   isZaiRoutingMode,
   normalizeTaskTimeoutSeconds,
   normalizeFontSize,
@@ -1235,6 +1236,10 @@ function SettingsPageContent() {
           whisperChunkDurationSeconds: normalizedWhisperChunkDuration,
           whisperChunkOverlapSeconds: normalizedWhisperChunkOverlap,
           taskTimeoutSeconds: normalizeTaskTimeoutSeconds(data.taskTimeoutSeconds),
+          whisperModelSize:
+            typeof data.whisperModelSize === "string" && isWhisperModelSize(data.whisperModelSize)
+              ? data.whisperModelSize
+              : DEFAULT_USER_PREFERENCES.whisperModelSize,
           whisperDevice:
             typeof data.whisperDevice === "string" && isWhisperDevicePreference(data.whisperDevice)
               ? data.whisperDevice
@@ -1609,6 +1614,7 @@ function SettingsPageContent() {
                 whisperChunkOverlapSeconds={preferencesDraft.whisperChunkOverlapSeconds}
                 taskTimeoutSeconds={preferencesDraft.taskTimeoutSeconds}
                 taskTimeoutMaxSeconds={workerTimeoutCapSeconds}
+                whisperModelSize={preferencesDraft.whisperModelSize}
                 whisperDevice={preferencesDraft.whisperDevice}
                 whisperGpuIndex={preferencesDraft.whisperGpuIndex}
                 localWhisperRuntime={localWhisperRuntime}
@@ -1654,6 +1660,12 @@ function SettingsPageContent() {
                   setPreferencesDraft((prev) => ({
                     ...prev,
                     taskTimeoutSeconds: Math.min(workerTimeoutCapSeconds, normalizeTaskTimeoutSeconds(seconds)),
+                  }));
+                }}
+                onWhisperModelSizeChange={(modelSize) => {
+                  setPreferencesDraft((prev) => ({
+                    ...prev,
+                    whisperModelSize: modelSize,
                   }));
                 }}
                 onWhisperDeviceChange={(device) => {

@@ -134,7 +134,7 @@ Local URL/port mapping reference: `docs/local-host-mappings.md`
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `WHISPER_MODEL_SIZE` | `medium` | Whisper model size (tiny/base/small/medium/large) |
+| `WHISPER_MODEL_SIZE` | `medium` | Whisper model size (tiny/base/small/medium/large/turbo) |
 | `WHISPER_DEVICE` | `auto` | Whisper device target (`auto`, `cuda`, `cpu`) |
 | `WHISPER_GPU_INDEX` | unset | Preferred GPU index for local Whisper; leave unset to use the first available GPU |
 | `WHISPER_CHUNKING_ENABLED` | `true` | Enable chunked local Whisper transcription for long videos |
@@ -180,7 +180,7 @@ Local URL/port mapping reference: `docs/local-host-mappings.md`
 | `OLLAMA_MAX_RETRIES` | `2` | Env fallback retry count for Ollama requests |
 | `OLLAMA_RETRY_BACKOFF_MS` | `400` | Env fallback retry backoff (ms) for Ollama requests |
 
-Note: with `TRANSCRIPTION_PROVIDER=local`, the first transcription downloads the Whisper model (size depends on `WHISPER_MODEL_SIZE`) into `WHISPER_CACHE_HOST_DIR` on your host filesystem. At runtime, local Whisper can auto-select GPU when available, or you can force CPU/GPU and optionally pin a GPU index from Settings. When `ENABLE_GPU_WORKER=true`, local jobs using `auto` or `gpu` are queued to the dedicated GPU worker queue.
+Note: with `TRANSCRIPTION_PROVIDER=local`, the first transcription downloads the Whisper model (size depends on `WHISPER_MODEL_SIZE`) into `WHISPER_CACHE_HOST_DIR` on your host filesystem. At runtime, local Whisper can auto-select GPU when available, or you can force CPU/GPU and optionally pin a GPU index from Settings. Settings can also save a per-user local Whisper quality/model choice for future tasks; switching to a model that is not cached yet will trigger a one-time download on its first run. When `ENABLE_GPU_WORKER=true`, local jobs using `auto` or `gpu` are queued to the dedicated GPU worker queue.
 
 AssemblyAI limits enforced by backend:
 - max audio duration: 10 hours

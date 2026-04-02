@@ -25,7 +25,7 @@ This is the single source of truth for MrglSnips runtime environment variables.
 | `OLLAMA_TIMEOUT_SECONDS` | No | `15` | backend, worker | Env fallback timeout (seconds) for Ollama model discovery/runtime calls when user-level override is not set. |
 | `OLLAMA_MAX_RETRIES` | No | `2` | backend, worker | Env fallback retry count for Ollama HTTP calls when user-level override is not set. |
 | `OLLAMA_RETRY_BACKOFF_MS` | No | `400` | backend, worker | Env fallback backoff (milliseconds) for Ollama retries when user-level override is not set. |
-| `WHISPER_MODEL_SIZE` | No | `medium` | backend, worker | Whisper size: `tiny`, `base`, `small`, `medium`, `large`. |
+| `WHISPER_MODEL_SIZE` | No | `medium` | backend, worker | Whisper size: `tiny`, `base`, `small`, `medium`, `large`, or `turbo`. User Settings can override the local Whisper model per future task. |
 | `WHISPER_DEVICE` | No | `auto` | backend, worker | Whisper execution target: `auto`, `cuda`, or `cpu`. |
 | `WHISPER_GPU_INDEX` | No | unset | backend, worker | Preferred GPU index for local Whisper when GPU execution is selected; leave unset to use the first visible GPU. |
 | `WHISPER_CHUNKING_ENABLED` | No | `true` | backend, worker | Enable chunked local Whisper transcription for long videos. |

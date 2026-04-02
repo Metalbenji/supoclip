@@ -10,12 +10,14 @@ export type SettingsSection = (typeof SETTINGS_SECTIONS)[number];
 
 export const TRANSCRIPTION_PROVIDERS = ["local", "assemblyai"] as const;
 export const WHISPER_DEVICE_PREFERENCES = ["auto", "cpu", "gpu"] as const;
+export const WHISPER_MODEL_SIZES = ["tiny", "base", "small", "medium", "large", "turbo"] as const;
 export const AI_PROVIDERS = ["openai", "google", "anthropic", "zai", "ollama"] as const;
 export const ZAI_ROUTING_MODES = ["auto", "subscription", "metered"] as const;
 export const OLLAMA_AUTH_MODES = ["none", "bearer", "custom_header"] as const;
 
 export type TranscriptionProvider = (typeof TRANSCRIPTION_PROVIDERS)[number];
 export type WhisperDevicePreference = (typeof WHISPER_DEVICE_PREFERENCES)[number];
+export type WhisperModelSize = (typeof WHISPER_MODEL_SIZES)[number];
 export type AiProvider = (typeof AI_PROVIDERS)[number];
 export type ZaiRoutingMode = (typeof ZAI_ROUTING_MODES)[number];
 export type OllamaAuthMode = (typeof OLLAMA_AUTH_MODES)[number];
@@ -58,6 +60,7 @@ export interface UserPreferences extends FontStyleOptions {
   whisperChunkDurationSeconds: number;
   whisperChunkOverlapSeconds: number;
   taskTimeoutSeconds: number;
+  whisperModelSize: WhisperModelSize;
   whisperDevice: WhisperDevicePreference;
   whisperGpuIndex: number | null;
   aiProvider: AiProvider;
@@ -74,6 +77,7 @@ export const DEFAULT_USER_PREFERENCES: UserPreferences = {
   whisperChunkDurationSeconds: 1200,
   whisperChunkOverlapSeconds: 8,
   taskTimeoutSeconds: 21600,
+  whisperModelSize: "medium",
   whisperDevice: "auto",
   whisperGpuIndex: null,
   aiProvider: "openai",
@@ -123,6 +127,10 @@ export function isWhisperDevicePreference(value: string): value is WhisperDevice
   return WHISPER_DEVICE_PREFERENCES.includes(value as WhisperDevicePreference);
 }
 
+export function isWhisperModelSize(value: string): value is WhisperModelSize {
+  return WHISPER_MODEL_SIZES.includes(value as WhisperModelSize);
+}
+
 export function isAiProvider(value: string): value is AiProvider {
   return AI_PROVIDERS.includes(value as AiProvider);
 }
@@ -162,6 +170,7 @@ export function arePreferencesEqual(a: UserPreferences, b: UserPreferences): boo
     a.whisperChunkDurationSeconds === b.whisperChunkDurationSeconds &&
     a.whisperChunkOverlapSeconds === b.whisperChunkOverlapSeconds &&
     a.taskTimeoutSeconds === b.taskTimeoutSeconds &&
+    a.whisperModelSize === b.whisperModelSize &&
     a.whisperDevice === b.whisperDevice &&
     a.whisperGpuIndex === b.whisperGpuIndex &&
     a.aiProvider === b.aiProvider &&

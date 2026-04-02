@@ -71,6 +71,8 @@ Backend compatibility behavior:
 - local Whisper device vars:
   - `WHISPER_DEVICE`
   - `WHISPER_GPU_INDEX`
+- local Whisper model can also be overridden per user in Settings for future tasks
+  - first use of an uncached model downloads it into the shared Whisper cache
 - local long-form Whisper vars:
   - `WHISPER_CHUNKING_ENABLED`
   - `WHISPER_CHUNK_DURATION_SECONDS`

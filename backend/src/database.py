@@ -264,6 +264,14 @@ async def init_db():
             text(
                 """
                 ALTER TABLE users
+                ADD COLUMN IF NOT EXISTS default_whisper_model_size VARCHAR(20) NOT NULL DEFAULT 'medium'
+                """
+            )
+        )
+        await conn.execute(
+            text(
+                """
+                ALTER TABLE users
                 ADD COLUMN IF NOT EXISTS default_whisper_gpu_index INTEGER NULL
                 """
             )
@@ -282,6 +290,25 @@ async def init_db():
                         ADD CONSTRAINT check_users_default_transcription_provider
                         CHECK (default_transcription_provider IN ('local', 'assemblyai'));
                     END IF;
+                END $$;
+                """
+            )
+        )
+        await conn.execute(
+            text(
+                """
+                DO $$
+                BEGIN
+                    IF EXISTS (
+                        SELECT 1
+                        FROM pg_constraint
+                        WHERE conname = 'check_users_default_whisper_model_size'
+                    ) THEN
+                        ALTER TABLE users DROP CONSTRAINT check_users_default_whisper_model_size;
+                    END IF;
+                    ALTER TABLE users
+                    ADD CONSTRAINT check_users_default_whisper_model_size
+                    CHECK (default_whisper_model_size IN ('tiny', 'base', 'small', 'medium', 'large', 'turbo'));
                 END $$;
                 """
             )

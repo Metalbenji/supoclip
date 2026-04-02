@@ -20,6 +20,7 @@ import {
 
 const SUPPORTED_TRANSCRIPTION_PROVIDERS = new Set(["local", "assemblyai"]);
 const SUPPORTED_WHISPER_DEVICES = new Set(["auto", "cpu", "gpu"]);
+const SUPPORTED_WHISPER_MODEL_SIZES = new Set(["tiny", "base", "small", "medium", "large", "turbo"]);
 const SUPPORTED_AI_PROVIDERS = new Set(["openai", "google", "anthropic", "zai", "ollama"]);
 const MIN_WHISPER_CHUNK_DURATION_SECONDS = 300;
 const MAX_WHISPER_CHUNK_DURATION_SECONDS = 3600;
@@ -29,6 +30,7 @@ const MIN_TASK_TIMEOUT_SECONDS = 300;
 const MAX_TASK_TIMEOUT_SECONDS = 86400;
 
 type WhisperPreferenceRow = {
+  default_whisper_model_size: string | null;
   default_whisper_device: string | null;
   default_whisper_gpu_index: number | null;
 };
@@ -36,6 +38,7 @@ type WhisperPreferenceRow = {
 async function getStoredWhisperPreferences(userId: string): Promise<WhisperPreferenceRow> {
   const rows = await prisma.$queryRaw<WhisperPreferenceRow[]>`
     SELECT
+      "default_whisper_model_size",
       "default_whisper_device",
       "default_whisper_gpu_index"
     FROM "users"
@@ -43,21 +46,31 @@ async function getStoredWhisperPreferences(userId: string): Promise<WhisperPrefe
     LIMIT 1
   `;
 
-  return rows[0] ?? { default_whisper_device: null, default_whisper_gpu_index: null };
+  return rows[0] ?? {
+    default_whisper_model_size: null,
+    default_whisper_device: null,
+    default_whisper_gpu_index: null,
+  };
 }
 
 async function updateStoredWhisperPreferences(
   userId: string,
+  whisperModelSize: string | undefined,
   whisperDevice: string | undefined,
   whisperGpuIndex: number | null | undefined,
 ): Promise<void> {
-  if (whisperDevice === undefined && whisperGpuIndex === undefined) {
+  if (whisperModelSize === undefined && whisperDevice === undefined && whisperGpuIndex === undefined) {
     return;
   }
 
   await prisma.$executeRaw`
     UPDATE "users"
     SET
+      "default_whisper_model_size" = CASE
+        WHEN ${whisperModelSize !== undefined}
+          THEN CAST(${whisperModelSize ?? null} AS VARCHAR(20))
+        ELSE "default_whisper_model_size"
+      END,
       "default_whisper_device" = CASE
         WHEN ${whisperDevice !== undefined}
           THEN CAST(${whisperDevice ?? null} AS VARCHAR(20))
@@ -162,6 +175,11 @@ export async function GET() {
       whisperChunkDurationSeconds: user.default_whisper_chunk_duration_seconds || 1200,
       whisperChunkOverlapSeconds: user.default_whisper_chunk_overlap_seconds || 8,
       taskTimeoutSeconds: user.default_task_timeout_seconds || 21600,
+      whisperModelSize:
+        typeof whisperPreferences.default_whisper_model_size === "string" &&
+        SUPPORTED_WHISPER_MODEL_SIZES.has(whisperPreferences.default_whisper_model_size)
+          ? whisperPreferences.default_whisper_model_size
+          : "medium",
       whisperDevice:
         typeof whisperPreferences.default_whisper_device === "string" &&
         SUPPORTED_WHISPER_DEVICES.has(whisperPreferences.default_whisper_device)
@@ -227,6 +245,7 @@ export async function PATCH(request: NextRequest) {
       whisperChunkDurationSeconds,
       whisperChunkOverlapSeconds,
       taskTimeoutSeconds,
+      whisperModelSize,
       whisperDevice,
       whisperGpuIndex,
       aiProvider,
@@ -368,6 +387,15 @@ export async function PATCH(request: NextRequest) {
       );
     }
     if (
+      whisperModelSize !== undefined &&
+      (typeof whisperModelSize !== "string" || !SUPPORTED_WHISPER_MODEL_SIZES.has(whisperModelSize))
+    ) {
+      return NextResponse.json(
+        { error: "Invalid whisperModelSize (must be tiny, base, small, medium, large, or turbo)" },
+        { status: 400 },
+      );
+    }
+    if (
       whisperDevice !== undefined &&
       (typeof whisperDevice !== "string" || !SUPPORTED_WHISPER_DEVICES.has(whisperDevice))
     ) {
@@ -465,7 +493,7 @@ export async function PATCH(request: NextRequest) {
       },
     });
 
-    await updateStoredWhisperPreferences(session.user.id, whisperDevice, whisperGpuIndex);
+    await updateStoredWhisperPreferences(session.user.id, whisperModelSize, whisperDevice, whisperGpuIndex);
     const whisperPreferences = await getStoredWhisperPreferences(session.user.id);
 
     return NextResponse.json({
@@ -506,6 +534,11 @@ export async function PATCH(request: NextRequest) {
       whisperChunkDurationSeconds: updatedUser.default_whisper_chunk_duration_seconds || 1200,
       whisperChunkOverlapSeconds: updatedUser.default_whisper_chunk_overlap_seconds || 8,
       taskTimeoutSeconds: updatedUser.default_task_timeout_seconds || 21600,
+      whisperModelSize:
+        typeof whisperPreferences.default_whisper_model_size === "string" &&
+        SUPPORTED_WHISPER_MODEL_SIZES.has(whisperPreferences.default_whisper_model_size)
+          ? whisperPreferences.default_whisper_model_size
+          : "medium",
       whisperDevice:
         typeof whisperPreferences.default_whisper_device === "string" &&
         SUPPORTED_WHISPER_DEVICES.has(whisperPreferences.default_whisper_device)
