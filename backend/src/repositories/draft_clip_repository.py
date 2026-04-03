@@ -6,12 +6,19 @@ from __future__ import annotations
 from typing import Any, Dict, List, Optional
 import uuid
 
-from sqlalchemy import text as sql_text
+from sqlalchemy import bindparam, text as sql_text
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.ext.asyncio import AsyncSession
 
 
 class DraftClipRepository:
     """Repository for editable task draft clips."""
+
+    _TASK_CLIP_DRAFT_JSONB_PARAMS = (
+        bindparam("feedback_signals_json", type_=JSONB),
+        bindparam("framing_metadata_json", type_=JSONB),
+        bindparam("edited_word_timings_json", type_=JSONB),
+    )
 
     @staticmethod
     async def replace_task_drafts(
@@ -46,6 +53,8 @@ class DraftClipRepository:
                         review_score,
                         feedback_score_adjustment,
                         feedback_signals_json,
+                        framing_metadata_json,
+                        framing_mode_override,
                         reasoning,
                         created_by_user,
                         is_selected,
@@ -70,6 +79,8 @@ class DraftClipRepository:
                         :review_score,
                         :feedback_score_adjustment,
                         :feedback_signals_json,
+                        :framing_metadata_json,
+                        :framing_mode_override,
                         :reasoning,
                         :created_by_user,
                         :is_selected,
@@ -80,7 +91,7 @@ class DraftClipRepository:
                     )
                     RETURNING id
                     """
-                ),
+                ).bindparams(*DraftClipRepository._TASK_CLIP_DRAFT_JSONB_PARAMS),
                 {
                     "id": str(uuid.uuid4()),
                     "task_id": task_id,
@@ -101,6 +112,8 @@ class DraftClipRepository:
                     ),
                     "feedback_score_adjustment": float(draft.get("feedback_score_adjustment") or 0.0),
                     "feedback_signals_json": draft.get("feedback_signals_json") or {},
+                    "framing_metadata_json": draft.get("framing_metadata_json") or {},
+                    "framing_mode_override": str(draft.get("framing_mode_override") or "auto"),
                     "reasoning": draft.get("reasoning"),
                     "created_by_user": bool(draft.get("created_by_user", False)),
                     "is_selected": bool(draft.get("is_selected", True)),
@@ -139,6 +152,8 @@ class DraftClipRepository:
                     review_score,
                     feedback_score_adjustment,
                     feedback_signals_json,
+                    framing_metadata_json,
+                    framing_mode_override,
                     reasoning,
                     created_by_user,
                     is_selected,
@@ -174,6 +189,8 @@ class DraftClipRepository:
                     "review_score": float(row.review_score),
                     "feedback_score_adjustment": float(row.feedback_score_adjustment),
                     "feedback_signals_json": row.feedback_signals_json or {},
+                    "framing_metadata_json": row.framing_metadata_json or {},
+                    "framing_mode_override": str(row.framing_mode_override or "auto"),
                     "reasoning": row.reasoning,
                     "created_by_user": bool(row.created_by_user),
                     "is_selected": bool(row.is_selected),
@@ -244,18 +261,29 @@ class DraftClipRepository:
             if "feedback_signals_json" in update:
                 set_clauses.append("feedback_signals_json = :feedback_signals_json")
                 params["feedback_signals_json"] = update.get("feedback_signals_json")
+            if "framing_metadata_json" in update:
+                set_clauses.append("framing_metadata_json = :framing_metadata_json")
+                params["framing_metadata_json"] = update.get("framing_metadata_json")
+            if "framing_mode_override" in update:
+                set_clauses.append("framing_mode_override = :framing_mode_override")
+                params["framing_mode_override"] = str(update.get("framing_mode_override") or "auto")
 
-            await db.execute(
-                sql_text(
+            statement = sql_text(
                     f"""
                     UPDATE task_clip_drafts
                     SET {', '.join(set_clauses)}
                     WHERE task_id = :task_id AND id = :draft_id
                     {"AND is_deleted = false" if not include_deleted else ""}
                     """
-                ),
-                params,
-            )
+                )
+            if "feedback_signals_json" in update:
+                statement = statement.bindparams(bindparam("feedback_signals_json", type_=JSONB))
+            if "framing_metadata_json" in update:
+                statement = statement.bindparams(bindparam("framing_metadata_json", type_=JSONB))
+            if "edited_word_timings_json" in update:
+                statement = statement.bindparams(bindparam("edited_word_timings_json", type_=JSONB))
+
+            await db.execute(statement, params)
 
         await db.commit()
 
@@ -299,7 +327,7 @@ class DraftClipRepository:
                         updated_at = NOW()
                     WHERE task_id = :task_id AND id = :draft_id AND is_deleted = false
                 """
-            ),
+            ).bindparams(bindparam("word_timings", type_=JSONB)),
             {
                 "task_id": task_id,
                 "draft_id": draft_id,
@@ -349,6 +377,8 @@ class DraftClipRepository:
                     review_score,
                     feedback_score_adjustment,
                     feedback_signals_json,
+                    framing_metadata_json,
+                    framing_mode_override,
                     reasoning,
                     created_by_user,
                     is_selected,
@@ -373,6 +403,8 @@ class DraftClipRepository:
                     :review_score,
                     :feedback_score_adjustment,
                     :feedback_signals_json,
+                    :framing_metadata_json,
+                    :framing_mode_override,
                     :reasoning,
                     :created_by_user,
                     :is_selected,
@@ -383,7 +415,7 @@ class DraftClipRepository:
                 )
                 RETURNING id
                 """
-            ),
+            ).bindparams(*DraftClipRepository._TASK_CLIP_DRAFT_JSONB_PARAMS),
             {
                 "id": draft_id,
                 "task_id": task_id,
@@ -404,6 +436,8 @@ class DraftClipRepository:
                 ),
                 "feedback_score_adjustment": float(draft.get("feedback_score_adjustment") or 0.0),
                 "feedback_signals_json": draft.get("feedback_signals_json") or {},
+                "framing_metadata_json": draft.get("framing_metadata_json") or {},
+                "framing_mode_override": str(draft.get("framing_mode_override") or "auto"),
                 "reasoning": draft.get("reasoning"),
                 "created_by_user": bool(draft.get("created_by_user", False)),
                 "is_selected": bool(draft.get("is_selected", True)),
@@ -447,6 +481,7 @@ class DraftClipRepository:
                     duration = original_duration,
                     edited_text = original_text,
                     edited_word_timings_json = NULL,
+                    framing_mode_override = 'auto',
                     is_selected = CASE
                         WHEN created_by_user THEN false
                         ELSE true

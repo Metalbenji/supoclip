@@ -19,6 +19,13 @@ import { SettingsSectionTranscription } from "./components/settings-section-tran
 import { SettingsSectionVideo } from "./components/settings-section-video";
 import { SettingsSidebar } from "./components/settings-sidebar";
 import {
+  FALLBACK_LOCAL_WHISPER_MODELS,
+  resolveWhisperPresetValues,
+  type LocalWhisperModelOption,
+  type LocalWhisperRuntimeInfo,
+  type WhisperPresetId,
+} from "@/lib/whisper-transcription";
+import {
   normalizeFontStyleOptions,
   normalizeFontWeight,
   normalizeLetterSpacing,
@@ -62,16 +69,6 @@ interface SavePreferencesOptions {
   keepalive?: boolean;
 }
 
-interface LocalWhisperRuntimeInfo {
-  cuda_available?: boolean;
-  gpu_devices?: Array<{
-    index: number;
-    name: string;
-    total_memory_bytes?: number | null;
-  }>;
-  probe_source?: string;
-}
-
 function getActiveSection(sectionValue: string | null): SettingsSection {
   if (sectionValue === "processing") {
     return "transcription";
@@ -101,6 +98,8 @@ function SettingsPageContent() {
   );
   const [workerTimeoutCapSeconds, setWorkerTimeoutCapSeconds] = useState(MAX_TASK_TIMEOUT_SECONDS);
   const [localWhisperRuntime, setLocalWhisperRuntime] = useState<LocalWhisperRuntimeInfo | null>(null);
+  const [localWhisperModels, setLocalWhisperModels] = useState<LocalWhisperModelOption[]>(FALLBACK_LOCAL_WHISPER_MODELS);
+  const [gpuWorkerEnabled, setGpuWorkerEnabled] = useState(false);
   const [isSavingAssemblyKey, setIsSavingAssemblyKey] = useState(false);
   const [assemblyKeyStatus, setAssemblyKeyStatus] = useState<string | null>(null);
   const [assemblyKeyError, setAssemblyKeyError] = useState<string | null>(null);
@@ -1291,8 +1290,24 @@ function SettingsPageContent() {
         const data = await response.json();
         setHasSavedAssemblyKey(Boolean(data.has_assembly_key));
         setHasAssemblyEnvFallback(Boolean(data.has_env_fallback));
+        setGpuWorkerEnabled(Boolean(data.gpu_worker_enabled));
         if (data.local_whisper_runtime && typeof data.local_whisper_runtime === "object") {
           setLocalWhisperRuntime(data.local_whisper_runtime as LocalWhisperRuntimeInfo);
+        }
+        if (Array.isArray(data.local_whisper_models)) {
+          const parsedModels = data.local_whisper_models.filter((entry: unknown): entry is LocalWhisperModelOption => {
+            if (!entry || typeof entry !== "object") {
+              return false;
+            }
+            const candidate = entry as Partial<LocalWhisperModelOption>;
+            return (
+              typeof candidate.value === "string" &&
+              typeof candidate.label === "string" &&
+              typeof candidate.speed_hint === "string" &&
+              typeof candidate.quality_hint === "string"
+            );
+          });
+          setLocalWhisperModels(parsedModels.length > 0 ? parsedModels : FALLBACK_LOCAL_WHISPER_MODELS);
         }
         if (typeof data.assemblyai_max_duration_seconds === "number" && Number.isFinite(data.assemblyai_max_duration_seconds)) {
           setAssemblyMaxDurationSeconds(Math.max(1, Math.round(data.assemblyai_max_duration_seconds)));
@@ -1617,7 +1632,9 @@ function SettingsPageContent() {
                 whisperModelSize={preferencesDraft.whisperModelSize}
                 whisperDevice={preferencesDraft.whisperDevice}
                 whisperGpuIndex={preferencesDraft.whisperGpuIndex}
+                localWhisperModels={localWhisperModels}
                 localWhisperRuntime={localWhisperRuntime}
+                gpuWorkerEnabled={gpuWorkerEnabled}
                 isSavingAssemblyKey={isSavingAssemblyKey}
                 assemblyApiKey={assemblyApiKey}
                 hasSavedAssemblyKey={hasSavedAssemblyKey}
@@ -1660,6 +1677,16 @@ function SettingsPageContent() {
                   setPreferencesDraft((prev) => ({
                     ...prev,
                     taskTimeoutSeconds: Math.min(workerTimeoutCapSeconds, normalizeTaskTimeoutSeconds(seconds)),
+                  }));
+                }}
+                onWhisperPresetChange={(preset) => {
+                  const resolvedPreset = resolveWhisperPresetValues(
+                    preset as Exclude<WhisperPresetId, "custom">,
+                    localWhisperRuntime,
+                  );
+                  setPreferencesDraft((prev) => ({
+                    ...prev,
+                    ...resolvedPreset,
                   }));
                 }}
                 onWhisperModelSizeChange={(modelSize) => {

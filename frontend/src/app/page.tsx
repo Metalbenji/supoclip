@@ -20,6 +20,13 @@ import { ArrowRight, Youtube, CheckCircle, AlertCircle, Loader2, Palette, Type, 
 import { formatSourceTypeLabel, formatTaskRuntime, isHttpUrl } from "@/lib/task-metadata";
 import { AI_FOCUS_TAG_OPTIONS, formatAiFocusTag, type AiFocusTag } from "@/lib/ai-focus-tags";
 import {
+  describeLocalWhisperModel,
+  FALLBACK_LOCAL_WHISPER_MODELS,
+  getWhisperModelCacheLabel,
+  getWhisperModelOption,
+  type LocalWhisperModelOption,
+} from "@/lib/whisper-transcription";
+import {
   normalizeFontSize,
   normalizeFontStyleOptions,
   normalizeFontWeight,
@@ -42,6 +49,7 @@ interface LatestTask {
   source_type: string;
   source_url?: string | null;
   status: string;
+  progress_message?: string;
   clips_count: number;
   created_at: string;
   updated_at: string;
@@ -176,12 +184,14 @@ export default function Home() {
   const [whisperModelSize, setWhisperModelSize] = useState<WhisperModelSize>("medium");
   const [whisperDevice, setWhisperDevice] = useState<WhisperDevicePreference>("auto");
   const [whisperGpuIndex, setWhisperGpuIndex] = useState<number | null>(null);
+  const [localWhisperModels, setLocalWhisperModels] = useState<LocalWhisperModelOption[]>(FALLBACK_LOCAL_WHISPER_MODELS);
   const [assemblyMaxLocalUploadSizeBytes, setAssemblyMaxLocalUploadSizeBytes] = useState(
     Math.floor(2.2 * 1024 * 1024 * 1024),
   );
   const [aiProvider, setAiProvider] = useState<AiProvider>("openai");
   const [aiModel, setAiModel] = useState<string>(DEFAULT_AI_MODELS.openai);
   const [aiFocusTags, setAiFocusTags] = useState<AiFocusTag[]>([]);
+  const selectedLocalWhisperModel = getWhisperModelOption(localWhisperModels, whisperModelSize);
 
   // Latest task state
   const [latestTask, setLatestTask] = useState<LatestTask | null>(null);
@@ -383,6 +393,21 @@ export default function Home() {
         ) {
           setAssemblyMaxLocalUploadSizeBytes(Math.max(1, Math.round(data.assemblyai_max_local_upload_size_bytes)));
         }
+        if (Array.isArray(data.local_whisper_models)) {
+          const parsedModels = data.local_whisper_models.filter((entry: unknown): entry is LocalWhisperModelOption => {
+            if (!entry || typeof entry !== "object") {
+              return false;
+            }
+            const candidate = entry as Partial<LocalWhisperModelOption>;
+            return (
+              typeof candidate.value === "string" &&
+              typeof candidate.label === "string" &&
+              typeof candidate.speed_hint === "string" &&
+              typeof candidate.quality_hint === "string"
+            );
+          });
+          setLocalWhisperModels(parsedModels.length > 0 ? parsedModels : FALLBACK_LOCAL_WHISPER_MODELS);
+        }
       } catch (limitError) {
         console.error("Failed to load transcription limits:", limitError);
       }
@@ -392,33 +417,37 @@ export default function Home() {
   }, [apiUrl, session?.user?.id]);
 
   // Load latest task
-  useEffect(() => {
-    const fetchLatestTask = async () => {
-      if (!session?.user?.id) return;
+  const fetchLatestTask = useCallback(async (showLoader = true) => {
+    if (!session?.user?.id) return;
 
-      try {
+    try {
+      if (showLoader) {
         setIsLoadingLatest(true);
-        const response = await fetch(`${apiUrl}/tasks/`, {
-          headers: {
-            'user_id': session.user.id,
-          },
-        });
+      }
+      const response = await fetch(`${apiUrl}/tasks/`, {
+        headers: {
+          user_id: session.user.id,
+        },
+      });
 
-        if (response.ok) {
-          const data = await response.json();
-          if (data.tasks && data.tasks.length > 0) {
-            setLatestTask(data.tasks[0]); // Get the first (latest) task
-          }
+      if (response.ok) {
+        const data = await response.json();
+        if (data.tasks && data.tasks.length > 0) {
+          setLatestTask(data.tasks[0]);
         }
-      } catch (error) {
-        console.error('Failed to load latest task:', error);
-      } finally {
+      }
+    } catch (latestTaskError) {
+      console.error("Failed to load latest task:", latestTaskError);
+    } finally {
+      if (showLoader) {
         setIsLoadingLatest(false);
       }
-    };
+    }
+  }, [apiUrl, session?.user?.id]);
 
-    fetchLatestTask();
-  }, [session?.user?.id, apiUrl]);
+  useEffect(() => {
+    void fetchLatestTask(true);
+  }, [fetchLatestTask]);
 
   useEffect(() => {
     setNowMs(Date.now());
@@ -428,6 +457,16 @@ export default function Home() {
     const intervalId = window.setInterval(() => setNowMs(Date.now()), 1000);
     return () => window.clearInterval(intervalId);
   }, [latestTask?.status]);
+
+  useEffect(() => {
+    if (!latestTask?.status || (latestTask.status !== "queued" && latestTask.status !== "processing")) {
+      return;
+    }
+    const intervalId = window.setInterval(() => {
+      void fetchLatestTask(false);
+    }, 4000);
+    return () => window.clearInterval(intervalId);
+  }, [fetchLatestTask, latestTask?.status]);
 
   // Always treat file input as uncontrolled, and store file in a ref
   const fileRef = useRef<File | null>(null);
@@ -966,7 +1005,7 @@ export default function Home() {
                           Completed
                         </Badge>
                       ) : latestTask.status === "processing" ? (
-                        <Badge className="bg-blue-100 text-blue-800">
+                        <Badge className="bg-emerald-100 text-emerald-800">
                           <Loader2 className="w-3 h-3 mr-1 animate-spin" />
                           Processing
                         </Badge>
@@ -979,6 +1018,11 @@ export default function Home() {
                       )}
                     </div>
                   </div>
+                  {(latestTask.status === "processing" || latestTask.status === "queued") && latestTask.progress_message ? (
+                    <p className="mt-2 text-sm font-medium text-emerald-700">
+                      {latestTask.progress_message}
+                    </p>
+                  ) : null}
                 </CardContent>
               </Card>
 
@@ -1153,10 +1197,10 @@ export default function Home() {
                 className="flex items-center justify-between cursor-pointer"
                 onClick={() => setShowAdvancedOptions(!showAdvancedOptions)}
               >
-                <div className="flex items-center gap-2">
-                  <Paintbrush className="w-4 h-4" />
-                  <h3 className="text-sm font-medium text-black">Font & Style Options</h3>
-                </div>
+                  <div className="flex items-center gap-2">
+                    <Paintbrush className="w-4 h-4" />
+                    <h3 className="text-sm font-medium text-black">Advanced Options</h3>
+                  </div>
                 <button type="button" className="text-xs text-gray-500">
                   {showAdvancedOptions ? "Hide" : "Show"}
                 </button>
@@ -1164,6 +1208,53 @@ export default function Home() {
 
               {showAdvancedOptions && (
                 <div className="space-y-4 pt-2">
+                  {transcriptionProvider === "local" ? (
+                    <div className="space-y-2 rounded border border-gray-200 bg-white p-3">
+                      <label className="text-sm font-medium text-black">Local Whisper Quality Override</label>
+                      <Select value={whisperModelSize} onValueChange={(value) => setWhisperModelSize(value as WhisperModelSize)} disabled={isLoading}>
+                        <SelectTrigger className="w-full">
+                          <SelectValue placeholder="Select Whisper quality for this task" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {localWhisperModels.map((option) => (
+                            <SelectItem key={option.value} value={option.value}>
+                              {describeLocalWhisperModel(option)}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                      <p className="text-xs text-gray-500">
+                        This only affects the current task. Your saved Settings default stays unchanged.
+                      </p>
+                      {selectedLocalWhisperModel ? (
+                        <div className="flex flex-wrap gap-2 pt-1">
+                          <Badge variant="outline" className="bg-white">
+                            {selectedLocalWhisperModel.speed_hint}
+                          </Badge>
+                          <Badge variant="outline" className="bg-white">
+                            {selectedLocalWhisperModel.quality_hint}
+                          </Badge>
+                          {selectedLocalWhisperModel.approx_vram_hint ? (
+                            <Badge variant="outline" className="bg-white">
+                              {selectedLocalWhisperModel.approx_vram_hint}
+                            </Badge>
+                          ) : null}
+                          <Badge
+                            className={
+                              selectedLocalWhisperModel.cache_status === "cached"
+                                ? "bg-green-100 text-green-800"
+                                : selectedLocalWhisperModel.cache_status === "not_cached"
+                                  ? "bg-amber-100 text-amber-800"
+                                  : "bg-gray-100 text-gray-700"
+                            }
+                          >
+                            {getWhisperModelCacheLabel(selectedLocalWhisperModel.cache_status)}
+                          </Badge>
+                        </div>
+                      ) : null}
+                    </div>
+                  ) : null}
+
                   {/* Font Family Selector */}
                   <div className="space-y-2">
                     <label className="text-sm font-medium text-black flex items-center gap-2">

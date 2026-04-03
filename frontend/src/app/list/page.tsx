@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -19,6 +19,7 @@ interface Task {
   source_type: string;
   source_url?: string | null;
   status: string;
+  progress_message?: string;
   clips_count: number;
   created_at: string;
   updated_at: string;
@@ -35,34 +36,38 @@ export default function ListPage() {
 
   const apiUrl = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
 
-  useEffect(() => {
-    const fetchTasks = async () => {
-      if (!session?.user?.id) return;
+  const fetchTasks = useCallback(async (showLoader = true) => {
+    if (!session?.user?.id) return;
 
-      try {
+    try {
+      if (showLoader) {
         setIsLoading(true);
-        const response = await fetch(`${apiUrl}/tasks/`, {
-          headers: {
-            'user_id': session.user.id,
-          },
-        });
+      }
+      const response = await fetch(`${apiUrl}/tasks/`, {
+        headers: {
+          user_id: session.user.id,
+        },
+      });
 
-        if (!response.ok) {
-          throw new Error(`Failed to fetch tasks: ${response.status}`);
-        }
+      if (!response.ok) {
+        throw new Error(`Failed to fetch tasks: ${response.status}`);
+      }
 
-        const data = await response.json();
-        setTasks(data.tasks || []);
-      } catch (err) {
-        console.error("Error fetching tasks:", err);
-        setError(err instanceof Error ? err.message : "Failed to load tasks");
-      } finally {
+      const data = await response.json();
+      setTasks(data.tasks || []);
+    } catch (err) {
+      console.error("Error fetching tasks:", err);
+      setError(err instanceof Error ? err.message : "Failed to load tasks");
+    } finally {
+      if (showLoader) {
         setIsLoading(false);
       }
-    };
+    }
+  }, [apiUrl, session?.user?.id]);
 
-    fetchTasks();
-  }, [session?.user?.id, apiUrl]);
+  useEffect(() => {
+    void fetchTasks(true);
+  }, [fetchTasks]);
 
   useEffect(() => {
     setNowMs(Date.now());
@@ -73,6 +78,17 @@ export default function ListPage() {
     const intervalId = window.setInterval(() => setNowMs(Date.now()), 1000);
     return () => window.clearInterval(intervalId);
   }, [tasks]);
+
+  useEffect(() => {
+    const hasRunningTask = tasks.some((task) => task.status === "queued" || task.status === "processing");
+    if (!hasRunningTask) {
+      return;
+    }
+    const intervalId = window.setInterval(() => {
+      void fetchTasks(false);
+    }, 4000);
+    return () => window.clearInterval(intervalId);
+  }, [fetchTasks, tasks]);
 
   const getStatusBadge = (status: string) => {
     switch (status) {
@@ -85,7 +101,7 @@ export default function ListPage() {
         );
       case "processing":
         return (
-          <Badge className="bg-blue-100 text-blue-800">
+          <Badge className="bg-emerald-100 text-emerald-800">
             <Loader2 className="w-3 h-3 mr-1 animate-spin" />
             Processing
           </Badge>
@@ -343,6 +359,11 @@ export default function ListPage() {
                           {task.clips_count} {task.clips_count === 1 ? "clip" : "clips"}
                         </span>
                       </div>
+                      {(task.status === "processing" || task.status === "queued") && task.progress_message ? (
+                        <p className="mt-2 text-sm font-medium text-emerald-700">
+                          {task.progress_message}
+                        </p>
+                      ) : null}
                     </div>
                     <div className="flex items-center gap-2 flex-shrink-0">
                       <div>

@@ -228,3 +228,14 @@ class WorkerSettings:
 
     # Worker pool settings (local transcription is CPU-heavy).
     max_jobs = config.worker_max_jobs
+
+    @staticmethod
+    async def on_startup(ctx: Dict[str, Any]) -> None:
+        from ..whisper_runtime import log_local_whisper_runtime_summary
+
+        log_local_whisper_runtime_summary("worker_startup")
+
+
+from ..whisper_runtime import log_local_whisper_runtime_summary as _log_local_whisper_runtime_summary
+
+_log_local_whisper_runtime_summary("worker_startup_import")

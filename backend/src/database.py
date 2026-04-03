@@ -786,6 +786,8 @@ async def init_db():
                     review_score FLOAT NOT NULL DEFAULT 0,
                     feedback_score_adjustment FLOAT NOT NULL DEFAULT 0,
                     feedback_signals_json JSONB,
+                    framing_metadata_json JSONB,
+                    framing_mode_override VARCHAR(32) NOT NULL DEFAULT 'auto',
                     reasoning TEXT,
                     created_by_user BOOLEAN NOT NULL DEFAULT false,
                     is_selected BOOLEAN NOT NULL DEFAULT true,
@@ -864,6 +866,22 @@ async def init_db():
         await conn.execute(
             text(
                 """
+                ALTER TABLE IF EXISTS task_clip_drafts
+                ADD COLUMN IF NOT EXISTS framing_metadata_json JSONB
+                """
+            )
+        )
+        await conn.execute(
+            text(
+                """
+                ALTER TABLE IF EXISTS task_clip_drafts
+                ADD COLUMN IF NOT EXISTS framing_mode_override VARCHAR(32) NOT NULL DEFAULT 'auto'
+                """
+            )
+        )
+        await conn.execute(
+            text(
+                """
                 UPDATE task_clip_drafts
                 SET original_start_time = COALESCE(original_start_time, start_time),
                     original_end_time = COALESCE(original_end_time, end_time),
@@ -877,7 +895,9 @@ async def init_db():
                 UPDATE task_clip_drafts
                 SET review_score = COALESCE(review_score, relevance_score),
                     feedback_score_adjustment = COALESCE(feedback_score_adjustment, 0),
-                    feedback_signals_json = COALESCE(feedback_signals_json, '{}'::jsonb)
+                    feedback_signals_json = COALESCE(feedback_signals_json, '{}'::jsonb),
+                    framing_metadata_json = COALESCE(framing_metadata_json, '{}'::jsonb),
+                    framing_mode_override = COALESCE(NULLIF(TRIM(framing_mode_override), ''), 'auto')
                 """
             )
         )
@@ -934,6 +954,20 @@ async def init_db():
                 """
                 CREATE INDEX IF NOT EXISTS idx_task_clip_drafts_active
                     ON task_clip_drafts(task_id, is_deleted)
+                """
+            )
+        )
+        await conn.execute(
+            text(
+                """
+                COMMENT ON COLUMN task_clip_drafts.framing_metadata_json IS 'Structured face/framing analysis used for review-time framing guidance and crop defaults.'
+                """
+            )
+        )
+        await conn.execute(
+            text(
+                """
+                COMMENT ON COLUMN task_clip_drafts.framing_mode_override IS 'Per-draft framing override: auto, prefer_face, or disable_face_crop.'
                 """
             )
         )

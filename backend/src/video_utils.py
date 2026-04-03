@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import List, Dict, Any, Tuple, Optional, Union, Callable
 import os
 import logging
+from datetime import datetime
 import numpy as np
 from concurrent.futures import ThreadPoolExecutor
 import json
@@ -16,6 +17,7 @@ import urllib.request
 import subprocess
 import tempfile
 import time
+import warnings
 from difflib import SequenceMatcher
 import re
 
@@ -31,7 +33,11 @@ from datetime import timedelta
 
 from .config import Config
 from .subtitle_style import normalize_subtitle_style
-from .whisper_runtime import resolve_whisper_device
+from .whisper_runtime import (
+    log_local_whisper_runtime_summary,
+    record_whisper_triton_fallback,
+    resolve_whisper_device,
+)
 
 logger = logging.getLogger(__name__)
 config = Config()
@@ -40,6 +46,10 @@ _whisper_model_lock = threading.Lock()
 _face_model_path_lock = threading.Lock()
 _face_model_path_cache: Optional[Path] = None
 _mediapipe_detector_tls = threading.local()
+SUPPORTED_FRAMING_MODE_OVERRIDES = ("auto", "prefer_face", "disable_face_crop")
+FRAMING_SCORE_BONUS_HIGH = 0.06
+FRAMING_SCORE_BONUS_MEDIUM = 0.03
+FRAMING_MULTI_FACE_PENALTY_MAX = 0.02
 
 class VideoProcessor:
     """Handles video processing operations with optimized settings."""
@@ -338,13 +348,55 @@ def _extract_audio_chunk_for_whisper(
 
 
 def _run_whisper_transcription(model: Any, media_path: Union[Path, str], use_fp16: bool) -> Dict[str, Any]:
-    return model.transcribe(
-        str(media_path),
-        task="transcribe",
-        word_timestamps=True,
-        verbose=False,
-        fp16=use_fp16,
-    )
+    log_local_whisper_runtime_summary("first_whisper_use")
+    with warnings.catch_warnings(record=True) as caught_warnings:
+        warnings.simplefilter("always")
+        result = model.transcribe(
+            str(media_path),
+            task="transcribe",
+            word_timestamps=True,
+            verbose=False,
+            fp16=use_fp16,
+        )
+
+    for caught in caught_warnings:
+        message = str(caught.message)
+        if "Failed to launch Triton kernels" in message:
+            record_whisper_triton_fallback(message)
+            continue
+        logger.warning("Whisper runtime warning: %s", message)
+
+    return result
+
+
+def _format_clip_run_prefix(filename_prefix: Optional[str] = None) -> str:
+    normalized_prefix = (filename_prefix or "").strip()
+    if normalized_prefix:
+        return normalized_prefix
+    return datetime.now().strftime("%Y%m%d_%H%M")
+
+
+def _format_clip_time_token(seconds: float) -> str:
+    total_seconds = max(0, int(round(seconds)))
+    hours = total_seconds // 3600
+    minutes = (total_seconds % 3600) // 60
+    remainder_seconds = total_seconds % 60
+    if hours > 0:
+        return f"{hours:02d}{minutes:02d}{remainder_seconds:02d}"
+    return f"{minutes:02d}{remainder_seconds:02d}"
+
+
+def _build_clip_filename(
+    *,
+    clip_index: int,
+    start_seconds: float,
+    end_seconds: float,
+    filename_prefix: Optional[str] = None,
+) -> str:
+    run_prefix = _format_clip_run_prefix(filename_prefix)
+    start_token = _format_clip_time_token(start_seconds)
+    end_token = _format_clip_time_token(end_seconds)
+    return f"{run_prefix}_clip_{clip_index:03d}_{start_token}-{end_token}.mp4"
 
 
 def _extract_words_from_whisper_result(
@@ -923,124 +975,81 @@ def round_to_even(value: int) -> int:
     """Round integer to nearest even number for H.264 compatibility."""
     return value - (value % 2)
 
-def detect_optimal_crop_region(video_clip: VideoFileClip, start_time: float, end_time: float, target_ratio: float = 9/16) -> Tuple[int, int, int, int]:
-    """Detect optimal crop region using improved face detection."""
-    try:
-        original_width, original_height = video_clip.size
+def _get_target_crop_dimensions(
+    original_width: int,
+    original_height: int,
+    target_ratio: float = 9 / 16,
+) -> Tuple[int, int]:
+    if original_width / original_height > target_ratio:
+        new_width = round_to_even(int(original_height * target_ratio))
+        new_height = round_to_even(original_height)
+    else:
+        new_width = round_to_even(original_width)
+        new_height = round_to_even(int(original_width / target_ratio))
+    return new_width, new_height
 
-        # Calculate target dimensions and ensure they're even
-        if original_width / original_height > target_ratio:
-            new_width = round_to_even(int(original_height * target_ratio))
-            new_height = round_to_even(original_height)
-        else:
-            new_width = round_to_even(original_width)
-            new_height = round_to_even(int(original_width / target_ratio))
 
-        # Try improved face detection
-        face_centers = detect_faces_in_clip(video_clip, start_time, end_time)
+def _get_default_center_crop_offsets(
+    original_width: int,
+    original_height: int,
+    crop_width: int,
+    crop_height: int,
+) -> Tuple[int, int]:
+    x_offset = (original_width - crop_width) // 2 if original_width > crop_width else 0
+    y_offset = (original_height - crop_height) // 2 if original_height > crop_height else 0
+    return round_to_even(x_offset), round_to_even(y_offset)
 
-        # Calculate crop position
-        if face_centers:
-            # Use weighted average of face centers with temporal consistency
-            total_weight = sum(area * confidence for _, _, area, confidence in face_centers)
-            if total_weight > 0:
-                weighted_x = sum(x * area * confidence for x, y, area, confidence in face_centers) / total_weight
-                weighted_y = sum(y * area * confidence for x, y, area, confidence in face_centers) / total_weight
 
-                # Add slight bias towards upper portion for better face framing
-                weighted_y = max(0, weighted_y - new_height * 0.1)
+def _get_face_detection_sample_times(start_time: float, end_time: float) -> List[float]:
+    duration = max(0.0, end_time - start_time)
+    if duration <= 0:
+        return []
 
-                x_offset = max(0, min(int(weighted_x - new_width // 2), original_width - new_width))
-                y_offset = max(0, min(int(weighted_y - new_height // 2), original_height - new_height))
+    sample_interval = min(0.5, max(duration / 10, 0.2))
+    sample_times: List[float] = []
+    current_time = start_time
+    while current_time < end_time:
+        sample_times.append(round(current_time, 4))
+        current_time += sample_interval
 
-                logger.info(f"Face-centered crop: {len(face_centers)} faces detected with improved algorithm")
-            else:
-                # Center crop
-                x_offset = (original_width - new_width) // 2 if original_width > new_width else 0
-                y_offset = (original_height - new_height) // 2 if original_height > new_height else 0
-        else:
-            # Center crop
-            x_offset = (original_width - new_width) // 2 if original_width > new_width else 0
-            y_offset = (original_height - new_height) // 2 if original_height > new_height else 0
-            logger.info("Using center crop (no faces detected)")
+    middle_time = round(start_time + (duration / 2), 4)
+    end_probe_time = round(max(start_time, end_time - min(0.1, duration / 10 if duration > 0 else 0.1)), 4)
+    sample_times.extend([middle_time, end_probe_time])
 
-        # Ensure offsets are even too
-        x_offset = round_to_even(x_offset)
-        y_offset = round_to_even(y_offset)
+    unique_times = sorted({timestamp for timestamp in sample_times if start_time <= timestamp <= end_time})
+    return unique_times
 
-        logger.info(f"Crop dimensions: {new_width}x{new_height} at offset ({x_offset}, {y_offset})")
-        return (x_offset, y_offset, new_width, new_height)
 
-    except Exception as e:
-        logger.error(f"Error in crop detection: {e}")
-        # Fallback to center crop
-        original_width, original_height = video_clip.size
-        if original_width / original_height > target_ratio:
-            new_width = round_to_even(int(original_height * target_ratio))
-            new_height = round_to_even(original_height)
-        else:
-            new_width = round_to_even(original_width)
-            new_height = round_to_even(int(original_width / target_ratio))
-
-        x_offset = round_to_even((original_width - new_width) // 2) if original_width > new_width else 0
-        y_offset = round_to_even((original_height - new_height) // 2) if original_height > new_height else 0
-
-        return (x_offset, y_offset, new_width, new_height)
-
-def detect_faces_in_clip(video_clip: VideoFileClip, start_time: float, end_time: float) -> List[Tuple[int, int, int, float]]:
-    """
-    Improved face detection using multiple methods and temporal consistency.
-    Returns list of (x, y, area, confidence) tuples.
-    """
-    face_centers = []
+def _collect_face_detection_samples(
+    video_clip: VideoFileClip,
+    start_time: float,
+    end_time: float,
+) -> List[Dict[str, Any]]:
+    samples: List[Dict[str, Any]] = []
 
     try:
         mp_face_detection, mp_detection_backend, mp_module = _get_thread_mediapipe_face_detector()
-
-        # Initialize OpenCV face detectors as fallback
         haar_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_frontalface_default.xml')
 
-        # Try to load DNN face detector (more accurate than Haar)
         dnn_net = None
         try:
             cv2_data_dir = Path(cv2.data.haarcascades)
             prototxt_path = cv2_data_dir / "opencv_face_detector.pbtxt"
             model_path = cv2_data_dir / "opencv_face_detector_uint8.pb"
-
             if prototxt_path.exists() and model_path.exists():
                 dnn_net = cv2.dnn.readNetFromTensorflow(str(model_path), str(prototxt_path))
-                logger.info("OpenCV DNN face detector loaded as backup")
-            else:
-                logger.info("OpenCV DNN face detector not available")
         except Exception as exc:
             logger.info(f"OpenCV DNN face detector failed to load: {exc}")
 
-        # Sample more frames for better face detection (every 0.5 seconds)
-        duration = end_time - start_time
-        sample_interval = min(0.5, duration / 10)  # At least 10 samples, max every 0.5s
-        sample_times = []
-
-        current_time = start_time
-        while current_time < end_time:
-            sample_times.append(current_time)
-            current_time += sample_interval
-
-        # Ensure we always sample the middle and end
-        if duration > 1.0:
-            middle_time = start_time + duration / 2
-            if middle_time not in sample_times:
-                sample_times.append(middle_time)
-
-        sample_times = [t for t in sample_times if t < end_time]
-        logger.info(f"Sampling {len(sample_times)} frames for face detection")
+        sample_times = _get_face_detection_sample_times(start_time, end_time)
+        logger.info("Sampling %s frames for face detection", len(sample_times))
 
         for sample_time in sample_times:
             try:
                 frame = video_clip.get_frame(sample_time)
                 height, width = frame.shape[:2]
-                detected_faces = []
+                detected_faces: List[Tuple[int, int, int, int, float]] = []
 
-                # Try MediaPipe first (most accurate)
                 if mp_face_detection is not None:
                     try:
                         if mp_detection_backend == "tasks":
@@ -1061,104 +1070,442 @@ def detect_faces_in_clip(video_clip: VideoFileClip, start_time: float, end_time:
                                 h = min(h, height - y)
                                 if w <= 0 or h <= 0:
                                     continue
-
                                 confidence = 0.5
                                 if detection.categories and detection.categories[0].score is not None:
                                     confidence = float(detection.categories[0].score)
-
                                 if w > 30 and h > 30:
                                     detected_faces.append((x, y, w, h, confidence))
                         else:
-                            # MediaPipe Solutions expects RGB format.
                             results = mp_face_detection.process(frame)
                             if results.detections:
                                 for detection in results.detections:
                                     bbox = detection.location_data.relative_bounding_box
-                                    confidence = detection.score[0]
-
+                                    confidence = float(detection.score[0])
                                     x = int(bbox.xmin * width)
                                     y = int(bbox.ymin * height)
                                     w = int(bbox.width * width)
                                     h = int(bbox.height * height)
-
                                     if w > 30 and h > 30:
                                         detected_faces.append((x, y, w, h, confidence))
-                    except Exception as e:
-                        logger.warning(f"MediaPipe detection failed for frame at {sample_time}s: {e}")
+                    except Exception as exc:
+                        logger.warning("MediaPipe detection failed for frame at %ss: %s", sample_time, exc)
 
-                # If MediaPipe didn't find faces, try DNN detector
                 if not detected_faces and dnn_net is not None:
                     try:
                         frame_bgr = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
                         blob = cv2.dnn.blobFromImage(frame_bgr, 1.0, (300, 300), [104, 117, 123])
                         dnn_net.setInput(blob)
                         detections = dnn_net.forward()
+                        for index in range(detections.shape[2]):
+                            confidence = float(detections[0, 0, index, 2])
+                            if confidence <= 0.5:
+                                continue
+                            x1 = int(detections[0, 0, index, 3] * width)
+                            y1 = int(detections[0, 0, index, 4] * height)
+                            x2 = int(detections[0, 0, index, 5] * width)
+                            y2 = int(detections[0, 0, index, 6] * height)
+                            w = x2 - x1
+                            h = y2 - y1
+                            if w > 30 and h > 30:
+                                detected_faces.append((x1, y1, w, h, confidence))
+                    except Exception as exc:
+                        logger.warning("DNN detection failed for frame at %ss: %s", sample_time, exc)
 
-                        for i in range(detections.shape[2]):
-                            confidence = detections[0, 0, i, 2]
-                            if confidence > 0.5:  # Confidence threshold
-                                x1 = int(detections[0, 0, i, 3] * width)
-                                y1 = int(detections[0, 0, i, 4] * height)
-                                x2 = int(detections[0, 0, i, 5] * width)
-                                y2 = int(detections[0, 0, i, 6] * height)
-
-                                w = x2 - x1
-                                h = y2 - y1
-
-                                if w > 30 and h > 30:  # Minimum face size
-                                    detected_faces.append((x1, y1, w, h, confidence))
-                    except Exception as e:
-                        logger.warning(f"DNN detection failed for frame at {sample_time}s: {e}")
-
-                # If still no faces found, use Haar cascade
                 if not detected_faces:
                     try:
                         frame_bgr = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
                         gray = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2GRAY)
-
                         faces = haar_cascade.detectMultiScale(
                             gray,
-                            scaleFactor=1.05,  # More sensitive
-                            minNeighbors=3,    # Less strict
-                            minSize=(40, 40),  # Smaller minimum size
-                            maxSize=(int(width*0.7), int(height*0.7))  # Maximum size limit
+                            scaleFactor=1.05,
+                            minNeighbors=3,
+                            minSize=(40, 40),
+                            maxSize=(int(width * 0.7), int(height * 0.7)),
                         )
-
                         for (x, y, w, h) in faces:
-                            # Estimate confidence based on face size and position
                             face_area = w * h
                             relative_size = face_area / (width * height)
-                            confidence = min(0.9, 0.3 + relative_size * 2)  # Rough confidence estimate
+                            confidence = min(0.9, 0.3 + relative_size * 2)
                             detected_faces.append((x, y, w, h, confidence))
-                    except Exception as e:
-                        logger.warning(f"Haar cascade detection failed for frame at {sample_time}s: {e}")
+                    except Exception as exc:
+                        logger.warning("Haar cascade detection failed for frame at %ss: %s", sample_time, exc)
 
-                # Process detected faces
+                frame_area = max(1, width * height)
+                qualified_faces: List[Dict[str, Any]] = []
                 for (x, y, w, h, confidence) in detected_faces:
+                    face_area = max(0, w * h)
+                    relative_area = face_area / frame_area
+                    if not (0.005 < relative_area < 0.3):
+                        continue
                     face_center_x = x + w // 2
                     face_center_y = y + h // 2
-                    face_area = w * h
+                    qualified_faces.append(
+                        {
+                            "x": int(x),
+                            "y": int(y),
+                            "width": int(w),
+                            "height": int(h),
+                            "center_x": int(face_center_x),
+                            "center_y": int(face_center_y),
+                            "area": int(face_area),
+                            "area_ratio": float(relative_area),
+                            "confidence": float(confidence),
+                        }
+                    )
 
-                    # Filter out very small or very large faces
-                    frame_area = width * height
-                    relative_area = face_area / frame_area
+                primary_face = None
+                if qualified_faces:
+                    primary_face = max(
+                        qualified_faces,
+                        key=lambda face: float(face["area"]) * float(face["confidence"]),
+                    )
 
-                    if 0.005 < relative_area < 0.3:  # Face should be 0.5% to 30% of frame
-                        face_centers.append((face_center_x, face_center_y, face_area, confidence))
-
-            except Exception as e:
-                logger.warning(f"Error detecting faces in frame at {sample_time}s: {e}")
+                samples.append(
+                    {
+                        "time": float(sample_time),
+                        "frame_width": int(width),
+                        "frame_height": int(height),
+                        "faces": qualified_faces,
+                        "primary_face": primary_face,
+                    }
+                )
+            except Exception as exc:
+                logger.warning("Error detecting faces in frame at %ss: %s", sample_time, exc)
                 continue
+    except Exception as exc:
+        logger.error("Error collecting face detection samples: %s", exc)
 
-        # Remove outliers (faces that are very far from the median position)
-        if len(face_centers) > 2:
-            face_centers = filter_face_outliers(face_centers)
+    return samples
 
-        logger.info(f"Detected {len(face_centers)} reliable face centers")
+
+def _calculate_weighted_crop_offsets(
+    face_centers: List[Tuple[int, int, int, float]],
+    original_width: int,
+    original_height: int,
+    crop_width: int,
+    crop_height: int,
+) -> Tuple[int, int]:
+    if not face_centers:
+        return _get_default_center_crop_offsets(original_width, original_height, crop_width, crop_height)
+
+    total_weight = sum(area * confidence for _, _, area, confidence in face_centers)
+    if total_weight <= 0:
+        return _get_default_center_crop_offsets(original_width, original_height, crop_width, crop_height)
+
+    weighted_x = sum(x * area * confidence for x, _, area, confidence in face_centers) / total_weight
+    weighted_y = sum(y * area * confidence for _, y, area, confidence in face_centers) / total_weight
+    weighted_y = max(0.0, weighted_y - crop_height * 0.1)
+
+    x_offset = max(0, min(int(weighted_x - crop_width // 2), original_width - crop_width))
+    y_offset = max(0, min(int(weighted_y - crop_height // 2), original_height - crop_height))
+    return round_to_even(x_offset), round_to_even(y_offset)
+
+
+def _summarize_face_detection_samples(
+    samples: List[Dict[str, Any]],
+    start_time: float,
+    crop_width: int,
+    crop_height: int,
+) -> Dict[str, Any]:
+    if not samples:
+        return {
+            "face_detected": False,
+            "face_detection_rate": 0.0,
+            "primary_face_area_ratio": None,
+            "dominant_face_count": 0,
+            "multi_face_frames_rate": 0.0,
+            "crop_confidence": "none",
+            "suggested_crop_mode": "center",
+            "score_adjustment": 0.0,
+            "face_centers": [],
+            "tracking_points": [],
+        }
+
+    sample_count = len(samples)
+    primary_area_ratios: List[float] = []
+    face_counts: List[int] = []
+    face_centers: List[Tuple[int, int, int, float]] = []
+    tracking_points: List[Dict[str, Any]] = []
+    face_frames = 0
+    multi_face_frames = 0
+
+    for sample in samples:
+        faces = list(sample.get("faces") or [])
+        if not faces:
+            continue
+
+        face_frames += 1
+        face_count = len(faces)
+        face_counts.append(face_count)
+        if face_count > 1:
+            multi_face_frames += 1
+
+        primary_face = sample.get("primary_face") or faces[0]
+        area_ratio = float(primary_face.get("area_ratio") or 0.0)
+        primary_area_ratios.append(area_ratio)
+        face_centers.append(
+            (
+                int(primary_face.get("center_x") or 0),
+                int(primary_face.get("center_y") or 0),
+                int(primary_face.get("area") or 0),
+                float(primary_face.get("confidence") or 0.0),
+            )
+        )
+        tracking_points.append(
+            {
+                "time": round(float(sample.get("time") or 0.0) - start_time, 4),
+                "center_x": int(primary_face.get("center_x") or 0),
+                "center_y": int(primary_face.get("center_y") or 0),
+                "area": int(primary_face.get("area") or 0),
+                "confidence": float(primary_face.get("confidence") or 0.0),
+                "face_count": face_count,
+            }
+        )
+
+    if len(face_centers) > 2:
+        face_centers = filter_face_outliers(face_centers)
+
+    face_detection_rate = round(face_frames / sample_count, 4) if sample_count > 0 else 0.0
+    multi_face_frames_rate = round(multi_face_frames / sample_count, 4) if sample_count > 0 else 0.0
+    primary_face_area_ratio = round(float(np.mean(primary_area_ratios)), 4) if primary_area_ratios else None
+
+    dominant_face_count = 0
+    if face_counts:
+        unique_counts, count_totals = np.unique(np.array(face_counts), return_counts=True)
+        dominant_face_count = int(unique_counts[int(np.argmax(count_totals))])
+
+    crop_confidence = "none"
+    if face_frames > 0:
+        crop_confidence = "low"
+        if (
+            dominant_face_count == 1
+            and face_detection_rate >= 0.6
+            and (primary_face_area_ratio or 0.0) >= 0.02
+            and multi_face_frames_rate <= 0.15
+        ):
+            crop_confidence = "high"
+        elif (
+            dominant_face_count == 1
+            and face_detection_rate >= 0.35
+            and (primary_face_area_ratio or 0.0) >= 0.01
+            and multi_face_frames_rate <= 0.35
+        ):
+            crop_confidence = "medium"
+
+    suggested_crop_mode = "face" if crop_confidence in {"high", "medium"} else "center"
+
+    score_adjustment = 0.0
+    if dominant_face_count == 1 and face_detection_rate >= 0.35:
+        if crop_confidence == "high":
+            score_adjustment += FRAMING_SCORE_BONUS_HIGH
+        elif crop_confidence == "medium":
+            score_adjustment += FRAMING_SCORE_BONUS_MEDIUM
+    if multi_face_frames_rate > 0.25:
+        score_adjustment -= min(FRAMING_MULTI_FACE_PENALTY_MAX, round(multi_face_frames_rate * 0.05, 4))
+
+    x_offset, y_offset = _calculate_weighted_crop_offsets(
+        face_centers,
+        int(samples[0].get("frame_width") or 0),
+        int(samples[0].get("frame_height") or 0),
+        crop_width,
+        crop_height,
+    )
+
+    processed_tracking_points: List[Dict[str, Any]] = []
+    frame_width = int(samples[0].get("frame_width") or 0)
+    frame_height = int(samples[0].get("frame_height") or 0)
+    for point in tracking_points:
+        target_y = max(0.0, float(point["center_y"]) - crop_height * 0.1)
+        tracked_x = max(0, min(int(float(point["center_x"]) - crop_width / 2), frame_width - crop_width))
+        tracked_y = max(0, min(int(target_y - crop_height / 2), frame_height - crop_height))
+        processed_tracking_points.append(
+            {
+                "time": round(float(point["time"]), 4),
+                "x_offset": round_to_even(tracked_x),
+                "y_offset": round_to_even(tracked_y),
+                "face_count": int(point["face_count"]),
+                "confidence": float(point["confidence"]),
+            }
+        )
+
+    return {
+        "face_detected": bool(face_frames > 0),
+        "face_detection_rate": face_detection_rate,
+        "primary_face_area_ratio": primary_face_area_ratio,
+        "dominant_face_count": dominant_face_count,
+        "multi_face_frames_rate": multi_face_frames_rate,
+        "crop_confidence": crop_confidence,
+        "suggested_crop_mode": suggested_crop_mode,
+        "score_adjustment": round(score_adjustment, 4),
+        "face_centers": face_centers,
+        "tracking_points": processed_tracking_points,
+        "fixed_crop_offsets": (x_offset, y_offset),
+    }
+
+
+def _smooth_numeric_series(values: np.ndarray, window_size: int = 3) -> np.ndarray:
+    if values.size <= 2 or window_size <= 1:
+        return values
+    kernel = np.ones(window_size) / window_size
+    padded = np.pad(values, (window_size // 2, window_size // 2), mode="edge")
+    return np.convolve(padded, kernel, mode="valid")
+
+
+def _build_tracked_crop_clip(
+    clip: VideoFileClip,
+    crop_width: int,
+    crop_height: int,
+    tracking_points: List[Dict[str, Any]],
+    fallback_offsets: Tuple[int, int],
+) -> VideoFileClip:
+    if not tracking_points:
+        x_offset, y_offset = fallback_offsets
+        return clip.cropped(
+            x1=x_offset,
+            y1=y_offset,
+            x2=x_offset + crop_width,
+            y2=y_offset + crop_height,
+        )
+
+    sorted_points = sorted(tracking_points, key=lambda point: float(point.get("time") or 0.0))
+    duration = max(0.0, float(clip.duration or 0.0))
+
+    times = np.array([max(0.0, float(point.get("time") or 0.0)) for point in sorted_points], dtype=float)
+    x_offsets = np.array([float(point.get("x_offset") or 0.0) for point in sorted_points], dtype=float)
+    y_offsets = np.array([float(point.get("y_offset") or 0.0) for point in sorted_points], dtype=float)
+
+    if times.size == 0:
+        return clip.cropped(
+            x1=fallback_offsets[0],
+            y1=fallback_offsets[1],
+            x2=fallback_offsets[0] + crop_width,
+            y2=fallback_offsets[1] + crop_height,
+        )
+
+    if times[0] > 0.0:
+        times = np.insert(times, 0, 0.0)
+        x_offsets = np.insert(x_offsets, 0, x_offsets[0])
+        y_offsets = np.insert(y_offsets, 0, y_offsets[0])
+    if duration > 0.0 and times[-1] < duration:
+        times = np.append(times, duration)
+        x_offsets = np.append(x_offsets, x_offsets[-1])
+        y_offsets = np.append(y_offsets, y_offsets[-1])
+
+    x_offsets = _smooth_numeric_series(x_offsets)
+    y_offsets = _smooth_numeric_series(y_offsets)
+    max_x = max(0, int(clip.w - crop_width))
+    max_y = max(0, int(clip.h - crop_height))
+
+    def crop_frame(get_frame: Callable[[float], np.ndarray], timestamp: float) -> np.ndarray:
+        frame = get_frame(timestamp)
+        interpolated_x = int(np.interp(timestamp, times, x_offsets))
+        interpolated_y = int(np.interp(timestamp, times, y_offsets))
+        x_offset = max(0, min(round_to_even(interpolated_x), max_x))
+        y_offset = max(0, min(round_to_even(interpolated_y), max_y))
+        return frame[y_offset:y_offset + crop_height, x_offset:x_offset + crop_width]
+
+    return clip.transform(crop_frame)
+
+
+def analyze_clip_framing(
+    video_clip: VideoFileClip,
+    start_time: float,
+    end_time: float,
+    target_ratio: float = 9 / 16,
+) -> Dict[str, Any]:
+    original_width, original_height = video_clip.size
+    crop_width, crop_height = _get_target_crop_dimensions(original_width, original_height, target_ratio)
+    samples = _collect_face_detection_samples(video_clip, start_time, end_time)
+    summary = _summarize_face_detection_samples(samples, start_time, crop_width, crop_height)
+    default_x, default_y = _get_default_center_crop_offsets(original_width, original_height, crop_width, crop_height)
+    fixed_crop_offsets = summary.get("fixed_crop_offsets") or (default_x, default_y)
+
+    framing_metadata = {
+        "face_detected": bool(summary.get("face_detected")),
+        "face_detection_rate": float(summary.get("face_detection_rate") or 0.0),
+        "primary_face_area_ratio": summary.get("primary_face_area_ratio"),
+        "dominant_face_count": int(summary.get("dominant_face_count") or 0),
+        "multi_face_frames_rate": float(summary.get("multi_face_frames_rate") or 0.0),
+        "crop_confidence": str(summary.get("crop_confidence") or "none"),
+        "suggested_crop_mode": str(summary.get("suggested_crop_mode") or "center"),
+        "score_adjustment": float(summary.get("score_adjustment") or 0.0),
+    }
+    return {
+        "framing_metadata": framing_metadata,
+        "crop_width": crop_width,
+        "crop_height": crop_height,
+        "fixed_crop_offsets": fixed_crop_offsets,
+        "tracking_points": list(summary.get("tracking_points") or []),
+        "face_centers": list(summary.get("face_centers") or []),
+    }
+
+
+def analyze_single_segment_framing(
+    video_path: Union[Path, str],
+    start_time: str,
+    end_time: str,
+) -> Dict[str, Any]:
+    start_seconds = parse_timestamp_to_seconds(start_time)
+    end_seconds = parse_timestamp_to_seconds(end_time)
+    if end_seconds <= start_seconds:
+        return {}
+    with VideoFileClip(str(video_path)) as video:
+        return analyze_clip_framing(video, start_seconds, end_seconds).get("framing_metadata", {})
+
+
+def analyze_segment_framing_batch(
+    video_path: Union[Path, str],
+    segments: List[Dict[str, Any]],
+) -> List[Dict[str, Any]]:
+    video_path = Path(video_path)
+    results: List[Dict[str, Any]] = []
+    with VideoFileClip(str(video_path)) as video:
+        for segment in segments:
+            try:
+                start_seconds = parse_timestamp_to_seconds(segment.get("start_time", "00:00"))
+                end_seconds = parse_timestamp_to_seconds(segment.get("end_time", "00:00"))
+                if end_seconds <= start_seconds:
+                    results.append({})
+                    continue
+                analysis = analyze_clip_framing(video, start_seconds, end_seconds)
+                results.append(dict(analysis.get("framing_metadata") or {}))
+            except Exception as exc:
+                logger.warning(
+                    "Failed framing analysis for segment %s -> %s: %s",
+                    segment.get("start_time"),
+                    segment.get("end_time"),
+                    exc,
+                )
+                results.append({})
+    return results
+
+
+def detect_optimal_crop_region(video_clip: VideoFileClip, start_time: float, end_time: float, target_ratio: float = 9/16) -> Tuple[int, int, int, int]:
+    """Detect a fixed crop region using face framing analysis."""
+    try:
+        analysis = analyze_clip_framing(video_clip, start_time, end_time, target_ratio=target_ratio)
+        x_offset, y_offset = analysis.get("fixed_crop_offsets") or (0, 0)
+        crop_width = int(analysis.get("crop_width") or video_clip.w)
+        crop_height = int(analysis.get("crop_height") or video_clip.h)
+        return int(x_offset), int(y_offset), crop_width, crop_height
+    except Exception as exc:
+        logger.error("Error in crop detection: %s", exc)
+        crop_width, crop_height = _get_target_crop_dimensions(video_clip.w, video_clip.h, target_ratio)
+        x_offset, y_offset = _get_default_center_crop_offsets(video_clip.w, video_clip.h, crop_width, crop_height)
+        return x_offset, y_offset, crop_width, crop_height
+
+
+def detect_faces_in_clip(video_clip: VideoFileClip, start_time: float, end_time: float) -> List[Tuple[int, int, int, float]]:
+    """Return simplified face centers for compatibility with older callers."""
+    try:
+        crop_width, crop_height = _get_target_crop_dimensions(video_clip.w, video_clip.h, 9 / 16)
+        samples = _collect_face_detection_samples(video_clip, start_time, end_time)
+        summary = _summarize_face_detection_samples(samples, start_time, crop_width, crop_height)
+        face_centers = list(summary.get("face_centers") or [])
+        logger.info("Detected %s reliable face centers", len(face_centers))
         return face_centers
-
-    except Exception as e:
-        logger.error(f"Error in face detection: {e}")
+    except Exception as exc:
+        logger.error("Error in face detection: %s", exc)
         return []
 
 def filter_face_outliers(face_centers: List[Tuple[int, int, int, float]]) -> List[Tuple[int, int, int, float]]:
@@ -1889,6 +2236,8 @@ def create_optimized_clip(
     font_color: str = "#FFFFFF",
     subtitle_style: Optional[Dict[str, Any]] = None,
     subtitle_word_timings: Optional[List[Dict[str, Any]]] = None,
+    framing_mode_override: str = "auto",
+    framing_metadata: Optional[Dict[str, Any]] = None,
     error_collector: Optional[List[str]] = None,
 ) -> bool:
     """Create optimized 9:16 clip with word-timed subtitles."""
@@ -1912,15 +2261,64 @@ def create_optimized_clip(
 
         end_time = min(end_time, video.duration)
         clip = video.subclipped(start_time, end_time)
+        framing_mode = str(framing_mode_override or "auto").strip().lower()
+        if framing_mode not in SUPPORTED_FRAMING_MODE_OVERRIDES:
+            framing_mode = "auto"
 
-        # Get optimal crop
-        x_offset, y_offset, new_width, new_height = detect_optimal_crop_region(
-            video, start_time, end_time, target_ratio=9/16
-        )
+        new_width, new_height = _get_target_crop_dimensions(video.w, video.h, 9 / 16)
+        center_x_offset, center_y_offset = _get_default_center_crop_offsets(video.w, video.h, new_width, new_height)
+        effective_framing_metadata = dict(framing_metadata or {})
+        crop_mode = "center"
+        crop_reason = "disabled_by_override" if framing_mode == "disable_face_crop" else "no_reliable_face"
+        crop_confidence = str(effective_framing_metadata.get("crop_confidence") or "none")
 
-        cropped_clip = clip.cropped(
-            x1=x_offset, y1=y_offset,
-            x2=x_offset + new_width, y2=y_offset + new_height
+        if framing_mode == "disable_face_crop":
+            cropped_clip = clip.cropped(
+                x1=center_x_offset,
+                y1=center_y_offset,
+                x2=center_x_offset + new_width,
+                y2=center_y_offset + new_height,
+            )
+        else:
+            framing_analysis = analyze_clip_framing(video, start_time, end_time, target_ratio=9 / 16)
+            effective_framing_metadata = dict(framing_analysis.get("framing_metadata") or effective_framing_metadata)
+            crop_confidence = str(effective_framing_metadata.get("crop_confidence") or "none")
+            tracking_points = list(framing_analysis.get("tracking_points") or [])
+            fixed_offsets = tuple(framing_analysis.get("fixed_crop_offsets") or (center_x_offset, center_y_offset))
+
+            should_use_face_crop = False
+            if framing_mode == "prefer_face":
+                should_use_face_crop = bool(effective_framing_metadata.get("face_detected"))
+            elif crop_confidence in {"high", "medium"}:
+                should_use_face_crop = True
+
+            if should_use_face_crop:
+                cropped_clip = _build_tracked_crop_clip(
+                    clip,
+                    new_width,
+                    new_height,
+                    tracking_points,
+                    (int(fixed_offsets[0]), int(fixed_offsets[1])),
+                )
+                crop_mode = "face-tracked" if tracking_points else "face-fixed"
+                crop_reason = crop_confidence
+            else:
+                cropped_clip = clip.cropped(
+                    x1=center_x_offset,
+                    y1=center_y_offset,
+                    x2=center_x_offset + new_width,
+                    y2=center_y_offset + new_height,
+                )
+                crop_reason = "low_confidence" if effective_framing_metadata.get("face_detected") else "no_reliable_face"
+
+        logger.info(
+            "framing_mode=%s crop=%s confidence=%s reason=%s start=%.1fs end=%.1fs",
+            framing_mode,
+            crop_mode,
+            crop_confidence,
+            crop_reason,
+            start_time,
+            end_time,
         )
 
         # Add subtitles from cached word timings.
@@ -1978,7 +2376,8 @@ def create_clips_from_segments(
     font_color: str = "#FFFFFF",
     subtitle_style: Optional[Dict[str, Any]] = None,
     diagnostics: Optional[Dict[str, Any]] = None,
-    progress_callback: Optional[Callable[[int, int], None]] = None,
+    progress_callback: Optional[Callable[[Dict[str, Any]], None]] = None,
+    filename_prefix: Optional[str] = None,
 ) -> List[Dict[str, Any]]:
     """Create optimized video clips from segments."""
     video_path = Path(video_path)
@@ -1988,6 +2387,7 @@ def create_clips_from_segments(
     output_dir.mkdir(parents=True, exist_ok=True)
     clips_info = []
     clip_failures: List[Dict[str, Any]] = []
+    resolved_filename_prefix = _format_clip_run_prefix(filename_prefix)
 
     total_segments = len(segments)
     for i, segment in enumerate(segments):
@@ -2004,11 +2404,37 @@ def create_clips_from_segments(
             if duration <= 0:
                 logger.warning(f"Skipping clip {i+1}: invalid duration {duration:.1f}s (start: {start_seconds}s, end: {end_seconds}s)")
                 if progress_callback:
-                    progress_callback(i + 1, total_segments)
+                    progress_callback(
+                        {
+                            "kind": "completed",
+                            "clip_index": i + 1,
+                            "clip_total": total_segments,
+                            "stage_label": f"Skipped clip {i + 1} of {total_segments}",
+                            "start_time": segment.get("start_time"),
+                            "end_time": segment.get("end_time"),
+                        }
+                    )
                 continue
 
-            clip_filename = f"clip_{i+1}_{segment['start_time'].replace(':', '')}-{segment['end_time'].replace(':', '')}.mp4"
+            clip_filename = _build_clip_filename(
+                clip_index=i + 1,
+                start_seconds=start_seconds,
+                end_seconds=end_seconds,
+                filename_prefix=resolved_filename_prefix,
+            )
             clip_path = output_dir / clip_filename
+            if progress_callback:
+                progress_callback(
+                    {
+                        "kind": "started",
+                        "clip_index": i + 1,
+                        "clip_total": total_segments,
+                        "stage_label": f"Rendering clip {i + 1} of {total_segments}",
+                        "start_time": segment.get("start_time"),
+                        "end_time": segment.get("end_time"),
+                        "filename": clip_filename,
+                    }
+                )
 
             clip_errors: List[str] = []
             success = create_optimized_clip(
@@ -2022,6 +2448,12 @@ def create_clips_from_segments(
                 font_color,
                 subtitle_style,
                 subtitle_word_timings=segment.get("subtitle_word_timings"),
+                framing_mode_override=str(segment.get("framing_mode_override") or "auto"),
+                framing_metadata=(
+                    dict(segment.get("framing_metadata"))
+                    if isinstance(segment.get("framing_metadata"), dict)
+                    else None
+                ),
                 error_collector=clip_errors,
             )
 
@@ -2035,7 +2467,9 @@ def create_clips_from_segments(
                     "duration": duration,
                     "text": segment['text'],
                     "relevance_score": segment['relevance_score'],
-                    "reasoning": segment['reasoning']
+                    "reasoning": segment['reasoning'],
+                    "framing_metadata": segment.get("framing_metadata") or {},
+                    "framing_mode_override": str(segment.get("framing_mode_override") or "auto"),
                 }
                 clips_info.append(clip_info)
                 logger.info(f"Created clip {i+1}: {duration:.1f}s")
@@ -2051,7 +2485,18 @@ def create_clips_from_segments(
                 )
 
             if progress_callback:
-                progress_callback(i + 1, total_segments)
+                progress_callback(
+                    {
+                        "kind": "completed",
+                        "clip_index": i + 1,
+                        "clip_total": total_segments,
+                        "stage_label": f"Rendered clip {i + 1} of {total_segments}",
+                        "start_time": segment.get("start_time"),
+                        "end_time": segment.get("end_time"),
+                        "filename": clip_filename,
+                        "success": success,
+                    }
+                )
 
         except Exception as e:
             logger.error(f"Error processing clip {i+1}: {e}")
@@ -2064,7 +2509,18 @@ def create_clips_from_segments(
                 }
             )
             if progress_callback:
-                progress_callback(i + 1, total_segments)
+                progress_callback(
+                    {
+                        "kind": "completed",
+                        "clip_index": i + 1,
+                        "clip_total": total_segments,
+                        "stage_label": f"Clip {i + 1} failed during render",
+                        "start_time": segment.get("start_time"),
+                        "end_time": segment.get("end_time"),
+                        "success": False,
+                        "error": str(e),
+                    }
+                )
 
     logger.info(f"Successfully created {len(clips_info)}/{len(segments)} clips")
     if diagnostics is not None:
@@ -2158,7 +2614,8 @@ def create_clips_with_transitions(
     font_color: str = "#FFFFFF",
     subtitle_style: Optional[Dict[str, Any]] = None,
     diagnostics: Optional[Dict[str, Any]] = None,
-    progress_callback: Optional[Callable[[int, int], None]] = None,
+    progress_callback: Optional[Callable[[Dict[str, Any]], None]] = None,
+    filename_prefix: Optional[str] = None,
 ) -> List[Dict[str, Any]]:
     """Create video clips with transition effects between them."""
     video_path = Path(video_path)
@@ -2177,6 +2634,7 @@ def create_clips_with_transitions(
         subtitle_style,
         diagnostics=render_diagnostics,
         progress_callback=progress_callback,
+        filename_prefix=filename_prefix,
     )
 
     if len(clips_info) < 2:
@@ -2212,7 +2670,7 @@ def create_clips_with_transitions(
             transition_path = Path(transitions[i % len(transitions)])
 
             # Create output path for clip with transition
-            transition_filename = f"transition_{i}_{clip_info['filename']}"
+            transition_filename = f"{Path(str(clip_info['filename'])).stem}_transition.mp4"
             transition_output_path = transition_output_dir / transition_filename
 
             success = apply_transition_effect(

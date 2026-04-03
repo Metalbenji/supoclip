@@ -353,6 +353,7 @@ class VideoService:
         subtitle_style: Optional[Dict[str, Any]] = None,
         transitions_enabled: bool = False,
         progress_callback: Optional[callable] = None,
+        filename_prefix: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
         Create video clips from segments with subtitles, with optional transitions.
@@ -368,20 +369,36 @@ class VideoService:
         render_diagnostics: Dict[str, Any] = {}
         loop = asyncio.get_running_loop()
 
-        def on_clip_progress(completed: int, total: int) -> None:
-            if not progress_callback or total <= 0:
+        def on_clip_progress(event: Dict[str, Any]) -> None:
+            if not progress_callback:
                 return
+            total = int(event.get("clip_total") or 0)
+            clip_index = int(event.get("clip_index") or 0)
+            kind = str(event.get("kind") or "completed").strip().lower()
+            if total <= 0:
+                return
+            completed = clip_index - 1 if kind == "started" else clip_index
             pct = int((max(0, min(total, completed)) / total) * 100)
             stage_progress = max(0, min(100, pct))
             overall_progress = 70 + int((stage_progress / 100) * 25)  # 70..95
+            stage_label = str(event.get("stage_label") or f"Rendering clip {clip_index} of {total}")
             asyncio.run_coroutine_threadsafe(
                 progress_callback(
                     overall_progress,
-                    f"Creating video clips... ({completed}/{total})",
+                    stage_label,
                     {
                         "stage": "clips",
                         "stage_progress": stage_progress,
                         "overall_progress": overall_progress,
+                        "clip_index": clip_index,
+                        "clip_total": total,
+                        "stage_label": stage_label,
+                        "clip_started": kind == "started",
+                        "clip_completed": kind != "started",
+                        "start_time": event.get("start_time"),
+                        "end_time": event.get("end_time"),
+                        "filename": event.get("filename"),
+                        "success": event.get("success"),
                     },
                 ),
                 loop,
@@ -401,6 +418,7 @@ class VideoService:
             subtitle_style,
             render_diagnostics,
             on_clip_progress,
+            filename_prefix,
         )
         if not transitions_enabled:
             render_diagnostics["transitions_disabled"] = True
@@ -424,6 +442,23 @@ class VideoService:
             clip_end,
             edited_text,
         )
+
+    @staticmethod
+    async def analyze_segments_framing(
+        video_path: Path,
+        segments: List[Dict[str, Any]],
+    ) -> List[Dict[str, Any]]:
+        analyze_segment_framing = VideoService._video_utils_attr("analyze_segment_framing_batch")
+        return await run_in_thread(analyze_segment_framing, video_path, segments)
+
+    @staticmethod
+    async def analyze_single_segment_framing(
+        video_path: Path,
+        start_time: str,
+        end_time: str,
+    ) -> Dict[str, Any]:
+        analyze_segment_framing = VideoService._video_utils_attr("analyze_single_segment_framing")
+        return await run_in_thread(analyze_segment_framing, video_path, start_time, end_time)
 
     @staticmethod
     def determine_source_type(url: str) -> str:
@@ -1112,6 +1147,34 @@ class VideoService:
             for segment in relevant_parts.most_relevant_segments
         ]
 
+        if segments_json:
+            try:
+                if progress_callback:
+                    await progress_callback(
+                        60,
+                        "Evaluating clip framing...",
+                        {"stage": "analysis", "stage_progress": 60, "overall_progress": 60},
+                    )
+                framing_results = await VideoService.analyze_segments_framing(video_path, segments_json)
+                for segment, framing_metadata in zip(segments_json, framing_results):
+                    metadata = dict(framing_metadata or {})
+                    segment["framing_metadata"] = metadata
+                    segment["review_score"] = round(
+                        max(0.0, min(1.0, float(segment.get("relevance_score") or 0.0) + float(metadata.get("score_adjustment") or 0.0))),
+                        4,
+                    )
+                segments_json.sort(
+                    key=lambda item: (
+                        -float(item.get("review_score") or item.get("relevance_score") or 0.0),
+                        str(item.get("start_time") or ""),
+                    )
+                )
+            except Exception as framing_error:
+                logger.warning("Failed to evaluate framing metadata: %s", framing_error)
+                for segment in segments_json:
+                    segment["framing_metadata"] = {}
+                    segment["review_score"] = round(float(segment.get("relevance_score") or 0.0), 4)
+
         if progress_callback:
             await progress_callback(
                 70,
@@ -1142,6 +1205,7 @@ class VideoService:
         transitions_enabled: bool = False,
         progress_callback: Optional[callable] = None,
         cancel_check: Optional[Callable[[], Awaitable[None]]] = None,
+        filename_prefix: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Render clips from prepared segments."""
         async def ensure_not_cancelled() -> None:
@@ -1154,7 +1218,7 @@ class VideoService:
             await progress_callback(
                 70,
                 "Creating video clips...",
-                {"stage": "clips", "stage_progress": 0, "overall_progress": 70},
+                {"stage": "clips", "stage_progress": 0, "overall_progress": 70, "clip_index": 0, "clip_total": len(segments)},
             )
 
         clip_result = await VideoService.create_video_clips(
@@ -1166,6 +1230,7 @@ class VideoService:
             subtitle_style,
             transitions_enabled,
             progress_callback=progress_callback,
+            filename_prefix=filename_prefix,
         )
         await ensure_not_cancelled()
 
@@ -1207,6 +1272,7 @@ class VideoService:
         ai_focus_tags: Optional[List[str]] = None,
         progress_callback: Optional[callable] = None,
         cancel_check: Optional[Callable[[], Awaitable[None]]] = None,
+        filename_prefix: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
         Complete video processing pipeline.
@@ -1242,6 +1308,7 @@ class VideoService:
                 transitions_enabled=transitions_enabled,
                 progress_callback=progress_callback,
                 cancel_check=cancel_check,
+                filename_prefix=filename_prefix,
             )
 
             return {

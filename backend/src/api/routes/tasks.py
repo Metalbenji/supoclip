@@ -13,7 +13,7 @@ import re
 from uuid import UUID
 
 from ...database import get_db
-from ...services.task_service import DEFAULT_AI_MODELS, TaskService
+from ...services.task_service import DEFAULT_AI_MODELS, DraftOverlapError, TaskService
 from ...services.ai_model_catalog_service import ModelCatalogError
 from ...workers.job_queue import JobQueue
 from ...workers.progress import ProgressTracker
@@ -55,8 +55,9 @@ MAX_WHISPER_CHUNK_OVERLAP_SECONDS = 120
 MIN_WHISPER_GPU_INDEX = 0
 MIN_TASK_TIMEOUT_SECONDS = 300
 MAX_TASK_TIMEOUT_SECONDS = 86400
-DRAFT_UPDATE_FIELDS = {"id", "start_time", "end_time", "edited_text", "is_selected"}
-DRAFT_CREATE_FIELDS = {"start_time", "end_time", "edited_text", "is_selected"}
+SUPPORTED_FRAMING_MODE_OVERRIDES = {"auto", "prefer_face", "disable_face_crop"}
+DRAFT_UPDATE_FIELDS = {"id", "start_time", "end_time", "edited_text", "is_selected", "framing_mode_override"}
+DRAFT_CREATE_FIELDS = {"start_time", "end_time", "edited_text", "is_selected", "framing_mode_override"}
 SUBTITLE_STYLE_FIELDS = set(DEFAULT_SUBTITLE_STYLE.keys())
 MAX_SUBTITLE_STYLE_BACKFILL_LIMIT = 1000
 OLLAMA_AUTO_PULL_MODEL = DEFAULT_AI_MODELS["ollama"]
@@ -64,6 +65,13 @@ OLLAMA_CREATE_TASK_PREFLIGHT_TRANSCRIPT = """[00:00 - 00:12] A clear opening pro
 [00:12 - 00:24] Give one concrete example quickly so the claim feels real.
 [00:24 - 00:38] Keep each clip focused on a single idea with one practical takeaway.
 [00:38 - 00:52] End with one action viewers can apply immediately."""
+
+
+def _build_overlap_error_detail(error: DraftOverlapError) -> Dict[str, Any]:
+    return {
+        "message": str(error),
+        "overlap_conflicts": error.conflicts,
+    }
 
 
 def _coerce_bool(value: object, default: bool = False) -> bool:
@@ -84,6 +92,19 @@ def _coerce_bool(value: object, default: bool = False) -> bool:
 
 def _resolve_review_before_render_enabled(raw: object) -> bool:
     return _coerce_bool(raw, default=True)
+
+
+def _resolve_framing_mode_override(raw: object) -> str:
+    normalized = str(raw or "auto").strip().lower()
+    if normalized not in SUPPORTED_FRAMING_MODE_OVERRIDES:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "framing_mode_override must be one of "
+                + ", ".join(sorted(SUPPORTED_FRAMING_MODE_OVERRIDES))
+            ),
+        )
+    return normalized
 
 
 def _resolve_timeline_editor_enabled(raw: object) -> bool:
@@ -456,7 +477,7 @@ async def get_transcription_settings(request: Request, db: AsyncSession = Depend
     """Get user transcription settings (key presence only, never returns the key)."""
     user_id = _require_user_id(request)
     try:
-        from ...whisper_runtime import get_local_whisper_runtime_info
+        from ...whisper_runtime import get_local_whisper_model_metadata, get_local_whisper_runtime_info
 
         task_service = TaskService(db)
         settings = await task_service.get_user_transcription_settings(user_id)
@@ -465,6 +486,8 @@ async def get_transcription_settings(request: Request, db: AsyncSession = Depend
             "provider_options": sorted(SUPPORTED_TRANSCRIPTION_PROVIDERS),
             "local_whisper_device_options": sorted(SUPPORTED_WHISPER_DEVICE_PREFERENCES),
             "local_whisper_model_options": ["turbo", "medium", "large", "small", "base", "tiny"],
+            "local_whisper_models": get_local_whisper_model_metadata(),
+            "gpu_worker_enabled": bool(config.enable_gpu_worker),
             "has_assembly_key": bool(settings.get("has_assembly_key")),
             "has_env_fallback": bool((config.assembly_ai_api_key or "").strip()),
             "assemblyai_max_duration_seconds": ASSEMBLYAI_MAX_DURATION_SECONDS,
@@ -1805,6 +1828,8 @@ async def update_task_draft_clips(task_id: str, request: Request, db: AsyncSessi
             "total_drafts": len(updated_drafts),
             "message": "Draft clips updated",
         }
+    except DraftOverlapError as e:
+        raise HTTPException(status_code=400, detail=_build_overlap_error_detail(e))
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except HTTPException:
@@ -1861,12 +1886,19 @@ async def create_task_draft_clip(task_id: str, request: Request, db: AsyncSessio
                 if "is_selected" in data
                 else None
             ),
+            framing_mode_override=(
+                _resolve_framing_mode_override(data.get("framing_mode_override"))
+                if "framing_mode_override" in data
+                else "auto"
+            ),
         )
         return {
             "task_id": task_id,
             "draft_clip": created_draft,
             "message": "Draft clip created",
         }
+    except DraftOverlapError as e:
+        raise HTTPException(status_code=400, detail=_build_overlap_error_detail(e))
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
@@ -1935,6 +1967,8 @@ async def restore_task_draft_clips(task_id: str, request: Request, db: AsyncSess
             "total_drafts": len(restored_drafts),
             "message": "Draft clips restored to initial values",
         }
+    except DraftOverlapError as e:
+        raise HTTPException(status_code=400, detail=_build_overlap_error_detail(e))
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
@@ -1961,6 +1995,15 @@ async def finalize_task(task_id: str, request: Request, db: AsyncSession = Depen
     selected_count = await task_service.draft_clip_repo.count_selected_drafts(db, task_id)
     if selected_count <= 0:
         raise HTTPException(status_code=400, detail="Finalize requires at least one selected draft clip")
+    selected_drafts = [
+        draft
+        for draft in await task_service.get_task_draft_clips(task_id)
+        if draft.get("is_selected") and not draft.get("is_deleted")
+    ]
+    try:
+        task_service._validate_non_overlapping_draft_windows(selected_drafts)
+    except DraftOverlapError as e:
+        raise HTTPException(status_code=400, detail=_build_overlap_error_detail(e))
 
     source_url = task.get("source_url")
     source_type = task.get("source_type")

@@ -26,6 +26,7 @@ export type TimelineZoomLevel = number;
 interface DraftTimelineEditorProps {
   sourceVideoUrl: string | null;
   drafts: TimelineDraftClip[];
+  conflictingClipIds?: string[];
   disabled?: boolean;
   minDurationSeconds?: number;
   maxDurationSeconds?: number;
@@ -163,6 +164,7 @@ function buildWaveformUrlFromSourceVideoUrl(
 export default function DraftTimelineEditor({
   sourceVideoUrl,
   drafts,
+  conflictingClipIds = [],
   disabled = false,
   minDurationSeconds = 3,
   maxDurationSeconds = 180,
@@ -192,6 +194,7 @@ export default function DraftTimelineEditor({
   const preferredSelectedClipId = selectedClipId ?? internalSelectedClipId;
   const resolvedZoomLevel = timelineZoomLevel ?? internalZoomLevel;
   const hasWaveform = Boolean(waveformData && waveformData.peaks.length > 0);
+  const conflictingClipIdSet = useMemo(() => new Set(conflictingClipIds), [conflictingClipIds]);
 
   const selectClip = useCallback(
     (clipId: string) => {
@@ -1036,6 +1039,7 @@ export default function DraftTimelineEditor({
               const left = (clip.startSeconds / durationSeconds) * 100;
               const width = ((clip.endSeconds - clip.startSeconds) / durationSeconds) * 100;
               const isActive = resolvedSelectedClipId === clip.id;
+              const isConflicting = conflictingClipIdSet.has(clip.id);
               return (
                 <div
                   key={clip.id}
@@ -1044,7 +1048,11 @@ export default function DraftTimelineEditor({
                   aria-pressed={isActive}
                   aria-label={`Clip ${displayIndex + 1}: ${formatClock(clip.startSeconds)} to ${formatClock(clip.endSeconds)}`}
                   className={`absolute top-9 h-6 rounded-md border text-[10px] text-white outline-none transition ${
-                    clip.is_selected ? "border-blue-700 bg-blue-600/55" : "border-slate-500 bg-slate-500/50"
+                    isConflicting
+                      ? "border-red-700 bg-red-600/60"
+                      : clip.is_selected
+                        ? "border-blue-700 bg-blue-600/55"
+                        : "border-slate-500 bg-slate-500/50"
                   } ${isActive ? "ring-2 ring-amber-400 ring-offset-1 ring-offset-slate-900" : ""} ${draggingClipId === clip.id ? "cursor-grabbing" : "cursor-grab"}`}
                   style={{ left: `${left}%`, width: `${Math.max(width, 1.4)}%` }}
                   onPointerDown={(event) => startDrag(event, clip.id, "move")}

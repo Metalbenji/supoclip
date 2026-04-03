@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback, useRef } from "react";
+import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import { useParams, useRouter } from "next/navigation";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -8,6 +8,7 @@ import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Input } from "@/components/ui/input";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -66,8 +67,30 @@ interface DraftClip {
   is_selected: boolean;
   created_by_user?: boolean;
   edited_word_timings_json?: Array<{ text: string; start: number; end: number }> | null;
+  framing_metadata_json?: {
+    face_detected?: boolean;
+    face_detection_rate?: number;
+    primary_face_area_ratio?: number | null;
+    dominant_face_count?: number;
+    multi_face_frames_rate?: number;
+    crop_confidence?: "high" | "medium" | "low" | "none" | string;
+    suggested_crop_mode?: "face" | "center" | string;
+    score_adjustment?: number;
+  } | null;
+  framing_mode_override?: "auto" | "prefer_face" | "disable_face_crop" | string;
   created_at?: string;
   updated_at?: string;
+}
+
+interface DraftOverlapConflict {
+  left_id: string;
+  right_id: string;
+  left_label: string;
+  right_label: string;
+  left_start_time: string;
+  left_end_time: string;
+  right_start_time: string;
+  right_end_time: string;
 }
 
 interface TaskDetails {
@@ -102,6 +125,84 @@ interface TranscriptProgressMetadata {
   chunk_elapsed_seconds?: number;
   total_elapsed_seconds?: number;
   average_chunk_seconds?: number;
+}
+
+interface TaskProgressMetadata extends TranscriptProgressMetadata {
+  stage?: StageKey;
+  stage_progress?: number;
+  cached?: boolean;
+  stage_label?: string;
+  clip_index?: number;
+  clip_total?: number;
+  clip_started?: boolean;
+  clip_completed?: boolean;
+  start_time?: string;
+  end_time?: string;
+  filename?: string;
+  success?: boolean;
+}
+
+type FramingModeOverride = "auto" | "prefer_face" | "disable_face_crop";
+type FramingFilter = "all" | "best" | "weak" | "none";
+
+function normalizeFramingModeOverride(value: unknown): FramingModeOverride {
+  if (value === "prefer_face" || value === "disable_face_crop") {
+    return value;
+  }
+  return "auto";
+}
+
+function getFramingStrength(metadata?: DraftClip["framing_metadata_json"]): "strong" | "weak" | "none" {
+  const confidence = String(metadata?.crop_confidence || "none");
+  if (confidence === "high" || confidence === "medium") {
+    return "strong";
+  }
+  if (Boolean(metadata?.face_detected)) {
+    return "weak";
+  }
+  return "none";
+}
+
+function getFramingBadgeLabel(metadata?: DraftClip["framing_metadata_json"]): string {
+  const strength = getFramingStrength(metadata);
+  if (strength === "strong") return "Face: strong";
+  if (strength === "weak") return "Face: weak";
+  return "Face: none";
+}
+
+function getFramingBadgeClass(metadata?: DraftClip["framing_metadata_json"]): string {
+  const strength = getFramingStrength(metadata);
+  if (strength === "strong") return "bg-green-100 text-green-800";
+  if (strength === "weak") return "bg-amber-100 text-amber-800";
+  return "bg-slate-100 text-slate-700";
+}
+
+function getFramingExplanation(metadata?: DraftClip["framing_metadata_json"]): string {
+  const strength = getFramingStrength(metadata);
+  if (strength === "strong") {
+    return "Face found consistently. Face crop is likely to work well.";
+  }
+  if (Boolean(metadata?.face_detected)) {
+    return "Detection is unstable. Final render may still center-crop or drift.";
+  }
+  return "No reliable face found. Center crop is likely.";
+}
+
+function getFramingWarnings(metadata?: DraftClip["framing_metadata_json"]): string[] {
+  const warnings: string[] = [];
+  if (!metadata?.face_detected) {
+    warnings.push("No reliable face detected");
+  }
+  if (typeof metadata?.dominant_face_count === "number" && metadata.dominant_face_count > 1) {
+    warnings.push("Multiple competing faces");
+  }
+  if (typeof metadata?.primary_face_area_ratio === "number" && metadata.primary_face_area_ratio > 0 && metadata.primary_face_area_ratio < 0.012) {
+    warnings.push("Face appears small in frame");
+  }
+  if (Boolean(metadata?.face_detected) && String(metadata?.crop_confidence || "none") === "low") {
+    warnings.push("Detection confidence is low");
+  }
+  return warnings;
 }
 
 type StageKey = "download" | "transcript" | "analysis" | "clips" | "finalizing";
@@ -162,6 +263,43 @@ function parseTimestampToSeconds(value: string): number {
   return Number.isFinite(raw) ? raw : 0;
 }
 
+function computeDraftOverlapConflicts(drafts: DraftClip[]): DraftOverlapConflict[] {
+  const orderedDrafts = [...drafts].sort((a, b) => {
+    const startDiff = parseTimestampToSeconds(a.start_time) - parseTimestampToSeconds(b.start_time);
+    if (Math.abs(startDiff) > 1e-6) {
+      return startDiff;
+    }
+    return a.clip_order - b.clip_order;
+  });
+
+  const labeledDrafts = orderedDrafts.map((draft, index) => ({
+    ...draft,
+    displayLabel: `Clip ${index + 1} (${draft.start_time} -> ${draft.end_time})`,
+    startSeconds: parseTimestampToSeconds(draft.start_time),
+    endSeconds: parseTimestampToSeconds(draft.end_time),
+  }));
+
+  const conflicts: DraftOverlapConflict[] = [];
+  for (let index = 1; index < labeledDrafts.length; index += 1) {
+    const previous = labeledDrafts[index - 1];
+    const current = labeledDrafts[index];
+    if (current.startSeconds < previous.endSeconds - 1e-6) {
+      conflicts.push({
+        left_id: previous.id,
+        right_id: current.id,
+        left_label: previous.displayLabel,
+        right_label: current.displayLabel,
+        left_start_time: previous.start_time,
+        left_end_time: previous.end_time,
+        right_start_time: current.start_time,
+        right_end_time: current.end_time,
+      });
+    }
+  }
+
+  return conflicts;
+}
+
 function deriveStageProgress(
   overallProgress: number,
   progressMessage: string,
@@ -219,6 +357,7 @@ export default function TaskPage() {
   const [draftsDirty, setDraftsDirty] = useState(false);
   const [isSavingDrafts, setIsSavingDrafts] = useState(false);
   const [isFinalizing, setIsFinalizing] = useState(false);
+  const [framingFilter, setFramingFilter] = useState<FramingFilter>("all");
   const [sourceVideoUrl, setSourceVideoUrl] = useState<string | null>(null);
   const [timelineEditorEnabled, setTimelineEditorEnabled] = useState(true);
   const [isUpdatingTaskOptions, setIsUpdatingTaskOptions] = useState(false);
@@ -256,6 +395,38 @@ export default function TaskPage() {
       }
       return a.clip_order - b.clip_order;
     });
+  }, []);
+  const overlapConflicts = useMemo(() => computeDraftOverlapConflicts(draftClips), [draftClips]);
+  const conflictingDraftIds = useMemo(() => {
+    const ids = new Set<string>();
+    overlapConflicts.forEach((conflict) => {
+      ids.add(conflict.left_id);
+      ids.add(conflict.right_id);
+    });
+    return ids;
+  }, [overlapConflicts]);
+  const hasOverlapConflicts = overlapConflicts.length > 0;
+
+  const extractTaskApiErrorMessage = useCallback((payload: unknown, fallback: string): string => {
+    if (
+      payload &&
+      typeof payload === "object" &&
+      "detail" in payload &&
+      typeof (payload as { detail?: unknown }).detail === "object" &&
+      (payload as { detail?: { message?: unknown } }).detail &&
+      typeof (payload as { detail?: { message?: unknown } }).detail?.message === "string"
+    ) {
+      return (payload as { detail: { message: string } }).detail.message;
+    }
+    if (
+      payload &&
+      typeof payload === "object" &&
+      "detail" in payload &&
+      typeof (payload as { detail?: unknown }).detail === "string"
+    ) {
+      return (payload as { detail: string }).detail;
+    }
+    return fallback;
   }, []);
 
   const registerDraftClipRowRef = useCallback((draftId: string, node: HTMLDivElement | null) => {
@@ -513,20 +684,7 @@ export default function TaskPage() {
             setStageNotes((prev) => ({ ...prev, ...inferredNotes }));
           }
         }
-        const metadata = (data?.metadata ?? {}) as {
-          stage?: StageKey;
-          stage_progress?: number;
-          cached?: boolean;
-          mode?: "chunked" | "single";
-          chunk_index?: number;
-          chunk_total?: number;
-          chunks_completed?: number;
-          chunk_start_seconds?: number;
-          chunk_end_seconds?: number;
-          chunk_elapsed_seconds?: number;
-          total_elapsed_seconds?: number;
-          average_chunk_seconds?: number;
-        };
+        const metadata = (data?.metadata ?? {}) as TaskProgressMetadata;
         if (metadata.stage && metadata.stage in STAGE_LABELS) {
           setStageProgress((prev) => ({
             ...prev,
@@ -545,6 +703,12 @@ export default function TaskPage() {
                     : "cached";
               return { ...prev, [metadata.stage as StageKey]: note };
             });
+          }
+          if (metadata.stage === "clips" && typeof metadata.stage_label === "string" && metadata.stage_label.trim()) {
+            setStageNotes((prev) => ({
+              ...prev,
+              clips: metadata.stage_label as string,
+            }));
           }
           if (metadata.stage === "transcript") {
             const hasChunkData =
@@ -751,6 +915,12 @@ export default function TaskPage() {
       if (draftClips.length === 0) return true;
       if (!draftsDirty && !options?.force) return true;
       if (isSavingDrafts) return false;
+      if (hasOverlapConflicts) {
+        if (!options?.silent) {
+          setDraftError("Resolve clip overlaps before saving or finalizing.");
+        }
+        return false;
+      }
 
       setIsSavingDrafts(true);
       if (!options?.silent) {
@@ -770,13 +940,14 @@ export default function TaskPage() {
               end_time: draft.end_time,
               edited_text: draft.edited_text,
               is_selected: draft.is_selected,
+              framing_mode_override: normalizeFramingModeOverride(draft.framing_mode_override),
             })),
           }),
         });
 
         if (!response.ok) {
-          const payload = (await response.json().catch(() => ({}))) as { detail?: string };
-          throw new Error(payload.detail || `Failed to save drafts: ${response.status}`);
+          const payload = (await response.json().catch(() => ({}))) as { detail?: unknown };
+          throw new Error(extractTaskApiErrorMessage(payload, `Failed to save drafts: ${response.status}`));
         }
 
         const payload = (await response.json()) as { draft_clips?: DraftClip[] };
@@ -792,18 +963,25 @@ export default function TaskPage() {
         setIsSavingDrafts(false);
       }
     },
-    [apiUrl, draftClips, draftsDirty, isSavingDrafts, params.id, session?.user?.id, sortDraftClips],
+    [apiUrl, draftClips, draftsDirty, extractTaskApiErrorMessage, hasOverlapConflicts, isSavingDrafts, params.id, session?.user?.id, sortDraftClips],
   );
 
   useEffect(() => {
-    if (!draftsDirty || isSavingDrafts || isFinalizing || task?.status !== "awaiting_review" || draftError) {
+    if (
+      !draftsDirty ||
+      isSavingDrafts ||
+      isFinalizing ||
+      task?.status !== "awaiting_review" ||
+      draftError ||
+      hasOverlapConflicts
+    ) {
       return;
     }
     const timeoutId = window.setTimeout(() => {
       void saveDraftClips({ silent: true });
     }, 700);
     return () => window.clearTimeout(timeoutId);
-  }, [draftError, draftsDirty, isFinalizing, isSavingDrafts, saveDraftClips, task?.status]);
+  }, [draftError, draftsDirty, hasOverlapConflicts, isFinalizing, isSavingDrafts, saveDraftClips, task?.status]);
 
   const handleCreateDraftClip = async (startTime: string, endTime: string): Promise<string | null> => {
     if (!session?.user?.id || !params.id) return null;
@@ -823,8 +1001,8 @@ export default function TaskPage() {
         }),
       });
       if (!response.ok) {
-        const payload = (await response.json().catch(() => ({}))) as { detail?: string };
-        throw new Error(payload.detail || `Failed to create draft clip: ${response.status}`);
+        const payload = (await response.json().catch(() => ({}))) as { detail?: unknown };
+        throw new Error(extractTaskApiErrorMessage(payload, `Failed to create draft clip: ${response.status}`));
       }
 
       const payload = (await response.json()) as { draft_clip?: DraftClip };
@@ -890,8 +1068,8 @@ export default function TaskPage() {
         },
       });
       if (!response.ok) {
-        const payload = (await response.json().catch(() => ({}))) as { detail?: string };
-        throw new Error(payload.detail || `Failed to restore draft clips: ${response.status}`);
+        const payload = (await response.json().catch(() => ({}))) as { detail?: unknown };
+        throw new Error(extractTaskApiErrorMessage(payload, `Failed to restore draft clips: ${response.status}`));
       }
 
       const payload = (await response.json()) as { draft_clips?: DraftClip[] };
@@ -936,6 +1114,10 @@ export default function TaskPage() {
 
   const handleFinalize = async () => {
     if (!session?.user?.id || !params.id || isFinalizing) return;
+    if (hasOverlapConflicts) {
+      setDraftError("Resolve clip overlaps before finalizing.");
+      return;
+    }
     if (draftsDirty) {
       const saved = await saveDraftClips({ force: true });
       if (!saved) return;
@@ -952,8 +1134,8 @@ export default function TaskPage() {
       });
 
       if (!response.ok) {
-        const payload = (await response.json().catch(() => ({}))) as { detail?: string };
-        throw new Error(payload.detail || `Failed to finalize task: ${response.status}`);
+        const payload = (await response.json().catch(() => ({}))) as { detail?: unknown };
+        throw new Error(extractTaskApiErrorMessage(payload, `Failed to finalize task: ${response.status}`));
       }
 
       setTask((prev) =>
@@ -983,6 +1165,9 @@ export default function TaskPage() {
   const displayProgressMessage = (() => {
     const msg = progressMessage || "";
     const lower = msg.toLowerCase();
+    if (stageNotes.clips && progress >= 70 && progress < 100) {
+      return stageNotes.clips;
+    }
     if (lower.includes("found existing download") || lower.includes("skipping download")) {
       return "Processing video and generating clips...";
     }
@@ -1035,12 +1220,41 @@ export default function TaskPage() {
       ? `${transcriptProgress.chunk_start_seconds.toFixed(1)}s -> ${transcriptProgress.chunk_end_seconds.toFixed(1)}s`
       : null;
   const selectedDraftCount = draftClips.filter((clip) => clip.is_selected).length;
-  const autosaveStatus = isSavingDrafts ? "saving..." : draftsDirty ? "pending changes" : "up to date";
+  const selectedStrongFramingCount = draftClips.filter(
+    (clip) => clip.is_selected && getFramingStrength(clip.framing_metadata_json) === "strong",
+  ).length;
+  const selectedWeakFramingCount = draftClips.filter(
+    (clip) => clip.is_selected && getFramingStrength(clip.framing_metadata_json) === "weak",
+  ).length;
+  const selectedNoFaceCount = draftClips.filter(
+    (clip) => clip.is_selected && getFramingStrength(clip.framing_metadata_json) === "none",
+  ).length;
+  const visibleDraftClips = useMemo(() => {
+    if (framingFilter === "best") {
+      return draftClips.filter((clip) => getFramingStrength(clip.framing_metadata_json) === "strong");
+    }
+    if (framingFilter === "weak") {
+      return draftClips.filter((clip) => getFramingStrength(clip.framing_metadata_json) === "weak");
+    }
+    if (framingFilter === "none") {
+      return draftClips.filter((clip) => getFramingStrength(clip.framing_metadata_json) === "none");
+    }
+    return draftClips;
+  }, [draftClips, framingFilter]);
+  const autosaveStatus = isSavingDrafts
+    ? "saving..."
+    : hasOverlapConflicts
+      ? "blocked by overlaps"
+      : draftsDirty
+        ? "pending changes"
+        : "up to date";
   const autosaveStatusPillClass = isSavingDrafts
     ? "border-amber-200 bg-amber-50 text-amber-700 dark:border-amber-500/40 dark:bg-amber-500/15 dark:text-amber-200"
-    : draftsDirty
-      ? "border-orange-200 bg-orange-50 text-orange-700 dark:border-orange-500/40 dark:bg-orange-500/15 dark:text-orange-200"
-      : "border-emerald-200 bg-emerald-50 text-emerald-700 dark:border-emerald-500/40 dark:bg-emerald-500/15 dark:text-emerald-200";
+    : hasOverlapConflicts
+      ? "border-red-200 bg-red-50 text-red-700 dark:border-red-500/40 dark:bg-red-500/15 dark:text-red-200"
+      : draftsDirty
+        ? "border-orange-200 bg-orange-50 text-orange-700 dark:border-orange-500/40 dark:bg-orange-500/15 dark:text-orange-200"
+        : "border-emerald-200 bg-emerald-50 text-emerald-700 dark:border-emerald-500/40 dark:bg-emerald-500/15 dark:text-emerald-200";
 
   if (isPending) {
     return (
@@ -1223,7 +1437,7 @@ export default function TaskPage() {
                     {clips.length} {clips.length === 1 ? "clip" : "clips"} generated
                   </span>
                 ) : task.status === "processing" ? (
-                  <Badge className="bg-blue-100 text-blue-800">Processing</Badge>
+                  <Badge className="bg-emerald-100 text-emerald-800">Processing</Badge>
                 ) : task.status === "queued" ? (
                   <Badge className="bg-yellow-100 text-yellow-800">Queued</Badge>
                 ) : task.status === "awaiting_review" ? (
@@ -1271,7 +1485,7 @@ export default function TaskPage() {
               <CardContent className="p-6">
                 <div className="space-y-4">
                   <div className="flex items-center justify-center gap-3">
-                    <div className="w-2 h-2 bg-blue-500 rounded-full animate-pulse"></div>
+                    <div className="w-2 h-2 bg-emerald-500 rounded-full animate-pulse"></div>
                     <p className="text-sm font-medium text-foreground">
                       {displayProgressMessage ||
                         (!task ? "Initializing your task..." : "Processing video and generating clips...")}
@@ -1283,11 +1497,11 @@ export default function TaskPage() {
                     <div className="w-full">
                       <div className="flex items-center justify-between mb-2">
                         <span className="text-xs text-muted-foreground">Overall</span>
-                        <span className="text-xs font-medium text-blue-600 dark:text-blue-400">{progress}%</span>
+                        <span className="text-xs font-medium text-emerald-600 dark:text-emerald-400">{progress}%</span>
                       </div>
                       <div className="w-full bg-muted rounded-full h-2">
                         <div
-                          className="bg-blue-600 h-2 rounded-full transition-all duration-500 ease-out"
+                          className="bg-emerald-600 h-2 rounded-full transition-all duration-500 ease-out"
                           style={{ width: `${progress}%` }}
                         />
                       </div>
@@ -1306,7 +1520,7 @@ export default function TaskPage() {
                           </div>
                           <div className="w-full bg-muted rounded-full h-1.5">
                             <div
-                              className="bg-blue-500 h-1.5 rounded-full transition-all duration-500 ease-out"
+                              className="bg-emerald-500 h-1.5 rounded-full transition-all duration-500 ease-out"
                               style={{ width: `${stageProgress[stage]}%` }}
                             />
                           </div>
@@ -1422,6 +1636,15 @@ export default function TaskPage() {
                       <span className={`rounded-full border px-2.5 py-1 font-medium ${autosaveStatusPillClass}`}>
                         Autosave {autosaveStatus}
                       </span>
+                      <span className="rounded-full border border-green-200 bg-green-50 px-2.5 py-1 font-medium text-green-700 dark:border-green-500/40 dark:bg-green-500/15 dark:text-green-200">
+                        Strong framing {selectedStrongFramingCount}
+                      </span>
+                      <span className="rounded-full border border-amber-200 bg-amber-50 px-2.5 py-1 font-medium text-amber-700 dark:border-amber-500/40 dark:bg-amber-500/15 dark:text-amber-200">
+                        Weak framing {selectedWeakFramingCount}
+                      </span>
+                      <span className="rounded-full border border-slate-200 bg-slate-50 px-2.5 py-1 font-medium text-slate-700 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-200">
+                        No face {selectedNoFaceCount}
+                      </span>
                     </div>
                   </div>
                   <div className="flex flex-wrap items-center gap-2 xl:justify-end">
@@ -1439,7 +1662,7 @@ export default function TaskPage() {
                       variant="outline"
                       className="border-slate-300 bg-slate-50 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-100"
                       onClick={() => void saveDraftClips()}
-                      disabled={isSavingDrafts || isFinalizing || draftClips.length === 0}
+                      disabled={isSavingDrafts || isFinalizing || draftClips.length === 0 || hasOverlapConflicts}
                     >
                       {isSavingDrafts ? "Saving..." : draftsDirty ? "Save Now" : "Saved"}
                     </Button>
@@ -1447,12 +1670,36 @@ export default function TaskPage() {
                       size="sm"
                       className="shadow-sm"
                       onClick={() => void handleFinalize()}
-                      disabled={isSavingDrafts || isFinalizing || draftClips.length === 0 || selectedDraftCount === 0}
+                      disabled={
+                        isSavingDrafts ||
+                        isFinalizing ||
+                        draftClips.length === 0 ||
+                        selectedDraftCount === 0 ||
+                        hasOverlapConflicts
+                      }
                     >
                       {isFinalizing ? "Finalizing..." : "Finalize & Render"}
                     </Button>
                   </div>
                 </div>
+
+                {hasOverlapConflicts ? (
+                  <Alert className="border-red-300 bg-red-50 text-red-900 dark:border-red-800/70 dark:bg-red-950/30 dark:text-red-100">
+                    <AlertCircle className="h-4 w-4" />
+                    <AlertDescription className="space-y-2">
+                      <p className="font-medium">
+                        Resolve {overlapConflicts.length} overlap{overlapConflicts.length === 1 ? "" : "s"} before saving or finalizing.
+                      </p>
+                      <div className="space-y-1 text-sm">
+                        {overlapConflicts.map((conflict, index) => (
+                          <div key={`${conflict.left_id}:${conflict.right_id}:${index}`}>
+                            {conflict.left_label} overlaps {conflict.right_label}
+                          </div>
+                        ))}
+                      </div>
+                    </AlertDescription>
+                  </Alert>
+                ) : null}
 
                 <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
                   <div className="rounded-lg border border-slate-200 bg-slate-50/80 px-3 py-2.5 dark:border-slate-700 dark:bg-slate-800/70">
@@ -1468,6 +1715,26 @@ export default function TaskPage() {
                     </label>
                     <p className="mt-1 text-xs text-slate-600 dark:text-slate-300">
                       Drag clip boundaries with 0.5s snapping and no overlaps.
+                    </p>
+                  </div>
+
+                  <div className="rounded-lg border border-slate-200 bg-slate-50/80 px-3 py-2.5 dark:border-slate-700 dark:bg-slate-800/70">
+                    <p className="text-sm font-medium text-slate-900 dark:text-slate-100">Framing Filter</p>
+                    <div className="mt-2 w-full min-w-[13rem]">
+                      <Select value={framingFilter} onValueChange={(value) => setFramingFilter(value as FramingFilter)}>
+                        <SelectTrigger className="h-9 w-full bg-white dark:bg-slate-950">
+                          <SelectValue placeholder="Filter framing" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="all">All clips</SelectItem>
+                          <SelectItem value="best">Best framing</SelectItem>
+                          <SelectItem value="weak">Weak framing</SelectItem>
+                          <SelectItem value="none">No face</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </div>
+                    <p className="mt-1 text-xs text-slate-600 dark:text-slate-300">
+                      Framing badges are predictive. Final render can still differ slightly.
                     </p>
                   </div>
 
@@ -1514,6 +1781,7 @@ export default function TaskPage() {
                     <DraftTimelineEditor
                       sourceVideoUrl={sourceVideoUrl}
                       drafts={draftClips}
+                      conflictingClipIds={[...conflictingDraftIds]}
                       disabled={isSavingDrafts || isFinalizing}
                       selectedClipId={activeDraftClipId}
                       timelineZoomLevel={timelineZoomLevel}
@@ -1533,29 +1801,36 @@ export default function TaskPage() {
               </div>
 
               <div className={reviewMobileTab === "preview" ? "hidden lg:block" : ""}>
-                {draftClips.length === 0 ? (
+                {visibleDraftClips.length === 0 ? (
                   <Card className="border-slate-200 bg-slate-50/40 dark:border-slate-700 dark:bg-slate-900/70">
                     <CardContent className="p-6 text-center text-sm text-slate-600 dark:text-slate-300">
-                      No draft clips are available for review.
-                      {timelineEditorEnabled ? " Use the timeline to add one at the playhead." : ""}
+                      {draftClips.length === 0
+                        ? `No draft clips are available for review.${timelineEditorEnabled ? " Use the timeline to add one at the playhead." : ""}`
+                        : "No draft clips match the current framing filter."}
                     </CardContent>
                   </Card>
                 ) : (
                   <div className="space-y-3 lg:max-h-[calc(100vh-12rem)] lg:overflow-y-auto lg:pr-1">
-                    {draftClips.map((draft, displayIndex) => {
+                    {visibleDraftClips.map((draft, displayIndex) => {
                       const isActive = activeDraftClipId === draft.id;
                       const isExpanded = expandedDraftClipId === draft.id;
                       const isReasoningVisible = Boolean(reasoningExpandedByClipId[draft.id]);
                       const reviewScore = typeof draft.review_score === "number" ? draft.review_score : draft.relevance_score;
                       const scoreAdjustment = typeof draft.feedback_score_adjustment === "number" ? draft.feedback_score_adjustment : 0;
                       const feedbackSignals = draft.feedback_signals_json || null;
+                      const framingMetadata = draft.framing_metadata_json || null;
+                      const framingWarnings = getFramingWarnings(framingMetadata);
+                      const framingModeOverride = normalizeFramingModeOverride(draft.framing_mode_override);
                       const hasScoreAdjustment = Math.abs(scoreAdjustment) >= 0.005;
+                      const isConflicting = conflictingDraftIds.has(draft.id);
                       return (
                         <div
                           key={draft.id}
                           ref={(node) => registerDraftClipRowRef(draft.id, node)}
                           className={`relative overflow-hidden rounded-xl border bg-white transition-all ${
-                            isActive
+                            isConflicting
+                              ? "border-red-300 bg-red-50/50 shadow-[0_10px_20px_-16px_rgba(220,38,38,0.45)] dark:border-red-600/70 dark:bg-red-950/20"
+                              : isActive
                               ? "border-blue-300 bg-blue-50/40 shadow-[0_10px_20px_-16px_rgba(37,99,235,0.6)] dark:border-blue-500/70 dark:bg-blue-950/30 dark:shadow-[0_12px_24px_-18px_rgba(30,64,175,0.9)]"
                               : "border-slate-200 hover:border-slate-300 hover:shadow-sm dark:border-slate-700 dark:bg-slate-900/70 dark:hover:border-slate-500"
                           }`}
@@ -1563,7 +1838,7 @@ export default function TaskPage() {
                         >
                           <div
                             className={`absolute inset-y-0 left-0 w-1 transition-colors ${
-                              isActive ? "bg-blue-500" : "bg-transparent"
+                              isConflicting ? "bg-red-500" : isActive ? "bg-blue-500" : "bg-transparent"
                             }`}
                             aria-hidden
                           />
@@ -1595,6 +1870,13 @@ export default function TaskPage() {
                                     {scoreAdjustment > 0 ? "+" : ""}
                                     {(scoreAdjustment * 100).toFixed(0)}% review
                                   </Badge>
+                                ) : null}
+                                <Badge className={getFramingBadgeClass(framingMetadata)}>
+                                  {getFramingBadgeLabel(framingMetadata)}
+                                </Badge>
+                                {isConflicting ? <Badge className="bg-red-100 text-red-800">Overlap</Badge> : null}
+                                {typeof framingMetadata?.dominant_face_count === "number" && framingMetadata.dominant_face_count > 1 ? (
+                                  <Badge variant="outline">Multiple faces</Badge>
                                 ) : null}
                                 {draft.created_by_user && <Badge variant="outline">Manual</Badge>}
                                 {feedbackSignals?.timing_changed ? <Badge variant="outline">Retimed</Badge> : null}
@@ -1643,6 +1925,71 @@ export default function TaskPage() {
 
                           {isExpanded && (
                             <div className="space-y-3 border-t border-slate-200 bg-slate-50/60 px-4 py-3.5 dark:border-slate-700 dark:bg-slate-900/70">
+                              <div className="rounded-lg border border-slate-200 bg-white px-3 py-3 dark:border-slate-700 dark:bg-slate-950/70">
+                                <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                                  <div className="space-y-2">
+                                    <div className="flex flex-wrap items-center gap-2">
+                                      <Badge className={getFramingBadgeClass(framingMetadata)}>
+                                        {getFramingBadgeLabel(framingMetadata)}
+                                      </Badge>
+                                      {typeof framingMetadata?.face_detection_rate === "number" ? (
+                                        <Badge variant="outline">
+                                          Detection {(framingMetadata.face_detection_rate * 100).toFixed(0)}%
+                                        </Badge>
+                                      ) : null}
+                                      {typeof framingMetadata?.primary_face_area_ratio === "number" ? (
+                                        <Badge variant="outline">
+                                          Face size {(framingMetadata.primary_face_area_ratio * 100).toFixed(1)}%
+                                        </Badge>
+                                      ) : null}
+                                    </div>
+                                    <p className="text-xs text-slate-600 dark:text-slate-300">
+                                      {getFramingExplanation(framingMetadata)}
+                                    </p>
+                                    {framingWarnings.length > 0 ? (
+                                      <div className="flex flex-wrap gap-2">
+                                    {framingWarnings.map((warning) => (
+                                          <Badge key={warning} variant="outline" className="border-amber-300 bg-amber-50 text-amber-800">
+                                            {warning}
+                                          </Badge>
+                                        ))}
+                                      </div>
+                                    ) : null}
+                                    {isConflicting ? (
+                                      <p className="text-xs font-medium text-red-700 dark:text-red-300">
+                                        This clip overlaps another draft. Adjust the highlighted timing to continue.
+                                      </p>
+                                    ) : null}
+                                  </div>
+                                  <div className="w-full max-w-[15rem] space-y-1">
+                                    <label className="text-xs font-medium text-slate-700 dark:text-slate-300">Crop Mode</label>
+                                    <Select
+                                      value={framingModeOverride}
+                                      onValueChange={(value) =>
+                                        updateDraftClip(draft.id, {
+                                          framing_mode_override: normalizeFramingModeOverride(value),
+                                        })
+                                      }
+                                      disabled={isSavingDrafts || isFinalizing}
+                                    >
+                                      <SelectTrigger className="h-9 bg-white dark:bg-slate-950">
+                                        <SelectValue placeholder="Select crop mode" />
+                                      </SelectTrigger>
+                                      <SelectContent>
+                                        <SelectItem value="auto">Auto</SelectItem>
+                                        <SelectItem value="prefer_face">Prefer face</SelectItem>
+                                        <SelectItem value="disable_face_crop">Center crop</SelectItem>
+                                      </SelectContent>
+                                    </Select>
+                                    <p className="text-xs text-slate-500 dark:text-slate-400">
+                                      {framingModeOverride === "disable_face_crop" || framingMetadata?.suggested_crop_mode === "center"
+                                        ? "Preview note: this clip is likely to render with center crop."
+                                        : "Preview note: this clip is likely to use face-aware crop tracking."}
+                                    </p>
+                                  </div>
+                                </div>
+                              </div>
+
                               <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
                                 <div className="space-y-1">
                                   <label className="text-xs font-medium text-slate-700 dark:text-slate-300">

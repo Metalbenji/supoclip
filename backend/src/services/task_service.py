@@ -10,6 +10,7 @@ import asyncio
 import re
 import time
 import json
+from datetime import datetime
 from pathlib import Path
 
 from ..repositories.task_repository import TaskRepository
@@ -61,6 +62,7 @@ REVIEW_TEXT_EDIT_BONUS = 0.07
 REVIEW_TIMING_EDIT_BASE_BONUS = 0.03
 REVIEW_TIMING_EDIT_PER_SECOND = 0.01
 REVIEW_TIMING_EDIT_MAX_BONUS = 0.12
+SUPPORTED_FRAMING_MODE_OVERRIDES = {"auto", "prefer_face", "disable_face_crop"}
 _TIMESTAMP_SECONDS_RE = re.compile(r"^\d+(?:\.\d+)?$")
 DEFAULT_OLLAMA_VIABILITY_ATTEMPTS = 2
 MIN_OLLAMA_VIABILITY_ATTEMPTS = 1
@@ -125,6 +127,21 @@ OLLAMA_MODEL_REQUEST_PRESETS: Tuple[Tuple[str, Dict[str, Any]], ...] = (
         },
     ),
 )
+
+
+class DraftOverlapError(ValueError):
+    """Raised when one or more draft clips overlap on the review timeline."""
+
+    def __init__(self, conflicts: List[Dict[str, Any]]):
+        self.conflicts = conflicts
+        message = "Draft clips overlap."
+        if conflicts:
+            first = conflicts[0]
+            message = (
+                "Draft clips overlap: "
+                f"{first.get('left_label', 'Clip A')} and {first.get('right_label', 'Clip B')}"
+            )
+        super().__init__(message)
 DEFAULT_OLLAMA_VIABILITY_TRANSCRIPT = """[00:00 - 00:12] Most creators miss this simple framing rule that can double watch time.
 [00:12 - 00:25] If your first sentence does not create curiosity, viewers leave before the value appears.
 [00:25 - 00:41] Start with a concrete promise, then prove it quickly with one clear example.
@@ -624,8 +641,24 @@ class TaskService:
     def _clamp_review_score(value: Any) -> float:
         return round(max(0.0, min(1.0, float(value or 0.0))), 4)
 
+    @staticmethod
+    def _normalize_framing_mode_override(value: Any) -> str:
+        normalized = str(value or "auto").strip().lower()
+        if normalized not in SUPPORTED_FRAMING_MODE_OVERRIDES:
+            return "auto"
+        return normalized
+
+    @staticmethod
+    def _extract_framing_score_adjustment(draft: Dict[str, Any]) -> float:
+        metadata = draft.get("framing_metadata_json")
+        if not isinstance(metadata, dict):
+            return 0.0
+        return round(max(-0.02, min(0.06, float(metadata.get("score_adjustment") or 0.0))), 4)
+
     def _build_draft_feedback_state(self, draft: Dict[str, Any]) -> Dict[str, Any]:
-        base_score = self._clamp_review_score(draft.get("relevance_score"))
+        base_score = self._clamp_review_score(
+            float(draft.get("relevance_score") or 0.0) + self._extract_framing_score_adjustment(draft)
+        )
         is_selected = bool(draft.get("is_selected", True))
         is_deleted = bool(draft.get("is_deleted", False))
         created_by_user = bool(draft.get("created_by_user", False))
@@ -749,21 +782,65 @@ class TaskService:
         )
 
     def _validate_non_overlapping_draft_windows(self, drafts: List[Dict[str, Any]]) -> None:
-        windows: List[tuple[str, float, float]] = []
+        conflicts = self._collect_draft_overlap_conflicts(drafts)
+        if conflicts:
+            raise DraftOverlapError(conflicts)
+
+    @staticmethod
+    def _build_render_filename_prefix() -> str:
+        return datetime.now().strftime("%Y%m%d_%H%M")
+
+    def _collect_draft_overlap_conflicts(self, drafts: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        windows: List[Dict[str, Any]] = []
         for draft in drafts:
             if draft.get("is_deleted"):
                 continue
             draft_id = str(draft.get("id") or "")
             start_seconds = self._parse_timestamp_to_seconds_strict(str(draft.get("start_time") or ""))
             end_seconds = self._parse_timestamp_to_seconds_strict(str(draft.get("end_time") or ""))
-            windows.append((draft_id, start_seconds, end_seconds))
+            windows.append(
+                {
+                    "id": draft_id,
+                    "clip_order": int(draft.get("clip_order") or 0),
+                    "start_seconds": start_seconds,
+                    "end_seconds": end_seconds,
+                    "start_time": str(draft.get("start_time") or self._format_seconds_to_timestamp(start_seconds)),
+                    "end_time": str(draft.get("end_time") or self._format_seconds_to_timestamp(end_seconds)),
+                }
+            )
 
-        windows.sort(key=lambda item: (item[1], item[2], item[0]))
+        windows.sort(
+            key=lambda item: (
+                float(item["start_seconds"]),
+                float(item["end_seconds"]),
+                int(item["clip_order"]),
+                str(item["id"]),
+            )
+        )
+        for index, window in enumerate(windows, start=1):
+            window["display_index"] = index
+            window["display_label"] = (
+                f"Clip {index} ({window['start_time']} -> {window['end_time']})"
+            )
+
+        conflicts: List[Dict[str, Any]] = []
         for index in range(1, len(windows)):
-            previous_id, _previous_start, previous_end = windows[index - 1]
-            current_id, current_start, _current_end = windows[index]
-            if current_start < (previous_end - 1e-6):
-                raise ValueError(f"Draft clips overlap: {previous_id} and {current_id}")
+            previous = windows[index - 1]
+            current = windows[index]
+            if float(current["start_seconds"]) < (float(previous["end_seconds"]) - 1e-6):
+                conflicts.append(
+                    {
+                        "left_id": previous["id"],
+                        "right_id": current["id"],
+                        "left_label": previous["display_label"],
+                        "right_label": current["display_label"],
+                        "left_start_time": previous["start_time"],
+                        "left_end_time": previous["end_time"],
+                        "right_start_time": current["start_time"],
+                        "right_end_time": current["end_time"],
+                    }
+                )
+        return conflicts
 
     @staticmethod
     def _extract_text_from_transcript_cache(video_path: Path, clip_start: float, clip_end: float) -> str:
@@ -1200,6 +1277,14 @@ class TaskService:
                     "original_text": text_value,
                     "edited_text": text_value,
                     "relevance_score": float(segment.get("relevance_score") or 0.0),
+                    "framing_metadata_json": (
+                        dict(segment.get("framing_metadata"))
+                        if isinstance(segment.get("framing_metadata"), dict)
+                        else {}
+                    ),
+                    "framing_mode_override": self._normalize_framing_mode_override(
+                        segment.get("framing_mode_override")
+                    ),
                     "reasoning": segment.get("reasoning"),
                     "created_by_user": False,
                     "is_selected": True,
@@ -1249,6 +1334,7 @@ class TaskService:
         cancel_check: Optional[Callable[[], Awaitable[None]]],
         user_id: Optional[str],
         update_progress: Callable[[int, str, Optional[Dict[str, Any]]], Awaitable[None]],
+        render_filename_prefix: Optional[str] = None,
     ) -> Dict[str, Any]:
         (
             assembly_api_key,
@@ -1289,6 +1375,7 @@ class TaskService:
             subtitle_style=subtitle_style,
             progress_callback=update_progress,
             cancel_check=cancel_check,
+            filename_prefix=render_filename_prefix,
         )
         result_video_path = Path(str(result.get("video_path") or "")) if result.get("video_path") else None
         if result_video_path is not None:
@@ -1354,10 +1441,12 @@ class TaskService:
     ) -> Dict[str, Any]:
         await update_progress(10, "Loading approved draft clips...")
 
+        render_filename_prefix = self._build_render_filename_prefix()
         drafts = await self.draft_clip_repo.get_drafts_by_task(self.db, task_id)
         selected_drafts = [draft for draft in drafts if draft.get("is_selected") and not draft.get("is_deleted")]
         if not selected_drafts:
             raise ValueError("Finalize requires at least one selected draft clip")
+        self._validate_non_overlapping_draft_windows(selected_drafts)
 
         selected_drafts.sort(
             key=lambda draft: (
@@ -1431,6 +1520,14 @@ class TaskService:
                         if draft.get("review_score") is not None
                         else draft.get("relevance_score") or 0.0
                     ),
+                    "framing_metadata": (
+                        dict(draft.get("framing_metadata_json"))
+                        if isinstance(draft.get("framing_metadata_json"), dict)
+                        else {}
+                    ),
+                    "framing_mode_override": self._normalize_framing_mode_override(
+                        draft.get("framing_mode_override")
+                    ),
                     "reasoning": draft.get("reasoning"),
                     "subtitle_word_timings": word_timings_override,
                 }
@@ -1447,6 +1544,7 @@ class TaskService:
             transitions_enabled=transitions_enabled,
             progress_callback=update_progress,
             cancel_check=cancel_check,
+            filename_prefix=render_filename_prefix,
         )
 
         await self.task_repo.update_task_status(
@@ -1559,6 +1657,7 @@ class TaskService:
                 (task_record or {}).get("review_before_render_enabled", True)
             )
             ai_focus_tags = list((task_record or {}).get("ai_focus_tags") or [])
+            render_filename_prefix = self._build_render_filename_prefix()
 
             if review_before_render_enabled:
                 return await self._process_review_enabled_analysis(
@@ -1597,6 +1696,7 @@ class TaskService:
                 cancel_check=cancel_check,
                 user_id=user_id,
                 update_progress=update_progress,
+                render_filename_prefix=render_filename_prefix,
             )
 
         except Exception as e:
@@ -1665,6 +1765,10 @@ class TaskService:
 
             if "is_selected" in item:
                 normalized_update["is_selected"] = bool(item.get("is_selected"))
+            if "framing_mode_override" in item:
+                normalized_update["framing_mode_override"] = self._normalize_framing_mode_override(
+                    item.get("framing_mode_override")
+                )
 
             text_changed = (
                 "edited_text" in normalized_update
@@ -1696,6 +1800,7 @@ class TaskService:
         source_type: str,
         edited_text: Optional[str] = None,
         is_selected: Optional[bool] = None,
+        framing_mode_override: str = "auto",
     ) -> Dict[str, Any]:
         start_seconds, end_seconds, duration_seconds = self._validate_clip_window(start_time, end_time)
         normalized_start_time = self._format_seconds_to_timestamp(start_seconds)
@@ -1718,6 +1823,11 @@ class TaskService:
             start_seconds,
             end_seconds,
         )
+        framing_metadata = await self.video_service.analyze_single_segment_framing(
+            video_path=source_video_path,
+            start_time=normalized_start_time,
+            end_time=normalized_end_time,
+        )
 
         preferred_text = str(edited_text or "").strip()
         base_text = preferred_text or transcript_text
@@ -1734,6 +1844,8 @@ class TaskService:
             "original_text": base_text,
             "edited_text": preferred_text or base_text,
             "relevance_score": 0.0,
+            "framing_metadata_json": framing_metadata,
+            "framing_mode_override": self._normalize_framing_mode_override(framing_mode_override),
             "reasoning": "Added manually during review",
             "created_by_user": True,
             "is_selected": bool(is_selected) if is_selected is not None else bool(base_text),

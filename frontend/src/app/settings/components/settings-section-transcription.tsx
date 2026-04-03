@@ -1,21 +1,22 @@
 import { useEffect, useState } from "react";
 import { Cloud, Cpu } from "lucide-react";
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import type { TranscriptionProvider, WhisperDevicePreference, WhisperModelSize } from "../settings-section-types";
-
-interface WhisperGpuDeviceSummary {
-  index: number;
-  name: string;
-  total_memory_bytes?: number | null;
-}
-
-interface LocalWhisperRuntimeInfo {
-  cuda_available?: boolean;
-  gpu_devices?: WhisperGpuDeviceSummary[];
-  probe_source?: string;
-}
+import {
+  describeLocalWhisperModel,
+  FALLBACK_LOCAL_WHISPER_MODELS,
+  getMatchingWhisperPreset,
+  getWhisperModelCacheLabel,
+  getWhisperModelOption,
+  getPredictedWhisperExecutionSummary,
+  getWhisperPresetLabel,
+  type LocalWhisperModelOption,
+  type LocalWhisperRuntimeInfo,
+  type WhisperPresetId,
+} from "@/lib/whisper-transcription";
 
 interface SettingsSectionTranscriptionProps {
   isSaving: boolean;
@@ -28,7 +29,9 @@ interface SettingsSectionTranscriptionProps {
   whisperModelSize: WhisperModelSize;
   whisperDevice: WhisperDevicePreference;
   whisperGpuIndex: number | null;
+  localWhisperModels?: LocalWhisperModelOption[];
   localWhisperRuntime?: LocalWhisperRuntimeInfo | null;
+  gpuWorkerEnabled: boolean;
   isSavingAssemblyKey: boolean;
   assemblyApiKey: string;
   hasSavedAssemblyKey: boolean;
@@ -42,6 +45,7 @@ interface SettingsSectionTranscriptionProps {
   onWhisperChunkDurationSecondsChange: (seconds: number) => void;
   onWhisperChunkOverlapSecondsChange: (seconds: number) => void;
   onTaskTimeoutSecondsChange: (seconds: number) => void;
+  onWhisperPresetChange: (preset: Exclude<WhisperPresetId, "custom">) => void;
   onWhisperModelSizeChange: (modelSize: WhisperModelSize) => void;
   onWhisperDeviceChange: (device: WhisperDevicePreference) => void;
   onWhisperGpuIndexChange: (gpuIndex: number | null) => void;
@@ -61,7 +65,9 @@ export function SettingsSectionTranscription({
   whisperModelSize,
   whisperDevice,
   whisperGpuIndex,
+  localWhisperModels,
   localWhisperRuntime,
+  gpuWorkerEnabled,
   isSavingAssemblyKey,
   assemblyApiKey,
   hasSavedAssemblyKey,
@@ -75,6 +81,7 @@ export function SettingsSectionTranscription({
   onWhisperChunkDurationSecondsChange,
   onWhisperChunkOverlapSecondsChange,
   onTaskTimeoutSecondsChange,
+  onWhisperPresetChange,
   onWhisperModelSizeChange,
   onWhisperDeviceChange,
   onWhisperGpuIndexChange,
@@ -159,14 +166,26 @@ export function SettingsSectionTranscription({
   };
 
   const detectedGpuDevices = Array.isArray(localWhisperRuntime?.gpu_devices) ? localWhisperRuntime.gpu_devices : [];
-  const whisperModelOptions: Array<{ value: WhisperModelSize; label: string; note: string }> = [
-    { value: "turbo", label: "Turbo", note: "Recommended. Fastest high-quality transcription." },
-    { value: "medium", label: "Medium", note: "Balanced accuracy and speed. Higher VRAM than turbo." },
-    { value: "large", label: "Large", note: "Highest quality, slowest, and the heaviest on VRAM." },
-    { value: "small", label: "Small", note: "Lower VRAM use and faster, with a quality drop." },
-    { value: "base", label: "Base", note: "Lightweight and noticeably lower quality." },
-    { value: "tiny", label: "Tiny", note: "Smallest download and fastest low-end option." },
-  ];
+  const resolvedWhisperModels = localWhisperModels && localWhisperModels.length > 0 ? localWhisperModels : FALLBACK_LOCAL_WHISPER_MODELS;
+  const selectedWhisperModel = getWhisperModelOption(resolvedWhisperModels, whisperModelSize);
+  const whisperPreset = getMatchingWhisperPreset({
+    whisperModelSize,
+    whisperDevice,
+    whisperGpuIndex,
+    whisperChunkingEnabled,
+    whisperChunkDurationSeconds,
+    whisperChunkOverlapSeconds,
+    runtimeInfo: localWhisperRuntime,
+  });
+  const runtimeSummary = getPredictedWhisperExecutionSummary({
+    transcriptionProvider,
+    whisperModelSize,
+    whisperDevice,
+    whisperGpuIndex,
+    runtimeInfo: localWhisperRuntime,
+    models: resolvedWhisperModels,
+    gpuWorkerEnabled,
+  });
 
   return (
     <div className="space-y-4">
@@ -229,6 +248,36 @@ export function SettingsSectionTranscription({
         {transcriptionProvider === "local" && (
           <div className="space-y-2 rounded border border-gray-100 bg-gray-50 p-3">
             <div className="space-y-1">
+              <label className="text-xs font-medium text-black">Local Whisper Preset</label>
+              <Select
+                value={whisperPreset}
+                onValueChange={(value) => {
+                  if (value !== "custom") {
+                    onWhisperPresetChange(value as Exclude<WhisperPresetId, "custom">);
+                  }
+                }}
+                disabled={isSaving || isSavingAssemblyKey}
+              >
+                <SelectTrigger className="w-full">
+                  <SelectValue placeholder="Select preset" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="fast">{getWhisperPresetLabel("fast")}</SelectItem>
+                  <SelectItem value="balanced">{getWhisperPresetLabel("balanced")}</SelectItem>
+                  <SelectItem value="best-quality">{getWhisperPresetLabel("best-quality")}</SelectItem>
+                  <SelectItem value="cpu-safe">{getWhisperPresetLabel("cpu-safe")}</SelectItem>
+                  <SelectItem value="custom" disabled>
+                    {getWhisperPresetLabel("custom")}
+                  </SelectItem>
+                </SelectContent>
+              </Select>
+              <p className="text-xs text-gray-500">
+                Presets are shortcuts. Editing the detailed local Whisper settings below switches the selection to
+                Custom.
+              </p>
+            </div>
+
+            <div className="space-y-1">
               <label className="text-xs font-medium text-black">Local Whisper Quality</label>
               <Select
                 value={whisperModelSize}
@@ -239,9 +288,9 @@ export function SettingsSectionTranscription({
                   <SelectValue placeholder="Select Whisper model quality" />
                 </SelectTrigger>
                 <SelectContent>
-                  {whisperModelOptions.map((option) => (
+                  {resolvedWhisperModels.map((option) => (
                     <SelectItem key={option.value} value={option.value}>
-                      {option.label}: {option.note}
+                      {describeLocalWhisperModel(option)}
                     </SelectItem>
                   ))}
                 </SelectContent>
@@ -250,6 +299,32 @@ export function SettingsSectionTranscription({
                 This controls the local Whisper model used for future tasks. If that model is not cached yet, the first
                 run will download it before transcription starts.
               </p>
+              {selectedWhisperModel ? (
+                <div className="flex flex-wrap gap-2 pt-1">
+                  <Badge variant="outline" className="bg-white">
+                    {selectedWhisperModel.speed_hint}
+                  </Badge>
+                  <Badge variant="outline" className="bg-white">
+                    {selectedWhisperModel.quality_hint}
+                  </Badge>
+                  {selectedWhisperModel.approx_vram_hint ? (
+                    <Badge variant="outline" className="bg-white">
+                      {selectedWhisperModel.approx_vram_hint}
+                    </Badge>
+                  ) : null}
+                  <Badge
+                    className={
+                      selectedWhisperModel.cache_status === "cached"
+                        ? "bg-green-100 text-green-800"
+                        : selectedWhisperModel.cache_status === "not_cached"
+                          ? "bg-amber-100 text-amber-800"
+                          : "bg-gray-100 text-gray-700"
+                    }
+                  >
+                    {getWhisperModelCacheLabel(selectedWhisperModel.cache_status)}
+                  </Badge>
+                </div>
+              ) : null}
             </div>
 
             <div className="space-y-1">
@@ -359,6 +434,48 @@ export function SettingsSectionTranscription({
             </p>
           </div>
         )}
+
+        <div className="space-y-2 rounded border border-gray-100 bg-gray-50 p-3">
+          <p className="text-xs font-medium text-black">Effective Runtime Target</p>
+          <div className="grid gap-1 text-xs text-gray-600 sm:grid-cols-2">
+            <p>
+              <span className="font-medium text-black">Provider:</span> {runtimeSummary.providerLabel}
+            </p>
+            <p>
+              <span className="font-medium text-black">Queue:</span>{" "}
+              <Badge variant="outline" className="bg-white align-middle">
+                {runtimeSummary.queueTarget}
+              </Badge>
+            </p>
+            <p>
+              <span className="font-medium text-black">Model:</span> {runtimeSummary.modelLabel}
+            </p>
+            <p>
+              <span className="font-medium text-black">Device preference:</span> {runtimeSummary.devicePreferenceLabel}
+            </p>
+            <p>
+              <span className="font-medium text-black">Predicted execution:</span> {runtimeSummary.executionTarget}
+            </p>
+            <p>
+              <span className="font-medium text-black">Model cache:</span>{" "}
+              <Badge
+                className={
+                  runtimeSummary.cacheLabel === "Cached"
+                    ? "bg-green-100 text-green-800 align-middle"
+                    : runtimeSummary.cacheLabel === "Downloads on first use"
+                      ? "bg-amber-100 text-amber-800 align-middle"
+                      : "bg-gray-100 text-gray-700 align-middle"
+                }
+              >
+                {runtimeSummary.cacheLabel}
+              </Badge>
+            </p>
+          </div>
+          <p className="text-xs text-gray-500">
+            Prediction is based on the current API runtime probe and queue routing config. Worker runtime can still
+            differ.
+          </p>
+        </div>
 
         {transcriptionProvider === "assemblyai" && (
           <div className="space-y-2 rounded border border-gray-100 bg-gray-50 p-3">
