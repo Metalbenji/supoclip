@@ -62,7 +62,9 @@ REVIEW_TEXT_EDIT_BONUS = 0.07
 REVIEW_TIMING_EDIT_BASE_BONUS = 0.03
 REVIEW_TIMING_EDIT_PER_SECOND = 0.01
 REVIEW_TIMING_EDIT_MAX_BONUS = 0.12
-SUPPORTED_FRAMING_MODE_OVERRIDES = {"auto", "prefer_face", "disable_face_crop"}
+SUPPORTED_FRAMING_MODE_OVERRIDES = {"auto", "prefer_face", "fixed_position"}
+SUPPORTED_FACE_DETECTION_MODES = {"balanced", "more_faces"}
+SUPPORTED_FALLBACK_CROP_POSITIONS = {"center", "left_center", "right_center"}
 _TIMESTAMP_SECONDS_RE = re.compile(r"^\d+(?:\.\d+)?$")
 DEFAULT_OLLAMA_VIABILITY_ATTEMPTS = 2
 MIN_OLLAMA_VIABILITY_ATTEMPTS = 1
@@ -644,9 +646,67 @@ class TaskService:
     @staticmethod
     def _normalize_framing_mode_override(value: Any) -> str:
         normalized = str(value or "auto").strip().lower()
+        if normalized == "disable_face_crop":
+            return "fixed_position"
         if normalized not in SUPPORTED_FRAMING_MODE_OVERRIDES:
             return "auto"
         return normalized
+
+    @staticmethod
+    def _normalize_face_detection_mode(value: Any) -> str:
+        normalized = str(value or "balanced").strip().lower()
+        if normalized == "center_only":
+            return "balanced"
+        if normalized not in SUPPORTED_FACE_DETECTION_MODES:
+            return "balanced"
+        return normalized
+
+    @staticmethod
+    def _normalize_fallback_crop_position(value: Any) -> str:
+        normalized = str(value or "center").strip().lower()
+        if normalized not in SUPPORTED_FALLBACK_CROP_POSITIONS:
+            return "center"
+        return normalized
+
+    @classmethod
+    def _resolve_effective_default_framing_mode(
+        cls,
+        default_framing_mode: Any,
+        face_detection_mode: Any,
+    ) -> str:
+        return cls._normalize_framing_mode_override(default_framing_mode)
+
+    async def _get_effective_user_video_preferences(self, user_id: Optional[str]) -> Dict[str, Any]:
+        if not user_id:
+            return {
+                "review_before_render_enabled": True,
+                "timeline_editor_enabled": True,
+                "default_framing_mode": "auto",
+                "default_face_detection_mode": "balanced",
+                "default_fallback_crop_position": "center",
+                "effective_default_framing_mode": "auto",
+            }
+
+        preferences = await self.task_repo.get_user_default_video_preferences(self.db, user_id)
+        raw_detection_mode = str(preferences.get("default_face_detection_mode") or "balanced").strip().lower()
+        default_framing_mode = self._normalize_framing_mode_override(preferences.get("default_framing_mode"))
+        face_detection_mode = self._normalize_face_detection_mode(raw_detection_mode)
+        fallback_crop_position = self._normalize_fallback_crop_position(
+            preferences.get("default_fallback_crop_position")
+        )
+        effective_default_framing_mode = self._resolve_effective_default_framing_mode(
+            "fixed_position" if raw_detection_mode == "center_only" else default_framing_mode,
+            face_detection_mode,
+        )
+        if raw_detection_mode == "center_only":
+            fallback_crop_position = "center"
+        return {
+            **preferences,
+            "default_framing_mode": default_framing_mode,
+            "default_face_detection_mode": face_detection_mode,
+            "default_fallback_crop_position": fallback_crop_position,
+            "effective_default_framing_mode": effective_default_framing_mode,
+        }
 
     @staticmethod
     def _extract_framing_score_adjustment(draft: Dict[str, Any]) -> float:
@@ -1198,6 +1258,8 @@ class TaskService:
         user_id: Optional[str],
         update_progress: Callable[[int, str, Optional[Dict[str, Any]]], Awaitable[None]],
     ) -> Dict[str, Any]:
+        user_video_preferences = await self._get_effective_user_video_preferences(user_id)
+
         (
             assembly_api_key,
             selected_ai_provider,
@@ -1230,6 +1292,9 @@ class TaskService:
             ai_request_options=ai_request_options,
             transcription_options=transcription_options,
             ai_focus_tags=ai_focus_tags,
+            default_framing_mode=str(user_video_preferences.get("effective_default_framing_mode") or "auto"),
+            face_detection_mode=str(user_video_preferences.get("default_face_detection_mode") or "balanced"),
+            fallback_crop_position=str(user_video_preferences.get("default_fallback_crop_position") or "center"),
             progress_callback=update_progress,
             cancel_check=cancel_check,
         )
@@ -1284,6 +1349,7 @@ class TaskService:
                     ),
                     "framing_mode_override": self._normalize_framing_mode_override(
                         segment.get("framing_mode_override")
+                        or user_video_preferences.get("effective_default_framing_mode")
                     ),
                     "reasoning": segment.get("reasoning"),
                     "created_by_user": False,
@@ -1336,6 +1402,8 @@ class TaskService:
         update_progress: Callable[[int, str, Optional[Dict[str, Any]]], Awaitable[None]],
         render_filename_prefix: Optional[str] = None,
     ) -> Dict[str, Any]:
+        user_video_preferences = await self._get_effective_user_video_preferences(user_id)
+
         (
             assembly_api_key,
             selected_ai_provider,
@@ -1373,6 +1441,9 @@ class TaskService:
             transcription_options=transcription_options,
             ai_focus_tags=ai_focus_tags,
             subtitle_style=subtitle_style,
+            default_framing_mode=str(user_video_preferences.get("effective_default_framing_mode") or "auto"),
+            face_detection_mode=str(user_video_preferences.get("default_face_detection_mode") or "balanced"),
+            fallback_crop_position=str(user_video_preferences.get("default_fallback_crop_position") or "center"),
             progress_callback=update_progress,
             cancel_check=cancel_check,
             filename_prefix=render_filename_prefix,
@@ -1798,9 +1869,10 @@ class TaskService:
         end_time: str,
         source_url: str,
         source_type: str,
+        user_id: Optional[str] = None,
         edited_text: Optional[str] = None,
         is_selected: Optional[bool] = None,
-        framing_mode_override: str = "auto",
+        framing_mode_override: Optional[str] = None,
     ) -> Dict[str, Any]:
         start_seconds, end_seconds, duration_seconds = self._validate_clip_window(start_time, end_time)
         normalized_start_time = self._format_seconds_to_timestamp(start_seconds)
@@ -1817,6 +1889,7 @@ class TaskService:
         ]
         self._validate_non_overlapping_draft_windows(proposed_drafts)
 
+        user_video_preferences = await self._get_effective_user_video_preferences(user_id)
         source_video_path = await self.video_service.resolve_video_path(url=source_url, source_type=source_type)
         transcript_text = self._extract_text_from_transcript_cache(
             source_video_path,
@@ -1827,6 +1900,8 @@ class TaskService:
             video_path=source_video_path,
             start_time=normalized_start_time,
             end_time=normalized_end_time,
+            face_detection_mode=str(user_video_preferences.get("default_face_detection_mode") or "balanced"),
+            fallback_crop_position=str(user_video_preferences.get("default_fallback_crop_position") or "center"),
         )
 
         preferred_text = str(edited_text or "").strip()
@@ -1845,7 +1920,11 @@ class TaskService:
             "edited_text": preferred_text or base_text,
             "relevance_score": 0.0,
             "framing_metadata_json": framing_metadata,
-            "framing_mode_override": self._normalize_framing_mode_override(framing_mode_override),
+            "framing_mode_override": (
+                self._normalize_framing_mode_override(framing_mode_override)
+                if framing_mode_override is not None
+                else str(user_video_preferences.get("effective_default_framing_mode") or "auto")
+            ),
             "reasoning": "Added manually during review",
             "created_by_user": True,
             "is_selected": bool(is_selected) if is_selected is not None else bool(base_text),

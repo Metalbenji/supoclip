@@ -21,6 +21,9 @@ import {
 const SUPPORTED_TRANSCRIPTION_PROVIDERS = new Set(["local", "assemblyai"]);
 const SUPPORTED_WHISPER_DEVICES = new Set(["auto", "cpu", "gpu"]);
 const SUPPORTED_WHISPER_MODEL_SIZES = new Set(["tiny", "base", "small", "medium", "large", "turbo"]);
+const SUPPORTED_DEFAULT_FRAMING_MODES = new Set(["auto", "prefer_face", "fixed_position"]);
+const SUPPORTED_FACE_DETECTION_MODES = new Set(["balanced", "more_faces"]);
+const SUPPORTED_FALLBACK_CROP_POSITIONS = new Set(["center", "left_center", "right_center"]);
 const SUPPORTED_AI_PROVIDERS = new Set(["openai", "google", "anthropic", "zai", "ollama"]);
 const MIN_WHISPER_CHUNK_DURATION_SECONDS = 300;
 const MAX_WHISPER_CHUNK_DURATION_SECONDS = 3600;
@@ -85,6 +88,36 @@ async function updateStoredWhisperPreferences(
   `;
 }
 
+function normalizeDefaultFramingMode(rawValue: unknown): "auto" | "prefer_face" | "fixed_position" {
+  const normalized = typeof rawValue === "string" ? rawValue.trim().toLowerCase() : "";
+  if (normalized === "disable_face_crop") {
+    return "fixed_position";
+  }
+  if (SUPPORTED_DEFAULT_FRAMING_MODES.has(normalized)) {
+    return normalized as "auto" | "prefer_face" | "fixed_position";
+  }
+  return "auto";
+}
+
+function normalizeFaceDetectionMode(rawValue: unknown): "balanced" | "more_faces" {
+  const normalized = typeof rawValue === "string" ? rawValue.trim().toLowerCase() : "";
+  if (normalized === "center_only") {
+    return "balanced";
+  }
+  if (SUPPORTED_FACE_DETECTION_MODES.has(normalized)) {
+    return normalized as "balanced" | "more_faces";
+  }
+  return "balanced";
+}
+
+function normalizeFallbackCropPosition(rawValue: unknown): "center" | "left_center" | "right_center" {
+  const normalized = typeof rawValue === "string" ? rawValue.trim().toLowerCase() : "";
+  if (SUPPORTED_FALLBACK_CROP_POSITIONS.has(normalized)) {
+    return normalized as "center" | "left_center" | "right_center";
+  }
+  return "center";
+}
+
 // GET /api/preferences - Get user preferences
 export async function GET() {
   try {
@@ -119,6 +152,9 @@ export async function GET() {
         default_transitions_enabled: true,
         default_review_before_render_enabled: true,
         default_timeline_editor_enabled: true,
+        default_framing_mode: true,
+        default_face_detection_mode: true,
+        default_fallback_crop_position: true,
         default_transcription_provider: true,
         default_whisper_chunking_enabled: true,
         default_whisper_chunk_duration_seconds: true,
@@ -140,6 +176,10 @@ export async function GET() {
       ? user.default_text_align
       : DEFAULT_FONT_STYLE_OPTIONS.textAlign;
     const whisperPreferences = await getStoredWhisperPreferences(session.user.id);
+    const hadLegacyCenterOnly = typeof user.default_face_detection_mode === "string" && user.default_face_detection_mode === "center_only";
+    const defaultFramingMode = hadLegacyCenterOnly
+      ? "fixed_position"
+      : normalizeDefaultFramingMode(user.default_framing_mode);
 
     return NextResponse.json({
       fontFamily: user.default_font_family || DEFAULT_FONT_STYLE_OPTIONS.fontFamily,
@@ -170,6 +210,9 @@ export async function GET() {
       transitionsEnabled: user.default_transitions_enabled ?? false,
       reviewBeforeRenderEnabled: user.default_review_before_render_enabled ?? true,
       timelineEditorEnabled: user.default_timeline_editor_enabled ?? true,
+      defaultFramingMode,
+      faceDetectionMode: normalizeFaceDetectionMode(user.default_face_detection_mode),
+      fallbackCropPosition: normalizeFallbackCropPosition(user.default_fallback_crop_position),
       transcriptionProvider: user.default_transcription_provider || "local",
       whisperChunkingEnabled: user.default_whisper_chunking_enabled ?? true,
       whisperChunkDurationSeconds: user.default_whisper_chunk_duration_seconds || 1200,
@@ -240,6 +283,9 @@ export async function PATCH(request: NextRequest) {
       transitionsEnabled,
       reviewBeforeRenderEnabled,
       timelineEditorEnabled,
+      defaultFramingMode,
+      faceDetectionMode,
+      fallbackCropPosition,
       transcriptionProvider,
       whisperChunkingEnabled,
       whisperChunkDurationSeconds,
@@ -323,6 +369,33 @@ export async function PATCH(request: NextRequest) {
     }
     if (timelineEditorEnabled !== undefined && typeof timelineEditorEnabled !== "boolean") {
       return NextResponse.json({ error: "Invalid timelineEditorEnabled" }, { status: 400 });
+    }
+    if (
+      defaultFramingMode !== undefined &&
+      (typeof defaultFramingMode !== "string" || !SUPPORTED_DEFAULT_FRAMING_MODES.has(defaultFramingMode))
+    ) {
+      return NextResponse.json(
+        { error: "Invalid defaultFramingMode (must be auto, prefer_face, or fixed_position)" },
+        { status: 400 },
+      );
+    }
+    if (
+      faceDetectionMode !== undefined &&
+      (typeof faceDetectionMode !== "string" || !SUPPORTED_FACE_DETECTION_MODES.has(faceDetectionMode))
+    ) {
+      return NextResponse.json(
+        { error: "Invalid faceDetectionMode (must be balanced or more_faces)" },
+        { status: 400 },
+      );
+    }
+    if (
+      fallbackCropPosition !== undefined &&
+      (typeof fallbackCropPosition !== "string" || !SUPPORTED_FALLBACK_CROP_POSITIONS.has(fallbackCropPosition))
+    ) {
+      return NextResponse.json(
+        { error: "Invalid fallbackCropPosition (must be center, left_center, or right_center)" },
+        { status: 400 },
+      );
     }
     if (
       transcriptionProvider !== undefined &&
@@ -450,6 +523,9 @@ export async function PATCH(request: NextRequest) {
           default_review_before_render_enabled: reviewBeforeRenderEnabled,
         }),
         ...(timelineEditorEnabled !== undefined && { default_timeline_editor_enabled: timelineEditorEnabled }),
+        ...(defaultFramingMode !== undefined && { default_framing_mode: defaultFramingMode }),
+        ...(faceDetectionMode !== undefined && { default_face_detection_mode: faceDetectionMode }),
+        ...(fallbackCropPosition !== undefined && { default_fallback_crop_position: fallbackCropPosition }),
         ...(transcriptionProvider !== undefined && { default_transcription_provider: transcriptionProvider }),
         ...(whisperChunkingEnabled !== undefined && { default_whisper_chunking_enabled: whisperChunkingEnabled }),
         ...(whisperChunkDurationSeconds !== undefined && {
@@ -483,6 +559,9 @@ export async function PATCH(request: NextRequest) {
         default_transitions_enabled: true,
         default_review_before_render_enabled: true,
         default_timeline_editor_enabled: true,
+        default_framing_mode: true,
+        default_face_detection_mode: true,
+        default_fallback_crop_position: true,
         default_transcription_provider: true,
         default_whisper_chunking_enabled: true,
         default_whisper_chunk_duration_seconds: true,
@@ -495,6 +574,7 @@ export async function PATCH(request: NextRequest) {
 
     await updateStoredWhisperPreferences(session.user.id, whisperModelSize, whisperDevice, whisperGpuIndex);
     const whisperPreferences = await getStoredWhisperPreferences(session.user.id);
+    const hadLegacyCenterOnly = typeof updatedUser.default_face_detection_mode === "string" && updatedUser.default_face_detection_mode === "center_only";
 
     return NextResponse.json({
       fontFamily: updatedUser.default_font_family || DEFAULT_FONT_STYLE_OPTIONS.fontFamily,
@@ -529,6 +609,11 @@ export async function PATCH(request: NextRequest) {
       transitionsEnabled: updatedUser.default_transitions_enabled ?? false,
       reviewBeforeRenderEnabled: updatedUser.default_review_before_render_enabled ?? true,
       timelineEditorEnabled: updatedUser.default_timeline_editor_enabled ?? true,
+      defaultFramingMode: hadLegacyCenterOnly
+        ? "fixed_position"
+        : normalizeDefaultFramingMode(updatedUser.default_framing_mode),
+      faceDetectionMode: normalizeFaceDetectionMode(updatedUser.default_face_detection_mode),
+      fallbackCropPosition: normalizeFallbackCropPosition(updatedUser.default_fallback_crop_position),
       transcriptionProvider: updatedUser.default_transcription_provider || "local",
       whisperChunkingEnabled: updatedUser.default_whisper_chunking_enabled ?? true,
       whisperChunkDurationSeconds: updatedUser.default_whisper_chunk_duration_seconds || 1200,

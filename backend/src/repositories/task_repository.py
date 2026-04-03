@@ -1347,6 +1347,45 @@ class TaskRepository:
         return bool(getattr(row, "default_review_before_render_enabled", True))
 
     @staticmethod
+    async def get_user_default_video_preferences(db: AsyncSession, user_id: str) -> Dict[str, Any]:
+        """Get user-level framing defaults used for new tasks and draft review."""
+        result = await db.execute(
+            text(
+                """
+                SELECT
+                    default_review_before_render_enabled,
+                    default_timeline_editor_enabled,
+                    default_framing_mode,
+                    default_face_detection_mode,
+                    default_fallback_crop_position
+                FROM users
+                WHERE id = :user_id
+                """
+            ),
+            {"user_id": user_id},
+        )
+        row = result.fetchone()
+        if not row:
+            return {
+                "review_before_render_enabled": True,
+                "timeline_editor_enabled": True,
+                "default_framing_mode": "auto",
+                "default_face_detection_mode": "balanced",
+                "default_fallback_crop_position": "center",
+            }
+        return {
+            "review_before_render_enabled": bool(getattr(row, "default_review_before_render_enabled", True)),
+            "timeline_editor_enabled": bool(getattr(row, "default_timeline_editor_enabled", True)),
+            "default_framing_mode": str(getattr(row, "default_framing_mode", "auto") or "auto"),
+            "default_face_detection_mode": str(
+                getattr(row, "default_face_detection_mode", "balanced") or "balanced"
+            ),
+            "default_fallback_crop_position": str(
+                getattr(row, "default_fallback_crop_position", "center") or "center"
+            ),
+        }
+
+    @staticmethod
     async def update_task_timeline_editor_enabled(db: AsyncSession, task_id: str, enabled: bool) -> None:
         """Update per-task timeline editor toggle."""
         await db.execute(

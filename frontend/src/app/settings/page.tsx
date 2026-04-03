@@ -45,6 +45,9 @@ import {
   DEFAULT_USER_PREFERENCES,
   FALLBACK_AI_MODEL_OPTIONS,
   isAiProvider,
+  isDefaultFramingMode,
+  isFaceDetectionMode,
+  isFallbackCropPosition,
   isSettingsSection,
   isTranscriptionProvider,
   isWhisperDevicePreference,
@@ -551,7 +554,6 @@ function SettingsPageContent() {
         const resolvedAiModel = preferencesDraft.aiModel.trim() || DEFAULT_AI_MODELS[preferencesDraft.aiProvider];
         const payload: UserPreferences = {
           ...preferencesDraft,
-          reviewBeforeRenderEnabled: true,
           aiModel: resolvedAiModel,
         };
 
@@ -1219,11 +1221,26 @@ function SettingsPageContent() {
         const nextPreferences: UserPreferences = {
           ...normalizedFontStyle,
           transitionsEnabled: Boolean(data.transitionsEnabled),
-          reviewBeforeRenderEnabled: true,
+          reviewBeforeRenderEnabled:
+            typeof data.reviewBeforeRenderEnabled === "boolean"
+              ? data.reviewBeforeRenderEnabled
+              : DEFAULT_USER_PREFERENCES.reviewBeforeRenderEnabled,
           timelineEditorEnabled:
             typeof data.timelineEditorEnabled === "boolean"
               ? data.timelineEditorEnabled
               : DEFAULT_USER_PREFERENCES.timelineEditorEnabled,
+          defaultFramingMode:
+            typeof data.defaultFramingMode === "string" && isDefaultFramingMode(data.defaultFramingMode)
+              ? data.defaultFramingMode
+              : DEFAULT_USER_PREFERENCES.defaultFramingMode,
+          faceDetectionMode:
+            typeof data.faceDetectionMode === "string" && isFaceDetectionMode(data.faceDetectionMode)
+              ? data.faceDetectionMode
+              : DEFAULT_USER_PREFERENCES.faceDetectionMode,
+          fallbackCropPosition:
+            typeof data.fallbackCropPosition === "string" && isFallbackCropPosition(data.fallbackCropPosition)
+              ? data.fallbackCropPosition
+              : DEFAULT_USER_PREFERENCES.fallbackCropPosition,
           transcriptionProvider:
             typeof data.transcriptionProvider === "string" && isTranscriptionProvider(data.transcriptionProvider)
               ? data.transcriptionProvider
@@ -1611,13 +1628,32 @@ function SettingsPageContent() {
             ) : activeSection === "video" ? (
               <SettingsSectionVideo
                 isSaving={isSavingPreferences}
+                reviewBeforeRenderEnabled={preferencesDraft.reviewBeforeRenderEnabled}
                 transitionsEnabled={preferencesDraft.transitionsEnabled}
                 timelineEditorEnabled={preferencesDraft.timelineEditorEnabled}
+                defaultFramingMode={preferencesDraft.defaultFramingMode}
+                faceDetectionMode={preferencesDraft.faceDetectionMode}
+                fallbackCropPosition={preferencesDraft.fallbackCropPosition}
+                onToggleReviewBeforeRender={() => {
+                  setPreferencesDraft((prev) => ({
+                    ...prev,
+                    reviewBeforeRenderEnabled: !prev.reviewBeforeRenderEnabled,
+                  }));
+                }}
                 onToggleTransitions={() => {
                   setPreferencesDraft((prev) => ({ ...prev, transitionsEnabled: !prev.transitionsEnabled }));
                 }}
                 onToggleTimelineEditor={() => {
                   setPreferencesDraft((prev) => ({ ...prev, timelineEditorEnabled: !prev.timelineEditorEnabled }));
+                }}
+                onDefaultFramingModeChange={(value) => {
+                  setPreferencesDraft((prev) => ({ ...prev, defaultFramingMode: value }));
+                }}
+                onFaceDetectionModeChange={(value) => {
+                  setPreferencesDraft((prev) => ({ ...prev, faceDetectionMode: value }));
+                }}
+                onFallbackCropPositionChange={(value) => {
+                  setPreferencesDraft((prev) => ({ ...prev, fallbackCropPosition: value }));
                 }}
               />
             ) : activeSection === "transcription" ? (

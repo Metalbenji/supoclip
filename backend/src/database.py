@@ -216,6 +216,30 @@ async def init_db():
             text(
                 """
                 ALTER TABLE users
+                ADD COLUMN IF NOT EXISTS default_framing_mode VARCHAR(32) NOT NULL DEFAULT 'auto'
+                """
+            )
+        )
+        await conn.execute(
+            text(
+                """
+                ALTER TABLE users
+                ADD COLUMN IF NOT EXISTS default_face_detection_mode VARCHAR(20) NOT NULL DEFAULT 'balanced'
+                """
+            )
+        )
+        await conn.execute(
+            text(
+                """
+                ALTER TABLE users
+                ADD COLUMN IF NOT EXISTS default_fallback_crop_position VARCHAR(20) NOT NULL DEFAULT 'center'
+                """
+            )
+        )
+        await conn.execute(
+            text(
+                """
+                ALTER TABLE users
                 ADD COLUMN IF NOT EXISTS default_transcription_provider VARCHAR(20) NOT NULL DEFAULT 'local'
                 """
             )
@@ -290,6 +314,82 @@ async def init_db():
                         ADD CONSTRAINT check_users_default_transcription_provider
                         CHECK (default_transcription_provider IN ('local', 'assemblyai'));
                     END IF;
+                END $$;
+                """
+            )
+        )
+        await conn.execute(
+            text(
+                """
+                UPDATE users
+                SET
+                    default_framing_mode = CASE
+                        WHEN COALESCE(NULLIF(TRIM(default_framing_mode), ''), 'auto') = 'disable_face_crop'
+                            THEN 'fixed_position'
+                        ELSE COALESCE(NULLIF(TRIM(default_framing_mode), ''), 'auto')
+                    END,
+                    default_face_detection_mode = CASE
+                        WHEN COALESCE(NULLIF(TRIM(default_face_detection_mode), ''), 'balanced') = 'center_only'
+                            THEN 'balanced'
+                        ELSE COALESCE(NULLIF(TRIM(default_face_detection_mode), ''), 'balanced')
+                    END,
+                    default_fallback_crop_position = COALESCE(NULLIF(TRIM(default_fallback_crop_position), ''), 'center')
+                """
+            )
+        )
+        await conn.execute(
+            text(
+                """
+                DO $$
+                BEGIN
+                    IF EXISTS (
+                        SELECT 1
+                        FROM pg_constraint
+                        WHERE conname = 'check_users_default_framing_mode'
+                    ) THEN
+                        ALTER TABLE users DROP CONSTRAINT check_users_default_framing_mode;
+                    END IF;
+                    ALTER TABLE users
+                    ADD CONSTRAINT check_users_default_framing_mode
+                    CHECK (default_framing_mode IN ('auto', 'prefer_face', 'fixed_position'));
+                END $$;
+                """
+            )
+        )
+        await conn.execute(
+            text(
+                """
+                DO $$
+                BEGIN
+                    IF EXISTS (
+                        SELECT 1
+                        FROM pg_constraint
+                        WHERE conname = 'check_users_default_face_detection_mode'
+                    ) THEN
+                        ALTER TABLE users DROP CONSTRAINT check_users_default_face_detection_mode;
+                    END IF;
+                    ALTER TABLE users
+                    ADD CONSTRAINT check_users_default_face_detection_mode
+                    CHECK (default_face_detection_mode IN ('balanced', 'more_faces'));
+                END $$;
+                """
+            )
+        )
+        await conn.execute(
+            text(
+                """
+                DO $$
+                BEGIN
+                    IF EXISTS (
+                        SELECT 1
+                        FROM pg_constraint
+                        WHERE conname = 'check_users_default_fallback_crop_position'
+                    ) THEN
+                        ALTER TABLE users DROP CONSTRAINT check_users_default_fallback_crop_position;
+                    END IF;
+                    ALTER TABLE users
+                    ADD CONSTRAINT check_users_default_fallback_crop_position
+                    CHECK (default_fallback_crop_position IN ('center', 'left_center', 'right_center'));
                 END $$;
                 """
             )
@@ -897,7 +997,11 @@ async def init_db():
                     feedback_score_adjustment = COALESCE(feedback_score_adjustment, 0),
                     feedback_signals_json = COALESCE(feedback_signals_json, '{}'::jsonb),
                     framing_metadata_json = COALESCE(framing_metadata_json, '{}'::jsonb),
-                    framing_mode_override = COALESCE(NULLIF(TRIM(framing_mode_override), ''), 'auto')
+                    framing_mode_override = CASE
+                        WHEN COALESCE(NULLIF(TRIM(framing_mode_override), ''), 'auto') = 'disable_face_crop'
+                            THEN 'fixed_position'
+                        ELSE COALESCE(NULLIF(TRIM(framing_mode_override), ''), 'auto')
+                    END
                 """
             )
         )
@@ -967,7 +1071,7 @@ async def init_db():
         await conn.execute(
             text(
                 """
-                COMMENT ON COLUMN task_clip_drafts.framing_mode_override IS 'Per-draft framing override: auto, prefer_face, or disable_face_crop.'
+                COMMENT ON COLUMN task_clip_drafts.framing_mode_override IS 'Per-draft framing override: auto, prefer_face, or fixed_position.'
                 """
             )
         )

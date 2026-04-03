@@ -76,8 +76,21 @@ interface DraftClip {
     crop_confidence?: "high" | "medium" | "low" | "none" | string;
     suggested_crop_mode?: "face" | "center" | string;
     score_adjustment?: number;
+    sampled_frames?: number;
+    raw_face_frames?: number;
+    reliable_face_frames?: number;
+    detector_backend?: string;
+    detection_state?: "strong" | "weak" | "none" | string;
+    filter_reason_counts?: {
+      too_small?: number;
+      too_large?: number;
+      low_confidence?: number;
+      off_frame?: number;
+    } | null;
+    face_detection_mode?: "balanced" | "more_faces" | string;
+    fallback_crop_position?: "center" | "left_center" | "right_center" | string;
   } | null;
-  framing_mode_override?: "auto" | "prefer_face" | "disable_face_crop" | string;
+  framing_mode_override?: "auto" | "prefer_face" | "fixed_position" | string;
   created_at?: string;
   updated_at?: string;
 }
@@ -142,17 +155,45 @@ interface TaskProgressMetadata extends TranscriptProgressMetadata {
   success?: boolean;
 }
 
-type FramingModeOverride = "auto" | "prefer_face" | "disable_face_crop";
+type FramingModeOverride = "auto" | "prefer_face" | "fixed_position";
 type FramingFilter = "all" | "best" | "weak" | "none";
 
 function normalizeFramingModeOverride(value: unknown): FramingModeOverride {
-  if (value === "prefer_face" || value === "disable_face_crop") {
+  if (value === "disable_face_crop") {
+    return "fixed_position";
+  }
+  if (value === "prefer_face" || value === "fixed_position") {
     return value;
   }
   return "auto";
 }
 
+function normalizeFallbackCropPosition(value: unknown): "center" | "left_center" | "right_center" {
+  if (value === "left_center" || value === "right_center") {
+    return value;
+  }
+  return "center";
+}
+
+function formatFallbackCropPosition(value: unknown): string {
+  const normalized = normalizeFallbackCropPosition(value);
+  if (normalized === "left_center") {
+    return "left-center";
+  }
+  if (normalized === "right_center") {
+    return "right-center";
+  }
+  return "center";
+}
+
 function getFramingStrength(metadata?: DraftClip["framing_metadata_json"]): "strong" | "weak" | "none" {
+  const detectionState = String(metadata?.detection_state || "");
+  if (detectionState === "strong") {
+    return "strong";
+  }
+  if (detectionState === "weak") {
+    return "weak";
+  }
   const confidence = String(metadata?.crop_confidence || "none");
   if (confidence === "high" || confidence === "medium") {
     return "strong";
@@ -182,16 +223,44 @@ function getFramingExplanation(metadata?: DraftClip["framing_metadata_json"]): s
   if (strength === "strong") {
     return "Face found consistently. Face crop is likely to work well.";
   }
-  if (Boolean(metadata?.face_detected)) {
-    return "Detection is unstable. Final render may still center-crop or drift.";
+  const rawFaceFrames = typeof metadata?.raw_face_frames === "number" ? metadata.raw_face_frames : 0;
+  const reliableFaceFrames = typeof metadata?.reliable_face_frames === "number" ? metadata.reliable_face_frames : 0;
+  const filterReasonCounts = metadata?.filter_reason_counts || null;
+  const tooSmall = typeof filterReasonCounts?.too_small === "number" ? filterReasonCounts.too_small : 0;
+  const lowConfidence = typeof filterReasonCounts?.low_confidence === "number" ? filterReasonCounts.low_confidence : 0;
+  if (rawFaceFrames > 0 && reliableFaceFrames === 0 && tooSmall > 0 && tooSmall >= lowConfidence) {
+    return "Faces were detected but mostly filtered out as too small.";
   }
-  return "No reliable face found. Center crop is likely.";
+  if (rawFaceFrames > 0) {
+    return "Face found, but framing confidence is low.";
+  }
+  return "No faces detected in sampled frames.";
+}
+
+function getFallbackCropNote(
+  framingModeOverride: FramingModeOverride,
+  metadata?: DraftClip["framing_metadata_json"],
+): string {
+  const fallbackPosition = formatFallbackCropPosition(metadata?.fallback_crop_position);
+  if (framingModeOverride === "fixed_position") {
+    return `Preview note: this clip will render with fixed ${fallbackPosition} fallback crop.`;
+  }
+  if (metadata?.suggested_crop_mode === "center" || getFramingStrength(metadata) === "none") {
+    return `Preview note: this clip is likely to use ${fallbackPosition} fallback crop.`;
+  }
+  return "Preview note: this clip is likely to use face-aware crop tracking.";
 }
 
 function getFramingWarnings(metadata?: DraftClip["framing_metadata_json"]): string[] {
   const warnings: string[] = [];
-  if (!metadata?.face_detected) {
-    warnings.push("No reliable face detected");
+  const rawFaceFrames = typeof metadata?.raw_face_frames === "number" ? metadata.raw_face_frames : 0;
+  const reliableFaceFrames = typeof metadata?.reliable_face_frames === "number" ? metadata.reliable_face_frames : 0;
+  const filterReasonCounts = metadata?.filter_reason_counts || null;
+  const tooSmall = typeof filterReasonCounts?.too_small === "number" ? filterReasonCounts.too_small : 0;
+  if (rawFaceFrames === 0) {
+    warnings.push("No faces detected in sampled frames");
+  } else if (reliableFaceFrames === 0 && tooSmall > 0) {
+    warnings.push("Faces mostly filtered out as too small");
   }
   if (typeof metadata?.dominant_face_count === "number" && metadata.dominant_face_count > 1) {
     warnings.push("Multiple competing faces");
@@ -199,7 +268,7 @@ function getFramingWarnings(metadata?: DraftClip["framing_metadata_json"]): stri
   if (typeof metadata?.primary_face_area_ratio === "number" && metadata.primary_face_area_ratio > 0 && metadata.primary_face_area_ratio < 0.012) {
     warnings.push("Face appears small in frame");
   }
-  if (Boolean(metadata?.face_detected) && String(metadata?.crop_confidence || "none") === "low") {
+  if ((rawFaceFrames > 0 || Boolean(metadata?.face_detected)) && String(metadata?.crop_confidence || "none") === "low") {
     warnings.push("Detection confidence is low");
   }
   return warnings;
@@ -1229,6 +1298,8 @@ export default function TaskPage() {
   const selectedNoFaceCount = draftClips.filter(
     (clip) => clip.is_selected && getFramingStrength(clip.framing_metadata_json) === "none",
   ).length;
+  const allDraftsMissingFaces =
+    draftClips.length > 0 && draftClips.every((clip) => getFramingStrength(clip.framing_metadata_json) === "none");
   const visibleDraftClips = useMemo(() => {
     if (framingFilter === "best") {
       return draftClips.filter((clip) => getFramingStrength(clip.framing_metadata_json) === "strong");
@@ -1701,6 +1772,15 @@ export default function TaskPage() {
                   </Alert>
                 ) : null}
 
+                {allDraftsMissingFaces ? (
+                  <Alert className="border-amber-300 bg-amber-50 text-amber-900 dark:border-amber-700/70 dark:bg-amber-950/30 dark:text-amber-100">
+                    <AlertCircle className="h-4 w-4" />
+                    <AlertDescription>
+                      No draft clips currently have a reliable face target. Fallback crop is still safe, but if the speaker is small or far from camera, switch Video settings to <span className="font-medium">More faces</span> or adjust the <span className="font-medium">Fallback crop position</span> and run the task again.
+                    </AlertDescription>
+                  </Alert>
+                ) : null}
+
                 <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
                   <div className="rounded-lg border border-slate-200 bg-slate-50/80 px-3 py-2.5 dark:border-slate-700 dark:bg-slate-800/70">
                     <label className="flex items-center gap-2 text-sm font-medium text-slate-900 dark:text-slate-100">
@@ -1942,10 +2022,31 @@ export default function TaskPage() {
                                           Face size {(framingMetadata.primary_face_area_ratio * 100).toFixed(1)}%
                                         </Badge>
                                       ) : null}
+                                      {typeof framingMetadata?.sampled_frames === "number" && framingMetadata.sampled_frames > 0 ? (
+                                        <Badge variant="outline">Samples {framingMetadata.sampled_frames}</Badge>
+                                      ) : null}
+                                      {typeof framingMetadata?.raw_face_frames === "number" && framingMetadata.raw_face_frames > 0 ? (
+                                        <Badge variant="outline">
+                                          Raw hits {framingMetadata.raw_face_frames}
+                                          {typeof framingMetadata?.reliable_face_frames === "number"
+                                            ? ` / Reliable ${framingMetadata.reliable_face_frames}`
+                                            : ""}
+                                        </Badge>
+                                      ) : null}
+                                      {typeof framingMetadata?.detector_backend === "string" &&
+                                      framingMetadata.detector_backend &&
+                                      framingMetadata.detector_backend !== "none" ? (
+                                        <Badge variant="outline">Detector {framingMetadata.detector_backend}</Badge>
+                                      ) : null}
                                     </div>
                                     <p className="text-xs text-slate-600 dark:text-slate-300">
                                       {getFramingExplanation(framingMetadata)}
                                     </p>
+                                    {(framingModeOverride === "fixed_position" || framingMetadata?.suggested_crop_mode === "center") && (
+                                      <p className="text-xs text-slate-500 dark:text-slate-400">
+                                        Fallback crop: {formatFallbackCropPosition(framingMetadata?.fallback_crop_position)}
+                                      </p>
+                                    )}
                                     {framingWarnings.length > 0 ? (
                                       <div className="flex flex-wrap gap-2">
                                     {framingWarnings.map((warning) => (
@@ -1978,13 +2079,11 @@ export default function TaskPage() {
                                       <SelectContent>
                                         <SelectItem value="auto">Auto</SelectItem>
                                         <SelectItem value="prefer_face">Prefer face</SelectItem>
-                                        <SelectItem value="disable_face_crop">Center crop</SelectItem>
+                                        <SelectItem value="fixed_position">Fixed position</SelectItem>
                                       </SelectContent>
                                     </Select>
                                     <p className="text-xs text-slate-500 dark:text-slate-400">
-                                      {framingModeOverride === "disable_face_crop" || framingMetadata?.suggested_crop_mode === "center"
-                                        ? "Preview note: this clip is likely to render with center crop."
-                                        : "Preview note: this clip is likely to use face-aware crop tracking."}
+                                      {getFallbackCropNote(framingModeOverride, framingMetadata)}
                                     </p>
                                   </div>
                                 </div>

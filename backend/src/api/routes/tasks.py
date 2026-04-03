@@ -55,7 +55,7 @@ MAX_WHISPER_CHUNK_OVERLAP_SECONDS = 120
 MIN_WHISPER_GPU_INDEX = 0
 MIN_TASK_TIMEOUT_SECONDS = 300
 MAX_TASK_TIMEOUT_SECONDS = 86400
-SUPPORTED_FRAMING_MODE_OVERRIDES = {"auto", "prefer_face", "disable_face_crop"}
+SUPPORTED_FRAMING_MODE_OVERRIDES = {"auto", "prefer_face", "fixed_position"}
 DRAFT_UPDATE_FIELDS = {"id", "start_time", "end_time", "edited_text", "is_selected", "framing_mode_override"}
 DRAFT_CREATE_FIELDS = {"start_time", "end_time", "edited_text", "is_selected", "framing_mode_override"}
 SUBTITLE_STYLE_FIELDS = set(DEFAULT_SUBTITLE_STYLE.keys())
@@ -96,6 +96,8 @@ def _resolve_review_before_render_enabled(raw: object) -> bool:
 
 def _resolve_framing_mode_override(raw: object) -> str:
     normalized = str(raw or "auto").strip().lower()
+    if normalized == "disable_face_crop":
+        normalized = "fixed_position"
     if normalized not in SUPPORTED_FRAMING_MODE_OVERRIDES:
         raise HTTPException(
             status_code=400,
@@ -1880,6 +1882,7 @@ async def create_task_draft_clip(task_id: str, request: Request, db: AsyncSessio
             end_time=end_time,
             source_url=source_url,
             source_type=source_type,
+            user_id=str(task.get("user_id") or user_id),
             edited_text=data.get("edited_text"),
             is_selected=(
                 _coerce_bool(data.get("is_selected"), default=False)
@@ -1889,7 +1892,7 @@ async def create_task_draft_clip(task_id: str, request: Request, db: AsyncSessio
             framing_mode_override=(
                 _resolve_framing_mode_override(data.get("framing_mode_override"))
                 if "framing_mode_override" in data
-                else "auto"
+                else None
             ),
         )
         return {

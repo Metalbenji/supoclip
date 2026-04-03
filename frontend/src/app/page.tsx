@@ -173,6 +173,7 @@ export default function Home() {
   const [fontUploadMessage, setFontUploadMessage] = useState<string | null>(null);
   const [fontUploadError, setFontUploadError] = useState<string | null>(null);
   const [showAdvancedOptions, setShowAdvancedOptions] = useState(false);
+  const [reviewBeforeRenderEnabled, setReviewBeforeRenderEnabled] = useState(true);
   const [transitionsEnabled, setTransitionsEnabled] = useState(false);
   const [timelineEditorEnabled, setTimelineEditorEnabled] = useState(true);
   const [transcriptionProvider, setTranscriptionProvider] = useState<"local" | "assemblyai">("local");
@@ -284,6 +285,7 @@ export default function Home() {
             shadowBlur?: unknown;
             shadowOffsetX?: unknown;
             shadowOffsetY?: unknown;
+            reviewBeforeRenderEnabled?: unknown;
             transitionsEnabled?: unknown;
             timelineEditorEnabled?: unknown;
             transcriptionProvider?: unknown;
@@ -315,6 +317,9 @@ export default function Home() {
           setShadowBlur(normalizedFontStyle.shadowBlur);
           setShadowOffsetX(normalizedFontStyle.shadowOffsetX);
           setShadowOffsetY(normalizedFontStyle.shadowOffsetY);
+          setReviewBeforeRenderEnabled(
+            typeof data.reviewBeforeRenderEnabled === "boolean" ? data.reviewBeforeRenderEnabled : true,
+          );
           setTransitionsEnabled(Boolean(data.transitionsEnabled));
           setTimelineEditorEnabled(
             typeof data.timelineEditorEnabled === "boolean" ? data.timelineEditorEnabled : true,
@@ -649,7 +654,7 @@ export default function Home() {
             url: videoUrl,
             title: null
           },
-          review_before_render_enabled: true,
+          review_before_render_enabled: reviewBeforeRenderEnabled,
           timeline_editor_enabled: timelineEditorEnabled,
           font_options: {
             font_family: fontFamily,

@@ -447,18 +447,35 @@ class VideoService:
     async def analyze_segments_framing(
         video_path: Path,
         segments: List[Dict[str, Any]],
+        face_detection_mode: str = "balanced",
+        fallback_crop_position: str = "center",
     ) -> List[Dict[str, Any]]:
         analyze_segment_framing = VideoService._video_utils_attr("analyze_segment_framing_batch")
-        return await run_in_thread(analyze_segment_framing, video_path, segments)
+        return await run_in_thread(
+            analyze_segment_framing,
+            video_path,
+            segments,
+            face_detection_mode,
+            fallback_crop_position,
+        )
 
     @staticmethod
     async def analyze_single_segment_framing(
         video_path: Path,
         start_time: str,
         end_time: str,
+        face_detection_mode: str = "balanced",
+        fallback_crop_position: str = "center",
     ) -> Dict[str, Any]:
         analyze_segment_framing = VideoService._video_utils_attr("analyze_single_segment_framing")
-        return await run_in_thread(analyze_segment_framing, video_path, start_time, end_time)
+        return await run_in_thread(
+            analyze_segment_framing,
+            video_path,
+            start_time,
+            end_time,
+            face_detection_mode,
+            fallback_crop_position,
+        )
 
     @staticmethod
     def determine_source_type(url: str) -> str:
@@ -1009,6 +1026,9 @@ class VideoService:
         ai_request_options: Optional[Dict[str, Any]] = None,
         transcription_options: Optional[Dict[str, Any]] = None,
         ai_focus_tags: Optional[List[str]] = None,
+        default_framing_mode: str = "auto",
+        face_detection_mode: str = "balanced",
+        fallback_crop_position: str = "center",
         progress_callback: Optional[callable] = None,
         cancel_check: Optional[Callable[[], Awaitable[None]]] = None,
     ) -> Dict[str, Any]:
@@ -1143,6 +1163,7 @@ class VideoService:
                 "text": segment.text,
                 "relevance_score": segment.relevance_score,
                 "reasoning": segment.reasoning,
+                "framing_mode_override": default_framing_mode,
             }
             for segment in relevant_parts.most_relevant_segments
         ]
@@ -1155,10 +1176,19 @@ class VideoService:
                         "Evaluating clip framing...",
                         {"stage": "analysis", "stage_progress": 60, "overall_progress": 60},
                     )
-                framing_results = await VideoService.analyze_segments_framing(video_path, segments_json)
+                framing_results = await VideoService.analyze_segments_framing(
+                    video_path,
+                    segments_json,
+                    face_detection_mode=face_detection_mode,
+                    fallback_crop_position=fallback_crop_position,
+                )
                 for segment, framing_metadata in zip(segments_json, framing_results):
                     metadata = dict(framing_metadata or {})
+                    metadata["fallback_crop_position"] = str(
+                        metadata.get("fallback_crop_position") or fallback_crop_position or "center"
+                    )
                     segment["framing_metadata"] = metadata
+                    segment["framing_mode_override"] = default_framing_mode
                     segment["review_score"] = round(
                         max(0.0, min(1.0, float(segment.get("relevance_score") or 0.0) + float(metadata.get("score_adjustment") or 0.0))),
                         4,
@@ -1172,7 +1202,10 @@ class VideoService:
             except Exception as framing_error:
                 logger.warning("Failed to evaluate framing metadata: %s", framing_error)
                 for segment in segments_json:
-                    segment["framing_metadata"] = {}
+                    segment["framing_metadata"] = {
+                        "fallback_crop_position": str(fallback_crop_position or "center"),
+                    }
+                    segment["framing_mode_override"] = default_framing_mode
                     segment["review_score"] = round(float(segment.get("relevance_score") or 0.0), 4)
 
         if progress_callback:
@@ -1270,6 +1303,9 @@ class VideoService:
         ai_request_options: Optional[Dict[str, Any]] = None,
         transcription_options: Optional[Dict[str, Any]] = None,
         ai_focus_tags: Optional[List[str]] = None,
+        default_framing_mode: str = "auto",
+        face_detection_mode: str = "balanced",
+        fallback_crop_position: str = "center",
         progress_callback: Optional[callable] = None,
         cancel_check: Optional[Callable[[], Awaitable[None]]] = None,
         filename_prefix: Optional[str] = None,
@@ -1294,6 +1330,9 @@ class VideoService:
                 ai_request_options=ai_request_options,
                 transcription_options=transcription_options,
                 ai_focus_tags=ai_focus_tags,
+                default_framing_mode=default_framing_mode,
+                face_detection_mode=face_detection_mode,
+                fallback_crop_position=fallback_crop_position,
                 progress_callback=progress_callback,
                 cancel_check=cancel_check,
             )

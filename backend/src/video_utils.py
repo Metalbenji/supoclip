@@ -46,10 +46,28 @@ _whisper_model_lock = threading.Lock()
 _face_model_path_lock = threading.Lock()
 _face_model_path_cache: Optional[Path] = None
 _mediapipe_detector_tls = threading.local()
-SUPPORTED_FRAMING_MODE_OVERRIDES = ("auto", "prefer_face", "disable_face_crop")
+SUPPORTED_FRAMING_MODE_OVERRIDES = ("auto", "prefer_face", "fixed_position")
+SUPPORTED_FACE_DETECTION_MODES = ("balanced", "more_faces")
+SUPPORTED_FALLBACK_CROP_POSITIONS = ("center", "left_center", "right_center")
 FRAMING_SCORE_BONUS_HIGH = 0.06
 FRAMING_SCORE_BONUS_MEDIUM = 0.03
 FRAMING_MULTI_FACE_PENALTY_MAX = 0.02
+
+
+def _normalize_face_detection_mode(value: Any) -> str:
+    normalized = str(value or "balanced").strip().lower()
+    if normalized == "center_only":
+        return "balanced"
+    if normalized not in SUPPORTED_FACE_DETECTION_MODES:
+        return "balanced"
+    return normalized
+
+
+def _normalize_fallback_crop_position(value: Any) -> str:
+    normalized = str(value or "center").strip().lower()
+    if normalized not in SUPPORTED_FALLBACK_CROP_POSITIONS:
+        return "center"
+    return normalized
 
 class VideoProcessor:
     """Handles video processing operations with optimized settings."""
@@ -1000,6 +1018,28 @@ def _get_default_center_crop_offsets(
     return round_to_even(x_offset), round_to_even(y_offset)
 
 
+def _get_fallback_crop_offsets(
+    original_width: int,
+    original_height: int,
+    crop_width: int,
+    crop_height: int,
+    fallback_crop_position: str = "center",
+) -> Tuple[int, int]:
+    normalized_position = _normalize_fallback_crop_position(fallback_crop_position)
+    max_x = max(0, original_width - crop_width)
+    y_offset = (original_height - crop_height) // 2 if original_height > crop_height else 0
+    if max_x <= 0:
+        return round_to_even(0), round_to_even(y_offset)
+
+    if normalized_position == "left_center":
+        x_offset = int(round(max_x * 0.25))
+    elif normalized_position == "right_center":
+        x_offset = int(round(max_x * 0.75))
+    else:
+        x_offset = max_x // 2
+    return round_to_even(max(0, min(x_offset, max_x))), round_to_even(y_offset)
+
+
 def _get_face_detection_sample_times(start_time: float, end_time: float) -> List[float]:
     duration = max(0.0, end_time - start_time)
     if duration <= 0:
@@ -1024,8 +1064,10 @@ def _collect_face_detection_samples(
     video_clip: VideoFileClip,
     start_time: float,
     end_time: float,
+    face_detection_mode: str = "balanced",
 ) -> List[Dict[str, Any]]:
     samples: List[Dict[str, Any]] = []
+    normalized_face_detection_mode = _normalize_face_detection_mode(face_detection_mode)
 
     try:
         mp_face_detection, mp_detection_backend, mp_module = _get_thread_mediapipe_face_detector()
@@ -1049,6 +1091,7 @@ def _collect_face_detection_samples(
                 frame = video_clip.get_frame(sample_time)
                 height, width = frame.shape[:2]
                 detected_faces: List[Tuple[int, int, int, int, float]] = []
+                detector_backend = "none"
 
                 if mp_face_detection is not None:
                     try:
@@ -1075,6 +1118,8 @@ def _collect_face_detection_samples(
                                     confidence = float(detection.categories[0].score)
                                 if w > 30 and h > 30:
                                     detected_faces.append((x, y, w, h, confidence))
+                            if detected_faces:
+                                detector_backend = "mediapipe_tasks"
                         else:
                             results = mp_face_detection.process(frame)
                             if results.detections:
@@ -1087,6 +1132,8 @@ def _collect_face_detection_samples(
                                     h = int(bbox.height * height)
                                     if w > 30 and h > 30:
                                         detected_faces.append((x, y, w, h, confidence))
+                            if detected_faces:
+                                detector_backend = "mediapipe_solutions"
                     except Exception as exc:
                         logger.warning("MediaPipe detection failed for frame at %ss: %s", sample_time, exc)
 
@@ -1108,6 +1155,8 @@ def _collect_face_detection_samples(
                             h = y2 - y1
                             if w > 30 and h > 30:
                                 detected_faces.append((x1, y1, w, h, confidence))
+                        if detected_faces:
+                            detector_backend = "opencv_dnn"
                     except Exception as exc:
                         logger.warning("DNN detection failed for frame at %ss: %s", sample_time, exc)
 
@@ -1127,15 +1176,41 @@ def _collect_face_detection_samples(
                             relative_size = face_area / (width * height)
                             confidence = min(0.9, 0.3 + relative_size * 2)
                             detected_faces.append((x, y, w, h, confidence))
+                        if detected_faces:
+                            detector_backend = "haar"
                     except Exception as exc:
                         logger.warning("Haar cascade detection failed for frame at %ss: %s", sample_time, exc)
 
                 frame_area = max(1, width * height)
                 qualified_faces: List[Dict[str, Any]] = []
+                rejected_reason_counts = {
+                    "too_small": 0,
+                    "too_large": 0,
+                    "low_confidence": 0,
+                    "off_frame": 0,
+                }
+                min_area_ratio = 0.0035
+                min_confidence = 0.2
+                max_area_ratio = 0.35
+                if normalized_face_detection_mode == "more_faces":
+                    min_area_ratio = 0.0015
+                    min_confidence = 0.1
+                    max_area_ratio = 0.45
+
                 for (x, y, w, h, confidence) in detected_faces:
                     face_area = max(0, w * h)
                     relative_area = face_area / frame_area
-                    if not (0.005 < relative_area < 0.3):
+                    if x < 0 or y < 0 or (x + w) > width or (y + h) > height:
+                        rejected_reason_counts["off_frame"] += 1
+                        continue
+                    if relative_area <= min_area_ratio:
+                        rejected_reason_counts["too_small"] += 1
+                        continue
+                    if relative_area >= max_area_ratio:
+                        rejected_reason_counts["too_large"] += 1
+                        continue
+                    if float(confidence) < min_confidence:
+                        rejected_reason_counts["low_confidence"] += 1
                         continue
                     face_center_x = x + w // 2
                     face_center_y = y + h // 2
@@ -1165,6 +1240,9 @@ def _collect_face_detection_samples(
                         "time": float(sample_time),
                         "frame_width": int(width),
                         "frame_height": int(height),
+                        "detector_backend": detector_backend,
+                        "raw_face_count": len(detected_faces),
+                        "rejected_reason_counts": rejected_reason_counts,
                         "faces": qualified_faces,
                         "primary_face": primary_face,
                     }
@@ -1206,7 +1284,11 @@ def _summarize_face_detection_samples(
     start_time: float,
     crop_width: int,
     crop_height: int,
+    face_detection_mode: str = "balanced",
+    fallback_crop_position: str = "center",
 ) -> Dict[str, Any]:
+    normalized_face_detection_mode = _normalize_face_detection_mode(face_detection_mode)
+    normalized_fallback_crop_position = _normalize_fallback_crop_position(fallback_crop_position)
     if not samples:
         return {
             "face_detected": False,
@@ -1217,6 +1299,19 @@ def _summarize_face_detection_samples(
             "crop_confidence": "none",
             "suggested_crop_mode": "center",
             "score_adjustment": 0.0,
+            "sampled_frames": 0,
+            "raw_face_frames": 0,
+            "reliable_face_frames": 0,
+            "detector_backend": "none",
+            "detection_state": "none",
+            "filter_reason_counts": {
+                "too_small": 0,
+                "too_large": 0,
+                "low_confidence": 0,
+                "off_frame": 0,
+            },
+            "face_detection_mode": normalized_face_detection_mode,
+            "fallback_crop_position": normalized_fallback_crop_position,
             "face_centers": [],
             "tracking_points": [],
         }
@@ -1226,15 +1321,33 @@ def _summarize_face_detection_samples(
     face_counts: List[int] = []
     face_centers: List[Tuple[int, int, int, float]] = []
     tracking_points: List[Dict[str, Any]] = []
-    face_frames = 0
+    raw_face_frames = 0
+    reliable_face_frames = 0
     multi_face_frames = 0
+    detector_backend_counts: Dict[str, int] = {}
+    filter_reason_counts = {
+        "too_small": 0,
+        "too_large": 0,
+        "low_confidence": 0,
+        "off_frame": 0,
+    }
 
     for sample in samples:
+        backend_name = str(sample.get("detector_backend") or "none")
+        if backend_name != "none":
+            detector_backend_counts[backend_name] = detector_backend_counts.get(backend_name, 0) + 1
+
+        for key in filter_reason_counts:
+            filter_reason_counts[key] += int((sample.get("rejected_reason_counts") or {}).get(key) or 0)
+
+        if int(sample.get("raw_face_count") or 0) > 0:
+            raw_face_frames += 1
+
         faces = list(sample.get("faces") or [])
         if not faces:
             continue
 
-        face_frames += 1
+        reliable_face_frames += 1
         face_count = len(faces)
         face_counts.append(face_count)
         if face_count > 1:
@@ -1265,9 +1378,16 @@ def _summarize_face_detection_samples(
     if len(face_centers) > 2:
         face_centers = filter_face_outliers(face_centers)
 
-    face_detection_rate = round(face_frames / sample_count, 4) if sample_count > 0 else 0.0
+    face_detection_rate = round(raw_face_frames / sample_count, 4) if sample_count > 0 else 0.0
+    reliable_face_rate = round(reliable_face_frames / sample_count, 4) if sample_count > 0 else 0.0
     multi_face_frames_rate = round(multi_face_frames / sample_count, 4) if sample_count > 0 else 0.0
     primary_face_area_ratio = round(float(np.mean(primary_area_ratios)), 4) if primary_area_ratios else None
+    detector_backend = "none"
+    if detector_backend_counts:
+        detector_backend = max(
+            detector_backend_counts.items(),
+            key=lambda item: (item[1], item[0]),
+        )[0]
 
     dominant_face_count = 0
     if face_counts:
@@ -1275,32 +1395,37 @@ def _summarize_face_detection_samples(
         dominant_face_count = int(unique_counts[int(np.argmax(count_totals))])
 
     crop_confidence = "none"
-    if face_frames > 0:
+    if reliable_face_frames > 0:
         crop_confidence = "low"
         if (
             dominant_face_count == 1
-            and face_detection_rate >= 0.6
+            and reliable_face_rate >= 0.6
             and (primary_face_area_ratio or 0.0) >= 0.02
             and multi_face_frames_rate <= 0.15
         ):
             crop_confidence = "high"
         elif (
             dominant_face_count == 1
-            and face_detection_rate >= 0.35
-            and (primary_face_area_ratio or 0.0) >= 0.01
+            and reliable_face_rate >= 0.35
+            and (primary_face_area_ratio or 0.0) >= (0.008 if normalized_face_detection_mode == "more_faces" else 0.01)
             and multi_face_frames_rate <= 0.35
         ):
             crop_confidence = "medium"
 
     suggested_crop_mode = "face" if crop_confidence in {"high", "medium"} else "center"
+    detection_state = "none"
+    if crop_confidence in {"high", "medium"}:
+        detection_state = "strong"
+    elif raw_face_frames > 0:
+        detection_state = "weak"
 
     score_adjustment = 0.0
-    if dominant_face_count == 1 and face_detection_rate >= 0.35:
+    if dominant_face_count == 1 and reliable_face_rate >= 0.35:
         if crop_confidence == "high":
             score_adjustment += FRAMING_SCORE_BONUS_HIGH
         elif crop_confidence == "medium":
             score_adjustment += FRAMING_SCORE_BONUS_MEDIUM
-    if multi_face_frames_rate > 0.25:
+    if reliable_face_frames > 0 and multi_face_frames_rate > 0.25:
         score_adjustment -= min(FRAMING_MULTI_FACE_PENALTY_MAX, round(multi_face_frames_rate * 0.05, 4))
 
     x_offset, y_offset = _calculate_weighted_crop_offsets(
@@ -1329,7 +1454,7 @@ def _summarize_face_detection_samples(
         )
 
     return {
-        "face_detected": bool(face_frames > 0),
+        "face_detected": bool(raw_face_frames > 0),
         "face_detection_rate": face_detection_rate,
         "primary_face_area_ratio": primary_face_area_ratio,
         "dominant_face_count": dominant_face_count,
@@ -1337,6 +1462,14 @@ def _summarize_face_detection_samples(
         "crop_confidence": crop_confidence,
         "suggested_crop_mode": suggested_crop_mode,
         "score_adjustment": round(score_adjustment, 4),
+        "sampled_frames": sample_count,
+        "raw_face_frames": raw_face_frames,
+        "reliable_face_frames": reliable_face_frames,
+        "detector_backend": detector_backend,
+        "detection_state": detection_state,
+        "filter_reason_counts": filter_reason_counts,
+        "face_detection_mode": normalized_face_detection_mode,
+        "fallback_crop_position": normalized_fallback_crop_position,
         "face_centers": face_centers,
         "tracking_points": processed_tracking_points,
         "fixed_crop_offsets": (x_offset, y_offset),
@@ -1412,13 +1545,35 @@ def analyze_clip_framing(
     start_time: float,
     end_time: float,
     target_ratio: float = 9 / 16,
+    face_detection_mode: str = "balanced",
+    fallback_crop_position: str = "center",
 ) -> Dict[str, Any]:
     original_width, original_height = video_clip.size
     crop_width, crop_height = _get_target_crop_dimensions(original_width, original_height, target_ratio)
-    samples = _collect_face_detection_samples(video_clip, start_time, end_time)
-    summary = _summarize_face_detection_samples(samples, start_time, crop_width, crop_height)
-    default_x, default_y = _get_default_center_crop_offsets(original_width, original_height, crop_width, crop_height)
-    fixed_crop_offsets = summary.get("fixed_crop_offsets") or (default_x, default_y)
+    normalized_face_detection_mode = _normalize_face_detection_mode(face_detection_mode)
+    normalized_fallback_crop_position = _normalize_fallback_crop_position(fallback_crop_position)
+    samples = _collect_face_detection_samples(
+        video_clip,
+        start_time,
+        end_time,
+        face_detection_mode=normalized_face_detection_mode,
+    )
+    summary = _summarize_face_detection_samples(
+        samples,
+        start_time,
+        crop_width,
+        crop_height,
+        face_detection_mode=normalized_face_detection_mode,
+        fallback_crop_position=normalized_fallback_crop_position,
+    )
+    fallback_offsets = _get_fallback_crop_offsets(
+        original_width,
+        original_height,
+        crop_width,
+        crop_height,
+        normalized_fallback_crop_position,
+    )
+    fixed_crop_offsets = summary.get("fixed_crop_offsets") or fallback_offsets
 
     framing_metadata = {
         "face_detected": bool(summary.get("face_detected")),
@@ -1429,6 +1584,14 @@ def analyze_clip_framing(
         "crop_confidence": str(summary.get("crop_confidence") or "none"),
         "suggested_crop_mode": str(summary.get("suggested_crop_mode") or "center"),
         "score_adjustment": float(summary.get("score_adjustment") or 0.0),
+        "sampled_frames": int(summary.get("sampled_frames") or 0),
+        "raw_face_frames": int(summary.get("raw_face_frames") or 0),
+        "reliable_face_frames": int(summary.get("reliable_face_frames") or 0),
+        "detector_backend": str(summary.get("detector_backend") or "none"),
+        "detection_state": str(summary.get("detection_state") or "none"),
+        "filter_reason_counts": dict(summary.get("filter_reason_counts") or {}),
+        "face_detection_mode": str(summary.get("face_detection_mode") or normalized_face_detection_mode),
+        "fallback_crop_position": str(summary.get("fallback_crop_position") or normalized_fallback_crop_position),
     }
     return {
         "framing_metadata": framing_metadata,
@@ -1444,18 +1607,28 @@ def analyze_single_segment_framing(
     video_path: Union[Path, str],
     start_time: str,
     end_time: str,
+    face_detection_mode: str = "balanced",
+    fallback_crop_position: str = "center",
 ) -> Dict[str, Any]:
     start_seconds = parse_timestamp_to_seconds(start_time)
     end_seconds = parse_timestamp_to_seconds(end_time)
     if end_seconds <= start_seconds:
         return {}
     with VideoFileClip(str(video_path)) as video:
-        return analyze_clip_framing(video, start_seconds, end_seconds).get("framing_metadata", {})
+        return analyze_clip_framing(
+            video,
+            start_seconds,
+            end_seconds,
+            face_detection_mode=face_detection_mode,
+            fallback_crop_position=fallback_crop_position,
+        ).get("framing_metadata", {})
 
 
 def analyze_segment_framing_batch(
     video_path: Union[Path, str],
     segments: List[Dict[str, Any]],
+    face_detection_mode: str = "balanced",
+    fallback_crop_position: str = "center",
 ) -> List[Dict[str, Any]]:
     video_path = Path(video_path)
     results: List[Dict[str, Any]] = []
@@ -1467,7 +1640,16 @@ def analyze_segment_framing_batch(
                 if end_seconds <= start_seconds:
                     results.append({})
                     continue
-                analysis = analyze_clip_framing(video, start_seconds, end_seconds)
+                analysis = analyze_clip_framing(
+                    video,
+                    start_seconds,
+                    end_seconds,
+                    face_detection_mode=face_detection_mode,
+                    fallback_crop_position=(
+                        segment.get("fallback_crop_position")
+                        or fallback_crop_position
+                    ),
+                )
                 results.append(dict(analysis.get("framing_metadata") or {}))
             except Exception as exc:
                 logger.warning(
@@ -2262,33 +2444,60 @@ def create_optimized_clip(
         end_time = min(end_time, video.duration)
         clip = video.subclipped(start_time, end_time)
         framing_mode = str(framing_mode_override or "auto").strip().lower()
+        if framing_mode == "disable_face_crop":
+            framing_mode = "fixed_position"
         if framing_mode not in SUPPORTED_FRAMING_MODE_OVERRIDES:
             framing_mode = "auto"
 
         new_width, new_height = _get_target_crop_dimensions(video.w, video.h, 9 / 16)
-        center_x_offset, center_y_offset = _get_default_center_crop_offsets(video.w, video.h, new_width, new_height)
         effective_framing_metadata = dict(framing_metadata or {})
+        fallback_crop_position = _normalize_fallback_crop_position(
+            effective_framing_metadata.get("fallback_crop_position")
+        )
+        fallback_x_offset, fallback_y_offset = _get_fallback_crop_offsets(
+            video.w,
+            video.h,
+            new_width,
+            new_height,
+            fallback_crop_position,
+        )
         crop_mode = "center"
-        crop_reason = "disabled_by_override" if framing_mode == "disable_face_crop" else "no_reliable_face"
+        crop_reason = "fixed_position_override" if framing_mode == "fixed_position" else "no_reliable_face"
         crop_confidence = str(effective_framing_metadata.get("crop_confidence") or "none")
+        detection_state = str(effective_framing_metadata.get("detection_state") or "none")
+        face_detection_mode = _normalize_face_detection_mode(effective_framing_metadata.get("face_detection_mode"))
 
-        if framing_mode == "disable_face_crop":
+        if framing_mode == "fixed_position":
             cropped_clip = clip.cropped(
-                x1=center_x_offset,
-                y1=center_y_offset,
-                x2=center_x_offset + new_width,
-                y2=center_y_offset + new_height,
+                x1=fallback_x_offset,
+                y1=fallback_y_offset,
+                x2=fallback_x_offset + new_width,
+                y2=fallback_y_offset + new_height,
             )
         else:
-            framing_analysis = analyze_clip_framing(video, start_time, end_time, target_ratio=9 / 16)
+            framing_analysis = analyze_clip_framing(
+                video,
+                start_time,
+                end_time,
+                target_ratio=9 / 16,
+                face_detection_mode=face_detection_mode,
+                fallback_crop_position=fallback_crop_position,
+            )
             effective_framing_metadata = dict(framing_analysis.get("framing_metadata") or effective_framing_metadata)
             crop_confidence = str(effective_framing_metadata.get("crop_confidence") or "none")
+            detection_state = str(effective_framing_metadata.get("detection_state") or "none")
+            fallback_crop_position = _normalize_fallback_crop_position(
+                effective_framing_metadata.get("fallback_crop_position")
+            )
             tracking_points = list(framing_analysis.get("tracking_points") or [])
-            fixed_offsets = tuple(framing_analysis.get("fixed_crop_offsets") or (center_x_offset, center_y_offset))
+            fixed_offsets = tuple(
+                framing_analysis.get("fixed_crop_offsets")
+                or _get_fallback_crop_offsets(video.w, video.h, new_width, new_height, fallback_crop_position)
+            )
 
             should_use_face_crop = False
             if framing_mode == "prefer_face":
-                should_use_face_crop = bool(effective_framing_metadata.get("face_detected"))
+                should_use_face_crop = detection_state in {"weak", "strong"} or bool(effective_framing_metadata.get("face_detected"))
             elif crop_confidence in {"high", "medium"}:
                 should_use_face_crop = True
 
@@ -2301,21 +2510,24 @@ def create_optimized_clip(
                     (int(fixed_offsets[0]), int(fixed_offsets[1])),
                 )
                 crop_mode = "face-tracked" if tracking_points else "face-fixed"
-                crop_reason = crop_confidence
+                crop_reason = crop_confidence if crop_confidence != "none" else detection_state
             else:
                 cropped_clip = clip.cropped(
-                    x1=center_x_offset,
-                    y1=center_y_offset,
-                    x2=center_x_offset + new_width,
-                    y2=center_y_offset + new_height,
+                    x1=int(fixed_offsets[0]),
+                    y1=int(fixed_offsets[1]),
+                    x2=int(fixed_offsets[0]) + new_width,
+                    y2=int(fixed_offsets[1]) + new_height,
                 )
-                crop_reason = "low_confidence" if effective_framing_metadata.get("face_detected") else "no_reliable_face"
+                crop_mode = f"fallback-{fallback_crop_position}"
+                crop_reason = "low_confidence" if detection_state == "weak" else "no_reliable_face"
 
         logger.info(
-            "framing_mode=%s crop=%s confidence=%s reason=%s start=%.1fs end=%.1fs",
+            "framing_mode=%s crop=%s fallback=%s confidence=%s detection_state=%s reason=%s start=%.1fs end=%.1fs",
             framing_mode,
             crop_mode,
+            fallback_crop_position,
             crop_confidence,
+            detection_state,
             crop_reason,
             start_time,
             end_time,

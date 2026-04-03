@@ -49,6 +49,21 @@ class User(Base):
     default_transitions_enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("false"))
     default_review_before_render_enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("true"))
     default_timeline_editor_enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("true"))
+    default_framing_mode: Mapped[str] = mapped_column(
+        String(32),
+        nullable=False,
+        server_default=text("'auto'"),
+    )
+    default_face_detection_mode: Mapped[str] = mapped_column(
+        String(20),
+        nullable=False,
+        server_default=text("'balanced'"),
+    )
+    default_fallback_crop_position: Mapped[str] = mapped_column(
+        String(20),
+        nullable=False,
+        server_default=text("'center'"),
+    )
     default_transcription_provider: Mapped[str] = mapped_column(
         String(20),
         nullable=False,
