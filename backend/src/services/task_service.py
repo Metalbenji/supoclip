@@ -65,6 +65,17 @@ REVIEW_TIMING_EDIT_MAX_BONUS = 0.12
 SUPPORTED_FRAMING_MODE_OVERRIDES = {"auto", "prefer_face", "fixed_position"}
 SUPPORTED_FACE_DETECTION_MODES = {"balanced", "more_faces"}
 SUPPORTED_FALLBACK_CROP_POSITIONS = {"center", "left_center", "right_center"}
+SUPPORTED_PROCESSING_PROFILES = {"fast_draft", "balanced", "best_quality", "stream_layout"}
+RETRYABLE_STAGE_ORDER = ("downloaded", "transcribed", "analyzed", "review_approved")
+FAILURE_HINTS = {
+    "download": "Check the source URL or uploaded file and retry from download.",
+    "transcription": "Adjust the transcription provider or model and retry from transcription.",
+    "ai_analysis": "Check AI provider settings or model availability and retry from analysis.",
+    "draft_validation": "Fix draft overlaps or review selections, then retry from the last valid stage.",
+    "render": "Review selected clips and retry rendering from the approved draft stage.",
+    "storage": "Check disk space or output permissions and retry.",
+    "system": "Inspect worker logs and runtime diagnostics, then retry from the latest checkpoint.",
+}
 _TIMESTAMP_SECONDS_RE = re.compile(r"^\d+(?:\.\d+)?$")
 DEFAULT_OLLAMA_VIABILITY_ATTEMPTS = 2
 MIN_OLLAMA_VIABILITY_ATTEMPTS = 1
@@ -181,9 +192,12 @@ class TaskService:
         transitions_enabled: bool = False,
         transcription_provider: str = "local",
         ai_provider: str = "openai",
+        ai_model: Optional[str] = None,
         ai_focus_tags: Optional[List[str]] = None,
         review_before_render_enabled: bool = True,
         timeline_editor_enabled: bool = True,
+        processing_profile: str = "balanced",
+        runtime_info_json: Optional[Dict[str, Any]] = None,
     ) -> str:
         """
         Create a new task with associated source.
@@ -220,6 +234,10 @@ class TaskService:
             transcription_provider=transcription_provider,
             ai_provider=ai_provider,
             ai_focus_tags=ai_focus_tags,
+            processing_profile=self._normalize_processing_profile(processing_profile),
+            runtime_info_json=runtime_info_json,
+            stage_checkpoint="queued",
+            retryable_from_stages=[],
             review_before_render_enabled=review_before_render_enabled,
             timeline_editor_enabled=timeline_editor_enabled,
         )
@@ -676,18 +694,31 @@ class TaskService:
     ) -> str:
         return cls._normalize_framing_mode_override(default_framing_mode)
 
-    async def _get_effective_user_video_preferences(self, user_id: Optional[str]) -> Dict[str, Any]:
+    async def _get_effective_user_video_preferences(
+        self,
+        user_id: Optional[str],
+        task_video_overrides: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
         if not user_id:
-            return {
+            preferences = {
                 "review_before_render_enabled": True,
                 "timeline_editor_enabled": True,
+                "default_processing_profile": "balanced",
                 "default_framing_mode": "auto",
                 "default_face_detection_mode": "balanced",
                 "default_fallback_crop_position": "center",
                 "effective_default_framing_mode": "auto",
             }
+        else:
+            preferences = await self.task_repo.get_user_default_video_preferences(self.db, user_id)
 
-        preferences = await self.task_repo.get_user_default_video_preferences(self.db, user_id)
+        if isinstance(task_video_overrides, dict):
+            preferences = {
+                **preferences,
+                "default_framing_mode": task_video_overrides.get("default_framing_mode", preferences.get("default_framing_mode")),
+                "default_face_detection_mode": task_video_overrides.get("face_detection_mode", preferences.get("default_face_detection_mode")),
+                "default_fallback_crop_position": task_video_overrides.get("fallback_crop_position", preferences.get("default_fallback_crop_position")),
+            }
         raw_detection_mode = str(preferences.get("default_face_detection_mode") or "balanced").strip().lower()
         default_framing_mode = self._normalize_framing_mode_override(preferences.get("default_framing_mode"))
         face_detection_mode = self._normalize_face_detection_mode(raw_detection_mode)
@@ -702,11 +733,197 @@ class TaskService:
             fallback_crop_position = "center"
         return {
             **preferences,
+            "default_processing_profile": self._normalize_processing_profile(
+                preferences.get("default_processing_profile")
+            ),
             "default_framing_mode": default_framing_mode,
             "default_face_detection_mode": face_detection_mode,
             "default_fallback_crop_position": fallback_crop_position,
             "effective_default_framing_mode": effective_default_framing_mode,
         }
+
+    @staticmethod
+    def _normalize_processing_profile(value: Any) -> str:
+        normalized = str(value or "balanced").strip().lower()
+        if normalized not in SUPPORTED_PROCESSING_PROFILES:
+            return "balanced"
+        return normalized
+
+    @staticmethod
+    def _normalize_stage_checkpoint(value: Any) -> str:
+        normalized = str(value or "queued").strip().lower()
+        supported = {"queued", "started", "downloaded", "transcribed", "analyzed", "review_approved", "completed", "failed"}
+        if normalized not in supported:
+            return "queued"
+        return normalized
+
+    @staticmethod
+    def _merge_runtime_info(base: Optional[Dict[str, Any]], update: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+        merged = dict(base or {})
+        for key, value in (update or {}).items():
+            if isinstance(value, dict) and isinstance(merged.get(key), dict):
+                merged[key] = TaskService._merge_runtime_info(merged.get(key), value)
+            else:
+                merged[key] = value
+        return merged
+
+    @staticmethod
+    def _compute_retryable_stages(
+        checkpoint: str,
+        *,
+        review_before_render_enabled: bool,
+        has_drafts: bool,
+        has_generated_clips: bool,
+    ) -> List[str]:
+        allowed: List[str] = []
+        normalized_checkpoint = TaskService._normalize_stage_checkpoint(checkpoint)
+        if normalized_checkpoint not in RETRYABLE_STAGE_ORDER:
+            return allowed
+        for stage in RETRYABLE_STAGE_ORDER:
+            if RETRYABLE_STAGE_ORDER.index(stage) <= RETRYABLE_STAGE_ORDER.index(normalized_checkpoint):
+                allowed.append(stage)
+        if not has_drafts and "analyzed" in allowed:
+            allowed.remove("analyzed")
+        if not (review_before_render_enabled and has_drafts) and "review_approved" in allowed:
+            allowed.remove("review_approved")
+        if has_generated_clips and "review_approved" not in allowed and review_before_render_enabled and has_drafts:
+            allowed.append("review_approved")
+        return allowed
+
+    @classmethod
+    def _classify_failure(cls, error: Exception) -> Tuple[str, str]:
+        message = str(error or "").strip()
+        lowered = message.lower()
+        if "download" in lowered or "youtube" in lowered or "source url" in lowered:
+            code = "download"
+        elif "transcrib" in lowered or "assemblyai" in lowered or "whisper" in lowered:
+            code = "transcription"
+        elif "ollama" in lowered or "openai" in lowered or "anthropic" in lowered or "google" in lowered or "glm" in lowered or "analysis" in lowered:
+            code = "ai_analysis"
+        elif "draft" in lowered or "overlap" in lowered or "selected draft clip" in lowered:
+            code = "draft_validation"
+        elif "render" in lowered or "subtitle" in lowered or "clip" in lowered:
+            code = "render"
+        elif "permission" in lowered or "disk" in lowered or "write" in lowered or "save" in lowered:
+            code = "storage"
+        else:
+            code = "system"
+        return code, FAILURE_HINTS[code]
+
+    def _build_draft_selection_rationale(self, draft: Dict[str, Any]) -> Dict[str, Any]:
+        metadata = draft.get("framing_metadata_json") if isinstance(draft.get("framing_metadata_json"), dict) else {}
+        transcript_relevance = round(float(draft.get("relevance_score") or 0.0), 3)
+        review_score = round(float(draft.get("review_score") or transcript_relevance), 3)
+        framing_quality = str(metadata.get("detection_state") or "none")
+        if framing_quality not in {"strong", "weak", "none"}:
+            framing_quality = "none"
+        hook_score = round(max(0.0, min(1.0, review_score - float(draft.get("feedback_score_adjustment") or 0.0))), 3)
+        feedback = draft.get("feedback_signals_json") if isinstance(draft.get("feedback_signals_json"), dict) else {}
+        review_adjustments: List[str] = []
+        if feedback.get("created_by_user"):
+            review_adjustments.append("manual clip")
+        if feedback.get("timing_changed"):
+            review_adjustments.append("trimmed")
+        if feedback.get("text_edited"):
+            review_adjustments.append("subtitle edited")
+        if feedback.get("deselected"):
+            review_adjustments.append("deselected")
+        return {
+            "transcript_relevance": transcript_relevance,
+            "framing_quality": framing_quality,
+            "hook_score": hook_score,
+            "review_adjustments": review_adjustments,
+        }
+
+    @staticmethod
+    def _build_preview_strip_url(task_id: str, draft_id: str) -> str:
+        return f"/tasks/{task_id}/draft-clips/{draft_id}/preview-strip"
+
+    def _draft_preview_strip_path(self, task_id: str, draft_id: str) -> Path:
+        return Path(config.temp_dir) / "draft-previews" / task_id / f"{draft_id}.jpg"
+
+    async def ensure_draft_preview_strip(
+        self,
+        task_id: str,
+        draft: Dict[str, Any],
+        *,
+        source_url: str,
+        source_type: str,
+        force_regenerate: bool = False,
+    ) -> Path:
+        preview_path = self._draft_preview_strip_path(task_id, str(draft["id"]))
+        preview_path.parent.mkdir(parents=True, exist_ok=True)
+        updated_at = str(draft.get("updated_at") or "")
+        if preview_path.exists() and not force_regenerate:
+            try:
+                existing_mtime = datetime.fromtimestamp(preview_path.stat().st_mtime).isoformat()
+                if not updated_at or existing_mtime >= updated_at:
+                    return preview_path
+            except Exception:
+                pass
+
+        video_path = await self.video_service.resolve_video_path(url=source_url, source_type=source_type)
+        await asyncio.to_thread(
+            self._generate_preview_strip,
+            video_path=video_path,
+            start_time=str(draft.get("start_time") or "00:00"),
+            end_time=str(draft.get("end_time") or "00:00"),
+            output_path=preview_path,
+        )
+        return preview_path
+
+    @classmethod
+    def _generate_preview_strip(
+        cls,
+        *,
+        video_path: Path,
+        start_time: str,
+        end_time: str,
+        output_path: Path,
+    ) -> None:
+        import cv2  # type: ignore
+        import numpy as np  # type: ignore
+
+        start_seconds = cls._parse_timestamp_to_seconds_strict(start_time)
+        end_seconds = cls._parse_timestamp_to_seconds_strict(end_time)
+        duration = max(0.25, end_seconds - start_seconds)
+        sample_offsets = (0.2, 0.5, 0.8)
+        capture = cv2.VideoCapture(str(video_path))
+        if not capture.isOpened():
+            raise ValueError(f"Unable to open source video for preview generation: {video_path}")
+
+        frames = []
+        try:
+            for offset in sample_offsets:
+                sample_seconds = start_seconds + (duration * offset)
+                capture.set(cv2.CAP_PROP_POS_MSEC, max(0.0, sample_seconds) * 1000.0)
+                ok, frame = capture.read()
+                if not ok or frame is None:
+                    continue
+                height, width = frame.shape[:2]
+                target_width = 320
+                target_height = max(1, int(round((target_width / max(1, width)) * height)))
+                resized = cv2.resize(frame, (target_width, target_height))
+                label = cls._format_seconds_to_timestamp(sample_seconds)
+                cv2.putText(
+                    resized,
+                    label,
+                    (10, max(24, target_height - 16)),
+                    cv2.FONT_HERSHEY_SIMPLEX,
+                    0.7,
+                    (255, 255, 255),
+                    2,
+                    cv2.LINE_AA,
+                )
+                frames.append(resized)
+        finally:
+            capture.release()
+
+        if not frames:
+            raise ValueError(f"Unable to extract preview frames from {video_path}")
+        strip = np.concatenate(frames, axis=1)
+        if not cv2.imwrite(str(output_path), strip):
+            raise ValueError(f"Failed to write preview strip to {output_path}")
 
     @staticmethod
     def _extract_framing_score_adjustment(draft: Dict[str, Any]) -> float:
@@ -1257,8 +1474,12 @@ class TaskService:
         cancel_check: Optional[Callable[[], Awaitable[None]]],
         user_id: Optional[str],
         update_progress: Callable[[int, str, Optional[Dict[str, Any]]], Awaitable[None]],
+        task_video_overrides: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
-        user_video_preferences = await self._get_effective_user_video_preferences(user_id)
+        user_video_preferences = await self._get_effective_user_video_preferences(
+            user_id,
+            task_video_overrides=task_video_overrides,
+        )
 
         (
             assembly_api_key,
@@ -1401,8 +1622,12 @@ class TaskService:
         user_id: Optional[str],
         update_progress: Callable[[int, str, Optional[Dict[str, Any]]], Awaitable[None]],
         render_filename_prefix: Optional[str] = None,
+        task_video_overrides: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
-        user_video_preferences = await self._get_effective_user_video_preferences(user_id)
+        user_video_preferences = await self._get_effective_user_video_preferences(
+            user_id,
+            task_video_overrides=task_video_overrides,
+        )
 
         (
             assembly_api_key,
@@ -1677,12 +1902,91 @@ class TaskService:
         try:
             logger.info(f"Starting processing for task {task_id} (render_from_drafts={render_from_drafts})")
 
-            await self.task_repo.update_task_status(
-                self.db,
-                task_id,
+            task_record = await self.task_repo.get_task_by_id(self.db, task_id)
+            review_before_render_enabled = bool((task_record or {}).get("review_before_render_enabled", True))
+            has_drafts = bool(render_from_drafts)
+            has_generated_clips = False
+            current_runtime_info = self._merge_runtime_info(
+                (task_record or {}).get("runtime_info") if isinstance((task_record or {}).get("runtime_info"), dict) else {},
+                {
+                    "runtime_scope": "task",
+                    "render_from_drafts": bool(render_from_drafts),
+                    "processing_started_at": datetime.utcnow().isoformat(),
+                    "current_stage": "setup",
+                },
+            )
+            current_checkpoint = "started"
+
+            async def persist_task_status(
+                status: str,
+                *,
+                progress: Optional[int] = None,
+                message: Optional[str] = None,
+                metadata: Optional[Dict[str, Any]] = None,
+                checkpoint: Optional[str] = None,
+                clear_failure: bool = False,
+                failure_code: Optional[str] = None,
+                failure_hint: Optional[str] = None,
+            ) -> None:
+                nonlocal current_runtime_info, current_checkpoint, has_drafts, has_generated_clips
+                normalized_metadata = dict(metadata or {})
+                inferred_checkpoint = checkpoint
+                stage_name = str(normalized_metadata.get("stage") or current_runtime_info.get("current_stage") or "setup")
+                if inferred_checkpoint is None:
+                    if status == "completed":
+                        inferred_checkpoint = "completed"
+                    elif status == "awaiting_review":
+                        inferred_checkpoint = "analyzed"
+                    elif status == "error":
+                        inferred_checkpoint = "failed"
+                    elif stage_name == "download" and int(normalized_metadata.get("stage_progress") or 0) >= 100:
+                        inferred_checkpoint = "downloaded"
+                    elif stage_name == "transcript" and int(normalized_metadata.get("stage_progress") or 0) >= 100:
+                        inferred_checkpoint = "transcribed"
+                    elif stage_name == "analysis" and int(normalized_metadata.get("stage_progress") or 0) >= 100:
+                        inferred_checkpoint = "analyzed"
+                    elif stage_name == "clips" and normalized_metadata.get("clip_started"):
+                        inferred_checkpoint = "review_approved" if review_before_render_enabled or render_from_drafts else "analyzed"
+                    else:
+                        inferred_checkpoint = current_checkpoint
+
+                current_checkpoint = self._normalize_stage_checkpoint(inferred_checkpoint)
+                current_runtime_info = self._merge_runtime_info(
+                    current_runtime_info,
+                    {
+                        "status": status,
+                        "latest_message": message,
+                        "current_stage": stage_name,
+                        "latest_stage_metadata": normalized_metadata,
+                        "stage_label": normalized_metadata.get("stage_label"),
+                    },
+                )
+                await self.task_repo.update_task_status(
+                    self.db,
+                    task_id,
+                    status,
+                    progress=progress,
+                    progress_message=message,
+                    runtime_info=current_runtime_info,
+                    failure_code=failure_code,
+                    failure_hint=failure_hint,
+                    stage_checkpoint=current_checkpoint,
+                    retryable_from_stages=self._compute_retryable_stages(
+                        current_checkpoint,
+                        review_before_render_enabled=review_before_render_enabled,
+                        has_drafts=has_drafts,
+                        has_generated_clips=has_generated_clips,
+                    ),
+                    clear_failure=clear_failure,
+                )
+
+            await persist_task_status(
                 "processing",
                 progress=0,
-                progress_message="Starting...",
+                message="Starting...",
+                metadata={"stage": "setup", "stage_progress": 0, "overall_progress": 0},
+                checkpoint="started",
+                clear_failure=True,
             )
             if cancel_check:
                 await cancel_check()
@@ -1697,12 +2001,12 @@ class TaskService:
                 async with progress_lock:
                     if cancel_check:
                         await cancel_check()
-                    await self.task_repo.update_task_status(
-                        self.db,
-                        task_id,
+                    await persist_task_status(
                         "processing",
                         progress=progress,
-                        progress_message=message,
+                        message=message,
+                        metadata=metadata,
+                        clear_failure=True,
                     )
                     if progress_callback:
                         await progress_callback(progress, message, metadata)
@@ -1723,15 +2027,16 @@ class TaskService:
                     update_progress=update_progress,
                 )
 
-            task_record = await self.task_repo.get_task_by_id(self.db, task_id)
-            review_before_render_enabled = bool(
-                (task_record or {}).get("review_before_render_enabled", True)
-            )
             ai_focus_tags = list((task_record or {}).get("ai_focus_tags") or [])
             render_filename_prefix = self._build_render_filename_prefix()
+            task_video_overrides = (
+                dict((task_record or {}).get("runtime_info", {}).get("video_preferences_override"))
+                if isinstance((task_record or {}).get("runtime_info", {}).get("video_preferences_override"), dict)
+                else None
+            )
 
             if review_before_render_enabled:
-                return await self._process_review_enabled_analysis(
+                result = await self._process_review_enabled_analysis(
                     task_id=task_id,
                     url=url,
                     source_type=source_type,
@@ -1746,9 +2051,20 @@ class TaskService:
                     cancel_check=cancel_check,
                     user_id=user_id,
                     update_progress=update_progress,
+                    task_video_overrides=task_video_overrides,
                 )
+                has_drafts = bool(int(result.get("drafts_count") or 0) > 0)
+                await persist_task_status(
+                    "awaiting_review",
+                    progress=int(result.get("final_progress") or 100),
+                    message=str(result.get("final_message") or "Analysis complete. Awaiting review."),
+                    metadata={"stage": "analysis", "stage_progress": 100, "overall_progress": int(result.get("final_progress") or 100)},
+                    checkpoint="analyzed",
+                    clear_failure=True,
+                )
+                return result
 
-            return await self._process_non_review_pipeline(
+            result = await self._process_non_review_pipeline(
                 task_id=task_id,
                 url=url,
                 source_type=source_type,
@@ -1768,20 +2084,162 @@ class TaskService:
                 user_id=user_id,
                 update_progress=update_progress,
                 render_filename_prefix=render_filename_prefix,
+                task_video_overrides=task_video_overrides,
             )
+            has_generated_clips = bool(int(result.get("clips_count") or 0) > 0)
+            await persist_task_status(
+                "completed",
+                progress=int(result.get("final_progress") or 100),
+                message=str(result.get("final_message") or "Complete!"),
+                metadata={"stage": "finalizing", "stage_progress": 100, "overall_progress": int(result.get("final_progress") or 100)},
+                checkpoint="completed",
+                clear_failure=True,
+            )
+            return result
 
         except Exception as e:
             logger.error(f"Error processing task {task_id}: {e}")
+            failure_code, failure_hint = self._classify_failure(e)
             await self.task_repo.update_task_status(
                 self.db,
                 task_id,
                 "error",
                 progress_message=str(e),
+                runtime_info=current_runtime_info if "current_runtime_info" in locals() else None,
+                failure_code=failure_code,
+                failure_hint=failure_hint,
+                stage_checkpoint="failed",
+                retryable_from_stages=self._compute_retryable_stages(
+                    self._normalize_stage_checkpoint(
+                        current_checkpoint if "current_checkpoint" in locals() else "queued"
+                    ),
+                    review_before_render_enabled=review_before_render_enabled if "review_before_render_enabled" in locals() else True,
+                    has_drafts=has_drafts if "has_drafts" in locals() else False,
+                    has_generated_clips=has_generated_clips if "has_generated_clips" in locals() else False,
+                ),
             )
             raise
 
     async def get_task_draft_clips(self, task_id: str) -> List[Dict[str, Any]]:
-        return await self.draft_clip_repo.get_drafts_by_task(self.db, task_id)
+        task = await self.task_repo.get_task_by_id(self.db, task_id)
+        drafts = await self.draft_clip_repo.get_drafts_by_task(self.db, task_id)
+        if not task:
+            return drafts
+
+        for draft in drafts:
+            draft["preview_url"] = self._build_preview_strip_url(task_id, str(draft["id"]))
+            draft["selection_rationale"] = self._build_draft_selection_rationale(draft)
+        return drafts
+
+    async def get_runtime_overview(self) -> Dict[str, Any]:
+        from ..whisper_runtime import get_local_whisper_model_metadata, get_local_whisper_runtime_info
+        from ..workers.job_queue import JobQueue
+
+        pool = await JobQueue.get_pool()
+        queue_names = [
+            config.arq_local_queue_name,
+            config.arq_local_gpu_queue_name,
+            config.arq_assembly_queue_name,
+        ]
+        queue_stats: List[Dict[str, Any]] = []
+        for queue_name in queue_names:
+            queue_depth = int(await pool.zcard(queue_name))
+            queue_stats.append({"queue_name": queue_name, "depth": queue_depth})
+
+        worker_heartbeats: List[Dict[str, Any]] = []
+        async for raw_key in pool.scan_iter(match="supoclip:worker-heartbeat:*"):
+            key = raw_key.decode("utf-8") if isinstance(raw_key, bytes) else str(raw_key)
+            payload = await pool.get(key)
+            if not payload:
+                continue
+            try:
+                parsed = json.loads(payload)
+            except Exception:
+                parsed = {"raw": payload}
+            parsed["key"] = key
+            worker_heartbeats.append(parsed)
+        worker_heartbeats.sort(key=lambda item: str(item.get("queue_name") or item.get("worker_name") or ""))
+
+        retention_policy = {
+            "downloads_max_age_hours": 24,
+            "transcript_cache_max_age_hours": 72,
+            "waveform_cache_max_age_hours": 72,
+            "draft_preview_max_age_hours": 72,
+            "failed_task_artifacts_max_age_hours": 168,
+        }
+
+        return {
+            "workers": worker_heartbeats,
+            "queues": queue_stats,
+            "local_whisper_runtime": get_local_whisper_runtime_info(),
+            "local_whisper_models": get_local_whisper_model_metadata(),
+            "recent_failures": await self.task_repo.get_recent_failed_tasks(self.db, limit=8),
+            "failure_summary": await self.task_repo.get_failure_summary(self.db, limit=8),
+            "retention_policy": retention_policy,
+        }
+
+    async def retry_task_from_stage(self, task_id: str, retry_from_stage: Optional[str]) -> Dict[str, Any]:
+        task = await self.task_repo.get_task_by_id(self.db, task_id)
+        if not task:
+            raise ValueError("Task not found")
+
+        requested_stage = self._normalize_stage_checkpoint(retry_from_stage or task.get("stage_checkpoint"))
+        allowed_stages = list(task.get("retryable_from_stages") or [])
+        if requested_stage == "review_approved":
+            requested_stage_key = "review_approved"
+        else:
+            requested_stage_key = requested_stage
+        if requested_stage_key not in allowed_stages:
+            raise ValueError(f"Task cannot be retried from stage '{requested_stage_key}'")
+
+        source_url = str(task.get("source_url") or "").strip()
+        source_type = str(task.get("source_type") or "").strip()
+        if not source_url or not source_type:
+            raise ValueError("Task source is missing")
+
+        render_from_drafts = requested_stage_key == "review_approved"
+        if requested_stage_key == "analyzed" and bool(task.get("review_before_render_enabled")):
+            draft_count = len(await self.draft_clip_repo.get_drafts_by_task(self.db, task_id))
+            if draft_count > 0:
+                await self.task_repo.update_task_status(
+                    self.db,
+                    task_id,
+                    "awaiting_review",
+                    progress=100,
+                    progress_message="Draft clips restored for review.",
+                    clear_failure=True,
+                    stage_checkpoint="analyzed",
+                    retryable_from_stages=self._compute_retryable_stages(
+                        "analyzed",
+                        review_before_render_enabled=True,
+                        has_drafts=True,
+                        has_generated_clips=bool((task.get("clips_count") or 0) > 0),
+                    ),
+                )
+                return {
+                    "task_id": task_id,
+                    "status": "awaiting_review",
+                    "retry_from_stage": requested_stage_key,
+                    "message": "Draft clips restored. Review and finalize when ready.",
+                }
+
+        await self.task_repo.update_task_status(
+            self.db,
+            task_id,
+            "queued",
+            progress=0,
+            progress_message=f"Queued retry from {requested_stage_key.replace('_', ' ')}...",
+            clear_failure=True,
+            stage_checkpoint=requested_stage_key,
+            retryable_from_stages=allowed_stages,
+        )
+        return {
+            "task_id": task_id,
+            "status": "queued",
+            "retry_from_stage": requested_stage_key,
+            "render_from_drafts": render_from_drafts,
+            "task": task,
+        }
 
     async def update_task_draft_clips(
         self,
@@ -1889,7 +2347,16 @@ class TaskService:
         ]
         self._validate_non_overlapping_draft_windows(proposed_drafts)
 
-        user_video_preferences = await self._get_effective_user_video_preferences(user_id)
+        task_record = await self.task_repo.get_task_by_id(self.db, task_id)
+        task_video_overrides = (
+            dict((task_record or {}).get("runtime_info", {}).get("video_preferences_override"))
+            if isinstance((task_record or {}).get("runtime_info", {}).get("video_preferences_override"), dict)
+            else None
+        )
+        user_video_preferences = await self._get_effective_user_video_preferences(
+            user_id,
+            task_video_overrides=task_video_overrides,
+        )
         source_video_path = await self.video_service.resolve_video_path(url=source_url, source_type=source_type)
         transcript_text = self._extract_text_from_transcript_cache(
             source_video_path,
@@ -1938,6 +2405,8 @@ class TaskService:
         draft = draft_map.get(created_id)
         if not draft:
             raise ValueError("Failed to create draft clip")
+        draft["preview_url"] = self._build_preview_strip_url(task_id, created_id)
+        draft["selection_rationale"] = self._build_draft_selection_rationale(draft)
         return draft
 
     async def delete_task_draft_clip(self, task_id: str, draft_id: str) -> None:
@@ -2753,6 +3222,23 @@ class TaskService:
         clips = await self.clip_repo.get_clips_by_task(self.db, task_id)
         task["clips"] = clips
         task["clips_count"] = len(clips)
+        task["diagnostics"] = {
+            "queue_target": task.get("runtime_info", {}).get("queue_target"),
+            "worker_type": task.get("runtime_info", {}).get("worker_type"),
+            "transcription": {
+                "provider": task.get("transcription_provider"),
+                "model": task.get("runtime_info", {}).get("whisper_model_size"),
+                "device_preference": task.get("runtime_info", {}).get("whisper_device"),
+            },
+            "ai": {
+                "provider": task.get("ai_provider"),
+                "model": task.get("runtime_info", {}).get("ai_model"),
+            },
+            "runtime_target": task.get("runtime_info", {}).get("runtime_target"),
+            "fallback_reason": task.get("runtime_info", {}).get("fallback_reason"),
+            "current_stage": task.get("runtime_info", {}).get("current_stage"),
+            "latest_stage_metadata": task.get("runtime_info", {}).get("latest_stage_metadata"),
+        }
 
         return task
 

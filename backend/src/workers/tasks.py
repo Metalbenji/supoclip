@@ -2,10 +2,29 @@
 Worker tasks - background jobs processed by arq workers.
 """
 import asyncio
+import json
 import logging
 from typing import Dict, Any, Optional
+from datetime import datetime, timezone
 
 logger = logging.getLogger(__name__)
+WORKER_HEARTBEAT_PREFIX = "supoclip:worker-heartbeat:"
+
+
+async def _write_worker_heartbeat(ctx: Dict[str, Any], *, queue_name: str) -> None:
+    from ..whisper_runtime import get_local_whisper_runtime_info
+
+    payload = {
+        "queue_name": queue_name,
+        "worker_name": "arq-worker",
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "runtime": get_local_whisper_runtime_info(),
+    }
+    await ctx["redis"].set(
+        f"{WORKER_HEARTBEAT_PREFIX}{queue_name}",
+        json.dumps(payload),
+        ex=300,
+    )
 
 
 class TaskCancelledError(Exception):
@@ -97,6 +116,7 @@ async def process_video_task(
     from ..workers.progress import ProgressTracker
 
     logger.info(f"Worker processing task {task_id}")
+    await _write_worker_heartbeat(ctx, queue_name=str(ctx.get("queue_name") or "unknown"))
 
     # Create progress tracker
     progress = ProgressTracker(ctx['redis'], task_id)
@@ -175,6 +195,9 @@ async def process_video_task(
                 task_id,
                 "error",
                 progress_message=message,
+                failure_code="system",
+                failure_hint="Increase the task timeout or retry from the latest checkpoint.",
+                stage_checkpoint="failed",
             )
             await progress.error(message)
             return {"task_id": task_id, "timed_out": True, "message": message}
@@ -187,6 +210,9 @@ async def process_video_task(
                 task_id,
                 "error",
                 progress_message=message,
+                failure_code="system",
+                failure_hint="Task was cancelled before completion.",
+                stage_checkpoint="failed",
             )
             await progress.error(message)
             return {"task_id": task_id, "cancelled": True, "message": message}
@@ -234,6 +260,8 @@ class WorkerSettings:
         from ..whisper_runtime import log_local_whisper_runtime_summary
 
         log_local_whisper_runtime_summary("worker_startup")
+        ctx["queue_name"] = WorkerSettings.queue_name
+        await _write_worker_heartbeat(ctx, queue_name=WorkerSettings.queue_name)
 
 
 from ..whisper_runtime import log_local_whisper_runtime_summary as _log_local_whisper_runtime_summary

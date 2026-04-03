@@ -10,6 +10,7 @@ This is the new main entry point with:
 from contextlib import asynccontextmanager
 from pathlib import Path
 import logging
+import asyncio
 
 from fastapi import FastAPI, Depends
 from fastapi.middleware.cors import CORSMiddleware
@@ -20,6 +21,8 @@ from .config import Config
 from .database import init_db, close_db, get_db
 from .workers.job_queue import JobQueue
 from .api.routes import tasks
+from .services.artifact_cleanup_service import ArtifactCleanupService
+from .database import AsyncSessionLocal
 
 # Ensure the log directory exists before configuring file logging.
 log_dir = Path("logs")
@@ -37,11 +40,26 @@ logging.basicConfig(
 
 logger = logging.getLogger(__name__)
 config = Config()
+cleanup_task: asyncio.Task | None = None
+
+
+async def _artifact_cleanup_loop() -> None:
+    while True:
+        try:
+            await asyncio.sleep(6 * 60 * 60)
+            async with AsyncSessionLocal() as db:
+                summary = await ArtifactCleanupService(db).cleanup_expired_artifacts()
+                logger.info("Scheduled artifact cleanup summary: %s", summary)
+        except asyncio.CancelledError:
+            raise
+        except Exception as error:
+            logger.error("Scheduled artifact cleanup failed: %s", error, exc_info=True)
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Application lifespan: startup and shutdown events."""
+    global cleanup_task
     # Startup
     logger.info("🚀 Starting MrglSnips API...")
     try:
@@ -51,12 +69,21 @@ async def lifespan(app: FastAPI):
         # Initialize job queue
         await JobQueue.get_pool()
         logger.info("✅ Job queue initialized")
+        cleanup_task = asyncio.create_task(_artifact_cleanup_loop())
+        logger.info("✅ Artifact cleanup scheduler started")
 
         yield
 
     finally:
         # Shutdown
         logger.info("🛑 Shutting down MrglSnips API...")
+        if cleanup_task is not None:
+            cleanup_task.cancel()
+            try:
+                await cleanup_task
+            except asyncio.CancelledError:
+                pass
+            cleanup_task = None
         await close_db()
         await JobQueue.close_pool()
         logger.info("✅ Cleanup complete")

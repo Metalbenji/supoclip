@@ -1,17 +1,20 @@
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import type { DefaultFramingMode, FaceDetectionMode, FallbackCropPosition } from "../settings-section-types";
+import type { DefaultFramingMode, FaceDetectionMode, FallbackCropPosition, ProcessingProfile } from "../settings-section-types";
+import { getProcessingProfilePreset, PROCESSING_PROFILE_PRESETS } from "@/lib/processing-profiles";
 
 interface SettingsSectionVideoProps {
   isSaving: boolean;
   reviewBeforeRenderEnabled: boolean;
   transitionsEnabled: boolean;
   timelineEditorEnabled: boolean;
+  defaultProcessingProfile: ProcessingProfile;
   defaultFramingMode: DefaultFramingMode;
   faceDetectionMode: FaceDetectionMode;
   fallbackCropPosition: FallbackCropPosition;
   onToggleReviewBeforeRender: () => void;
   onToggleTransitions: () => void;
   onToggleTimelineEditor: () => void;
+  onDefaultProcessingProfileChange: (value: ProcessingProfile) => void;
   onDefaultFramingModeChange: (value: DefaultFramingMode) => void;
   onFaceDetectionModeChange: (value: FaceDetectionMode) => void;
   onFallbackCropPositionChange: (value: FallbackCropPosition) => void;
@@ -22,18 +25,46 @@ export function SettingsSectionVideo({
   reviewBeforeRenderEnabled,
   transitionsEnabled,
   timelineEditorEnabled,
+  defaultProcessingProfile,
   defaultFramingMode,
   faceDetectionMode,
   fallbackCropPosition,
   onToggleReviewBeforeRender,
   onToggleTransitions,
   onToggleTimelineEditor,
+  onDefaultProcessingProfileChange,
   onDefaultFramingModeChange,
   onFaceDetectionModeChange,
   onFallbackCropPositionChange,
 }: SettingsSectionVideoProps) {
+  const selectedProfile = getProcessingProfilePreset(defaultProcessingProfile);
   return (
     <div className="space-y-4">
+      <div className="space-y-3 rounded-md border border-gray-200 bg-white p-3">
+        <div>
+          <p className="text-sm font-medium text-black">Default processing profile</p>
+          <p className="text-xs text-gray-500">
+            Preset that the home page starts from when you create a new task.
+          </p>
+        </div>
+        <Select
+          value={defaultProcessingProfile}
+          onValueChange={(value) => onDefaultProcessingProfileChange(value as ProcessingProfile)}
+          disabled={isSaving}
+        >
+          <SelectTrigger className="bg-white">
+            <SelectValue placeholder="Select processing profile" />
+          </SelectTrigger>
+          <SelectContent>
+            {Object.values(PROCESSING_PROFILE_PRESETS).map((profile) => (
+              <SelectItem key={profile.id} value={profile.id}>
+                {profile.label}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+        <p className="text-xs text-gray-500">{selectedProfile.description}</p>
+      </div>
       <div className="space-y-3 rounded-md border border-gray-200 bg-white p-3">
         <div className="flex items-start justify-between gap-4">
           <div>

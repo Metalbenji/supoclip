@@ -48,6 +48,7 @@ import {
   isDefaultFramingMode,
   isFaceDetectionMode,
   isFallbackCropPosition,
+  isProcessingProfile,
   isSettingsSection,
   isTranscriptionProvider,
   isWhisperDevicePreference,
@@ -63,6 +64,7 @@ import {
   type AiProvider,
   type OllamaAuthMode,
   type OllamaProfileSummary,
+  type ProcessingProfile,
   type SettingsSection,
   type UserPreferences,
   type ZaiRoutingMode,
@@ -1229,6 +1231,10 @@ function SettingsPageContent() {
             typeof data.timelineEditorEnabled === "boolean"
               ? data.timelineEditorEnabled
               : DEFAULT_USER_PREFERENCES.timelineEditorEnabled,
+          defaultProcessingProfile:
+            typeof data.defaultProcessingProfile === "string" && isProcessingProfile(data.defaultProcessingProfile)
+              ? data.defaultProcessingProfile
+              : DEFAULT_USER_PREFERENCES.defaultProcessingProfile,
           defaultFramingMode:
             typeof data.defaultFramingMode === "string" && isDefaultFramingMode(data.defaultFramingMode)
               ? data.defaultFramingMode
@@ -1631,6 +1637,7 @@ function SettingsPageContent() {
                 reviewBeforeRenderEnabled={preferencesDraft.reviewBeforeRenderEnabled}
                 transitionsEnabled={preferencesDraft.transitionsEnabled}
                 timelineEditorEnabled={preferencesDraft.timelineEditorEnabled}
+                defaultProcessingProfile={preferencesDraft.defaultProcessingProfile}
                 defaultFramingMode={preferencesDraft.defaultFramingMode}
                 faceDetectionMode={preferencesDraft.faceDetectionMode}
                 fallbackCropPosition={preferencesDraft.fallbackCropPosition}
@@ -1645,6 +1652,9 @@ function SettingsPageContent() {
                 }}
                 onToggleTimelineEditor={() => {
                   setPreferencesDraft((prev) => ({ ...prev, timelineEditorEnabled: !prev.timelineEditorEnabled }));
+                }}
+                onDefaultProcessingProfileChange={(value) => {
+                  setPreferencesDraft((prev) => ({ ...prev, defaultProcessingProfile: value }));
                 }}
                 onDefaultFramingModeChange={(value) => {
                   setPreferencesDraft((prev) => ({ ...prev, defaultFramingMode: value }));

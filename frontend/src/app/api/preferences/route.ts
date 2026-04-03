@@ -24,6 +24,7 @@ const SUPPORTED_WHISPER_MODEL_SIZES = new Set(["tiny", "base", "small", "medium"
 const SUPPORTED_DEFAULT_FRAMING_MODES = new Set(["auto", "prefer_face", "fixed_position"]);
 const SUPPORTED_FACE_DETECTION_MODES = new Set(["balanced", "more_faces"]);
 const SUPPORTED_FALLBACK_CROP_POSITIONS = new Set(["center", "left_center", "right_center"]);
+const SUPPORTED_PROCESSING_PROFILES = new Set(["fast_draft", "balanced", "best_quality", "stream_layout"]);
 const SUPPORTED_AI_PROVIDERS = new Set(["openai", "google", "anthropic", "zai", "ollama"]);
 const MIN_WHISPER_CHUNK_DURATION_SECONDS = 300;
 const MAX_WHISPER_CHUNK_DURATION_SECONDS = 3600;
@@ -118,6 +119,14 @@ function normalizeFallbackCropPosition(rawValue: unknown): "center" | "left_cent
   return "center";
 }
 
+function normalizeProcessingProfile(rawValue: unknown): "fast_draft" | "balanced" | "best_quality" | "stream_layout" {
+  const normalized = typeof rawValue === "string" ? rawValue.trim().toLowerCase() : "";
+  if (SUPPORTED_PROCESSING_PROFILES.has(normalized)) {
+    return normalized as "fast_draft" | "balanced" | "best_quality" | "stream_layout";
+  }
+  return "balanced";
+}
+
 // GET /api/preferences - Get user preferences
 export async function GET() {
   try {
@@ -129,7 +138,7 @@ export async function GET() {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
 
-    const user = await prisma.user.findUnique({
+    const user = await (prisma.user as any).findUnique({
       where: { id: session.user.id },
       select: {
         default_font_family: true,
@@ -152,6 +161,7 @@ export async function GET() {
         default_transitions_enabled: true,
         default_review_before_render_enabled: true,
         default_timeline_editor_enabled: true,
+        default_processing_profile: true,
         default_framing_mode: true,
         default_face_detection_mode: true,
         default_fallback_crop_position: true,
@@ -210,6 +220,7 @@ export async function GET() {
       transitionsEnabled: user.default_transitions_enabled ?? false,
       reviewBeforeRenderEnabled: user.default_review_before_render_enabled ?? true,
       timelineEditorEnabled: user.default_timeline_editor_enabled ?? true,
+      defaultProcessingProfile: normalizeProcessingProfile(user.default_processing_profile),
       defaultFramingMode,
       faceDetectionMode: normalizeFaceDetectionMode(user.default_face_detection_mode),
       fallbackCropPosition: normalizeFallbackCropPosition(user.default_fallback_crop_position),
@@ -283,6 +294,7 @@ export async function PATCH(request: NextRequest) {
       transitionsEnabled,
       reviewBeforeRenderEnabled,
       timelineEditorEnabled,
+      defaultProcessingProfile,
       defaultFramingMode,
       faceDetectionMode,
       fallbackCropPosition,
@@ -369,6 +381,15 @@ export async function PATCH(request: NextRequest) {
     }
     if (timelineEditorEnabled !== undefined && typeof timelineEditorEnabled !== "boolean") {
       return NextResponse.json({ error: "Invalid timelineEditorEnabled" }, { status: 400 });
+    }
+    if (
+      defaultProcessingProfile !== undefined &&
+      (typeof defaultProcessingProfile !== "string" || !SUPPORTED_PROCESSING_PROFILES.has(defaultProcessingProfile))
+    ) {
+      return NextResponse.json(
+        { error: "Invalid defaultProcessingProfile" },
+        { status: 400 },
+      );
     }
     if (
       defaultFramingMode !== undefined &&
@@ -498,7 +519,7 @@ export async function PATCH(request: NextRequest) {
       );
     }
 
-    const updatedUser = await prisma.user.update({
+    const updatedUser = await (prisma.user as any).update({
       where: { id: session.user.id },
       data: {
         ...(fontFamily !== undefined && { default_font_family: fontFamily.trim() || DEFAULT_FONT_STYLE_OPTIONS.fontFamily }),
@@ -523,6 +544,7 @@ export async function PATCH(request: NextRequest) {
           default_review_before_render_enabled: reviewBeforeRenderEnabled,
         }),
         ...(timelineEditorEnabled !== undefined && { default_timeline_editor_enabled: timelineEditorEnabled }),
+        ...(defaultProcessingProfile !== undefined && { default_processing_profile: defaultProcessingProfile }),
         ...(defaultFramingMode !== undefined && { default_framing_mode: defaultFramingMode }),
         ...(faceDetectionMode !== undefined && { default_face_detection_mode: faceDetectionMode }),
         ...(fallbackCropPosition !== undefined && { default_fallback_crop_position: fallbackCropPosition }),
@@ -559,6 +581,7 @@ export async function PATCH(request: NextRequest) {
         default_transitions_enabled: true,
         default_review_before_render_enabled: true,
         default_timeline_editor_enabled: true,
+        default_processing_profile: true,
         default_framing_mode: true,
         default_face_detection_mode: true,
         default_fallback_crop_position: true,
@@ -609,6 +632,7 @@ export async function PATCH(request: NextRequest) {
       transitionsEnabled: updatedUser.default_transitions_enabled ?? false,
       reviewBeforeRenderEnabled: updatedUser.default_review_before_render_enabled ?? true,
       timelineEditorEnabled: updatedUser.default_timeline_editor_enabled ?? true,
+      defaultProcessingProfile: normalizeProcessingProfile(updatedUser.default_processing_profile),
       defaultFramingMode: hadLegacyCenterOnly
         ? "fixed_position"
         : normalizeDefaultFramingMode(updatedUser.default_framing_mode),

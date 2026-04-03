@@ -140,6 +140,54 @@ async def init_db():
         await conn.execute(
             text(
                 """
+                ALTER TABLE tasks
+                ADD COLUMN IF NOT EXISTS processing_profile VARCHAR(32) NOT NULL DEFAULT 'balanced'
+                """
+            )
+        )
+        await conn.execute(
+            text(
+                """
+                ALTER TABLE tasks
+                ADD COLUMN IF NOT EXISTS runtime_info_json JSONB
+                """
+            )
+        )
+        await conn.execute(
+            text(
+                """
+                ALTER TABLE tasks
+                ADD COLUMN IF NOT EXISTS failure_code VARCHAR(40)
+                """
+            )
+        )
+        await conn.execute(
+            text(
+                """
+                ALTER TABLE tasks
+                ADD COLUMN IF NOT EXISTS failure_hint TEXT
+                """
+            )
+        )
+        await conn.execute(
+            text(
+                """
+                ALTER TABLE tasks
+                ADD COLUMN IF NOT EXISTS stage_checkpoint VARCHAR(32) NOT NULL DEFAULT 'queued'
+                """
+            )
+        )
+        await conn.execute(
+            text(
+                """
+                ALTER TABLE tasks
+                ADD COLUMN IF NOT EXISTS retryable_from_stages JSONB
+                """
+            )
+        )
+        await conn.execute(
+            text(
+                """
                 DO $$
                 BEGIN
                     IF EXISTS (
@@ -209,6 +257,14 @@ async def init_db():
                 """
                 ALTER TABLE users
                 ADD COLUMN IF NOT EXISTS default_timeline_editor_enabled BOOLEAN NOT NULL DEFAULT true
+                """
+            )
+        )
+        await conn.execute(
+            text(
+                """
+                ALTER TABLE users
+                ADD COLUMN IF NOT EXISTS default_processing_profile VARCHAR(32) NOT NULL DEFAULT 'balanced'
                 """
             )
         )
@@ -334,6 +390,63 @@ async def init_db():
                         ELSE COALESCE(NULLIF(TRIM(default_face_detection_mode), ''), 'balanced')
                     END,
                     default_fallback_crop_position = COALESCE(NULLIF(TRIM(default_fallback_crop_position), ''), 'center')
+                """
+            )
+        )
+        await conn.execute(
+            text(
+                """
+                DO $$
+                BEGIN
+                    IF EXISTS (
+                        SELECT 1
+                        FROM pg_constraint
+                        WHERE conname = 'check_users_default_processing_profile'
+                    ) THEN
+                        ALTER TABLE users DROP CONSTRAINT check_users_default_processing_profile;
+                    END IF;
+                    ALTER TABLE users
+                    ADD CONSTRAINT check_users_default_processing_profile
+                    CHECK (default_processing_profile IN ('fast_draft', 'balanced', 'best_quality', 'stream_layout'));
+                END $$;
+                """
+            )
+        )
+        await conn.execute(
+            text(
+                """
+                DO $$
+                BEGIN
+                    IF EXISTS (
+                        SELECT 1
+                        FROM pg_constraint
+                        WHERE conname = 'check_tasks_processing_profile'
+                    ) THEN
+                        ALTER TABLE tasks DROP CONSTRAINT check_tasks_processing_profile;
+                    END IF;
+                    ALTER TABLE tasks
+                    ADD CONSTRAINT check_tasks_processing_profile
+                    CHECK (processing_profile IN ('fast_draft', 'balanced', 'best_quality', 'stream_layout'));
+                END $$;
+                """
+            )
+        )
+        await conn.execute(
+            text(
+                """
+                DO $$
+                BEGIN
+                    IF EXISTS (
+                        SELECT 1
+                        FROM pg_constraint
+                        WHERE conname = 'check_tasks_stage_checkpoint'
+                    ) THEN
+                        ALTER TABLE tasks DROP CONSTRAINT check_tasks_stage_checkpoint;
+                    END IF;
+                    ALTER TABLE tasks
+                    ADD CONSTRAINT check_tasks_stage_checkpoint
+                    CHECK (stage_checkpoint IN ('queued', 'started', 'downloaded', 'transcribed', 'analyzed', 'review_approved', 'completed', 'failed'));
+                END $$;
                 """
             )
         )

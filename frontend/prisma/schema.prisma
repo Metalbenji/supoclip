@@ -51,6 +51,7 @@ model User {
   default_transitions_enabled Boolean? @default(false)
   default_review_before_render_enabled Boolean? @default(true)
   default_timeline_editor_enabled Boolean? @default(true)
+  default_processing_profile String? @default("balanced") @db.VarChar(32)
   default_framing_mode String? @default("auto") @db.VarChar(32)
   default_face_detection_mode String? @default("balanced") @db.VarChar(20)
   default_fallback_crop_position String? @default("center") @db.VarChar(20)

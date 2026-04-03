@@ -14,6 +14,7 @@ from uuid import UUID
 
 from ...database import get_db
 from ...services.task_service import DEFAULT_AI_MODELS, DraftOverlapError, TaskService
+from ...services.artifact_cleanup_service import ArtifactCleanupService
 from ...services.ai_model_catalog_service import ModelCatalogError
 from ...workers.job_queue import JobQueue
 from ...workers.progress import ProgressTracker
@@ -56,6 +57,7 @@ MIN_WHISPER_GPU_INDEX = 0
 MIN_TASK_TIMEOUT_SECONDS = 300
 MAX_TASK_TIMEOUT_SECONDS = 86400
 SUPPORTED_FRAMING_MODE_OVERRIDES = {"auto", "prefer_face", "fixed_position"}
+SUPPORTED_PROCESSING_PROFILES = {"fast_draft", "balanced", "best_quality", "stream_layout"}
 DRAFT_UPDATE_FIELDS = {"id", "start_time", "end_time", "edited_text", "is_selected", "framing_mode_override"}
 DRAFT_CREATE_FIELDS = {"start_time", "end_time", "edited_text", "is_selected", "framing_mode_override"}
 SUBTITLE_STYLE_FIELDS = set(DEFAULT_SUBTITLE_STYLE.keys())
@@ -111,6 +113,15 @@ def _resolve_framing_mode_override(raw: object) -> str:
 
 def _resolve_timeline_editor_enabled(raw: object) -> bool:
     return _coerce_bool(raw, default=True)
+
+
+def _resolve_processing_profile(raw: object) -> str:
+    if not isinstance(raw, str):
+        return "balanced"
+    normalized = raw.strip().lower()
+    if normalized not in SUPPORTED_PROCESSING_PROFILES:
+        return "balanced"
+    return normalized
 
 
 def _resolve_transcription_provider(raw: object) -> str:
@@ -510,6 +521,18 @@ async def get_transcription_settings(request: Request, db: AsyncSession = Depend
     except Exception as e:
         logger.error(f"Error retrieving transcription settings: {e}")
         raise HTTPException(status_code=500, detail=f"Error retrieving settings: {str(e)}")
+
+
+@router.get("/runtime-overview")
+async def get_runtime_overview(request: Request, db: AsyncSession = Depends(get_db)):
+    """Runtime and operator overview for workers, queues, cache state, and recent failures."""
+    _require_user_id(request)
+    try:
+        task_service = TaskService(db)
+        return await task_service.get_runtime_overview()
+    except Exception as e:
+        logger.error(f"Error retrieving runtime overview: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Error retrieving runtime overview: {str(e)}")
 
 
 @router.put("/transcription-settings/assembly-key")
@@ -1256,9 +1279,13 @@ async def create_task(request: Request, db: AsyncSession = Depends(get_db)):
         transcription_options,
         transcription_provider,
     )
+    video_options = data.get("video_options", {})
+    if not isinstance(video_options, dict):
+        video_options = {}
     ai_options = data.get("ai_options", {})
     if not isinstance(ai_options, dict):
         ai_options = {}
+    processing_profile = _resolve_processing_profile(data.get("processing_profile"))
     ai_provider = _resolve_ai_provider(ai_options.get("provider", _default_ai_provider()))
     ai_routing_mode = (
         _resolve_zai_routing_mode(ai_options.get("routing_mode"))
@@ -1347,6 +1374,45 @@ async def create_task(request: Request, db: AsyncSession = Depends(get_db)):
                 )
             ai_model = resolved_ollama_model
 
+        # Get source type for worker
+        source_type = task_service.video_service.determine_source_type(raw_source["url"])
+
+        queue_name = (
+            config.arq_assembly_queue_name
+            if transcription_provider == "assemblyai"
+            else _resolve_local_queue_name(transcription_runtime_options)
+        )
+        runtime_info = {
+            "queue_target": queue_name,
+            "worker_type": (
+                "assembly"
+                if transcription_provider == "assemblyai"
+                else ("local_gpu" if queue_name == config.arq_local_gpu_queue_name else "local")
+            ),
+            "runtime_target": (
+                "assemblyai_cloud"
+                if transcription_provider == "assemblyai"
+                else ("gpu" if queue_name == config.arq_local_gpu_queue_name else "cpu")
+            ),
+            "source_type": source_type,
+            "requested_transcription_provider": transcription_provider,
+            "effective_transcription_provider": transcription_provider,
+            "whisper_model_size": transcription_runtime_options.get("whisper_model_size"),
+            "whisper_device": transcription_runtime_options.get("whisper_device", "auto"),
+            "whisper_gpu_index": transcription_runtime_options.get("whisper_gpu_index"),
+            "transcription_options": transcription_runtime_options,
+            "ai_provider": ai_provider,
+            "ai_model": ai_model,
+            "ai_routing_mode": resolved_zai_routing_mode,
+            "processing_profile": processing_profile,
+            "video_preferences_override": {
+                "default_framing_mode": video_options.get("default_framing_mode"),
+                "face_detection_mode": video_options.get("face_detection_mode"),
+                "fallback_crop_position": video_options.get("fallback_crop_position"),
+            },
+            "latest_stage_metadata": {},
+        }
+
         task_id = await task_service.create_task_with_source(
             user_id=user_id,
             url=raw_source["url"],
@@ -1358,18 +1424,12 @@ async def create_task(request: Request, db: AsyncSession = Depends(get_db)):
             transitions_enabled=transitions_enabled,
             transcription_provider=transcription_provider,
             ai_provider=ai_provider,
+            ai_model=ai_model,
             ai_focus_tags=ai_focus_tags,
             review_before_render_enabled=review_before_render_enabled,
             timeline_editor_enabled=timeline_editor_enabled,
-        )
-
-        # Get source type for worker
-        source_type = task_service.video_service.determine_source_type(raw_source["url"])
-
-        queue_name = (
-            config.arq_assembly_queue_name
-            if transcription_provider == "assemblyai"
-            else _resolve_local_queue_name(transcription_runtime_options)
+            processing_profile=processing_profile,
+            runtime_info_json=runtime_info,
         )
 
         # Enqueue job for worker
@@ -1398,7 +1458,10 @@ async def create_task(request: Request, db: AsyncSession = Depends(get_db)):
                 db,
                 task_id,
                 "error",
-                progress_message="Failed to enqueue processing job"
+                progress_message="Failed to enqueue processing job",
+                failure_code="system",
+                failure_hint="Retry task creation after the queue becomes available.",
+                stage_checkpoint="failed",
             )
             raise HTTPException(status_code=503, detail="Failed to queue task for processing")
 
@@ -1414,6 +1477,7 @@ async def create_task(request: Request, db: AsyncSession = Depends(get_db)):
             "ai_focus_tags": ai_focus_tags,
             "review_before_render_enabled": review_before_render_enabled,
             "timeline_editor_enabled": timeline_editor_enabled,
+            "processing_profile": processing_profile,
             "message": "Task created and queued for processing"
         }
 
@@ -1463,6 +1527,22 @@ async def cancel_all_tasks(request: Request, db: AsyncSession = Depends(get_db))
     except Exception as e:
         logger.error(f"Error cancelling all tasks: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Error cancelling tasks: {str(e)}")
+
+
+@router.post("/admin/cleanup-artifacts")
+async def cleanup_artifacts(request: Request, db: AsyncSession = Depends(get_db)):
+    """Admin action to remove expired temp artifacts and stale failed-task outputs."""
+    _require_admin_access(request)
+    try:
+        cleanup_service = ArtifactCleanupService(db)
+        summary = await cleanup_service.cleanup_expired_artifacts()
+        return {
+            "message": "Artifact cleanup completed",
+            **summary,
+        }
+    except Exception as e:
+        logger.error(f"Error cleaning artifacts: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Error cleaning artifacts: {str(e)}")
 
 
 @router.post("/admin/backfill-awaiting-review-subtitle-styles")
@@ -1793,6 +1873,91 @@ async def get_task_draft_clips(task_id: str, request: Request, db: AsyncSession 
         raise HTTPException(status_code=500, detail=f"Error retrieving draft clips: {str(e)}")
 
 
+@router.get("/{task_id}/draft-clips/{draft_id}/preview-strip")
+async def get_task_draft_clip_preview_strip(
+    task_id: str,
+    draft_id: UUID,
+    request: Request,
+    force: bool = Query(default=False),
+    db: AsyncSession = Depends(get_db),
+):
+    """Return a cached three-frame preview strip for a draft clip."""
+    user_id = request.headers.get("user_id") or request.query_params.get("user_id")
+    if not user_id:
+        raise HTTPException(status_code=401, detail="User authentication required")
+
+    task_service = TaskService(db)
+    task = await task_service.task_repo.get_task_by_id(db, task_id)
+    if not task:
+        raise HTTPException(status_code=404, detail="Task not found")
+    if task["user_id"] != user_id:
+        raise HTTPException(status_code=403, detail="Not authorized to access this task")
+
+    drafts = await task_service.draft_clip_repo.get_draft_map_by_task(db, task_id)
+    draft = drafts.get(str(draft_id))
+    if not draft:
+        raise HTTPException(status_code=404, detail="Draft clip not found")
+
+    source_url = str(task.get("source_url") or "").strip()
+    source_type = str(task.get("source_type") or "").strip()
+    if not source_url or not source_type:
+        raise HTTPException(status_code=400, detail="Task source is missing")
+
+    try:
+        preview_path = await task_service.ensure_draft_preview_strip(
+            task_id,
+            draft,
+            source_url=source_url,
+            source_type=source_type,
+            force_regenerate=force,
+        )
+    except Exception as e:
+        logger.error(f"Error generating preview strip for task {task_id} draft {draft_id}: {e}")
+        raise HTTPException(status_code=500, detail=f"Error generating preview strip: {str(e)}")
+
+    return FileResponse(
+        path=str(preview_path),
+        media_type="image/jpeg",
+        filename=preview_path.name,
+        headers={"Cache-Control": "no-store"},
+    )
+
+
+@router.post("/{task_id}/regenerate-previews")
+async def regenerate_task_draft_previews(task_id: str, request: Request, db: AsyncSession = Depends(get_db)):
+    """Regenerate cached draft preview strips for the task."""
+    user_id = request.headers.get("user_id")
+    if not user_id:
+        raise HTTPException(status_code=401, detail="User authentication required")
+
+    task_service = TaskService(db)
+    task = await task_service.task_repo.get_task_by_id(db, task_id)
+    if not task:
+        raise HTTPException(status_code=404, detail="Task not found")
+    if task["user_id"] != user_id:
+        raise HTTPException(status_code=403, detail="Not authorized to access this task")
+
+    source_url = str(task.get("source_url") or "").strip()
+    source_type = str(task.get("source_type") or "").strip()
+    if not source_url or not source_type:
+        raise HTTPException(status_code=400, detail="Task source is missing")
+
+    regenerated = 0
+    for draft in await task_service.draft_clip_repo.get_drafts_by_task(db, task_id):
+        await task_service.ensure_draft_preview_strip(
+            task_id,
+            draft,
+            source_url=source_url,
+            source_type=source_type,
+            force_regenerate=True,
+        )
+        regenerated += 1
+    return {
+        "task_id": task_id,
+        "regenerated_previews": regenerated,
+    }
+
+
 @router.put("/{task_id}/draft-clips")
 async def update_task_draft_clips(task_id: str, request: Request, db: AsyncSession = Depends(get_db)):
     """Bulk update draft clip timing/text/selection before finalizing."""
@@ -2070,6 +2235,72 @@ async def finalize_task(task_id: str, request: Request, db: AsyncSession = Depen
         "status": "queued",
         "message": "Finalize job queued",
     }
+
+
+@router.post("/{task_id}/retry")
+async def retry_task(task_id: str, request: Request, db: AsyncSession = Depends(get_db)):
+    """Retry a task from an allowed durable checkpoint."""
+    user_id = request.headers.get("user_id")
+    if not user_id:
+        raise HTTPException(status_code=401, detail="User authentication required")
+
+    task_service = TaskService(db)
+    task = await task_service.task_repo.get_task_by_id(db, task_id)
+    if not task:
+        raise HTTPException(status_code=404, detail="Task not found")
+    if task["user_id"] != user_id:
+        raise HTTPException(status_code=403, detail="Not authorized to retry this task")
+
+    data = await _read_optional_json_object(request)
+    retry_from_stage = data.get("retry_from_stage")
+
+    try:
+        retry_result = await task_service.retry_task_from_stage(task_id, retry_from_stage)
+        if retry_result.get("status") == "awaiting_review":
+            return retry_result
+
+        task_snapshot = retry_result.get("task") or task
+        subtitle_style_seed = dict(task_snapshot.get("subtitle_style") or {})
+        subtitle_style_seed.setdefault("font_family", task_snapshot.get("font_family"))
+        subtitle_style_seed.setdefault("font_size", task_snapshot.get("font_size"))
+        subtitle_style_seed.setdefault("font_color", task_snapshot.get("font_color"))
+        subtitle_style = normalize_subtitle_style(subtitle_style_seed)
+        queue_name = (
+            config.arq_assembly_queue_name
+            if task_snapshot.get("transcription_provider") == "assemblyai"
+            else str(task_snapshot.get("runtime_info", {}).get("queue_target") or config.arq_local_queue_name)
+        )
+        job_id = await JobQueue.enqueue_job(
+            "process_video_task",
+            task_id,
+            task_snapshot["source_url"],
+            task_snapshot["source_type"],
+            user_id,
+            subtitle_style["font_family"],
+            int(subtitle_style["font_size"]),
+            subtitle_style["font_color"],
+            _coerce_bool(task_snapshot.get("transitions_enabled"), default=False),
+            task_snapshot.get("transcription_provider") or "local",
+            task_snapshot.get("ai_provider") or _default_ai_provider(),
+            task_snapshot.get("runtime_info", {}).get("ai_model"),
+            subtitle_style,
+            task_snapshot.get("runtime_info", {}).get("ai_routing_mode"),
+            task_snapshot.get("runtime_info", {}).get("transcription_options") or {},
+            queue_name=queue_name,
+            render_from_drafts=bool(retry_result.get("render_from_drafts")),
+        )
+        return {
+            **retry_result,
+            "job_id": job_id,
+            "message": f"Task queued to retry from {retry_result['retry_from_stage'].replace('_', ' ')}.",
+        }
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error retrying task {task_id}: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Error retrying task: {str(e)}")
 
 
 @router.get("/{task_id}/progress")

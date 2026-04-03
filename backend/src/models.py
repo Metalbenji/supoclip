@@ -49,6 +49,11 @@ class User(Base):
     default_transitions_enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("false"))
     default_review_before_render_enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("true"))
     default_timeline_editor_enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("true"))
+    default_processing_profile: Mapped[str] = mapped_column(
+        String(32),
+        nullable=False,
+        server_default=text("'balanced'"),
+    )
     default_framing_mode: Mapped[str] = mapped_column(
         String(32),
         nullable=False,
@@ -143,6 +148,12 @@ class Task(Base):
     transcription_provider: Mapped[str] = mapped_column(String(20), nullable=False, server_default=text("'local'"))
     ai_provider: Mapped[str] = mapped_column(String(20), nullable=False, server_default=text("'openai'"))
     ai_focus_tags: Mapped[Optional[list[str]]] = mapped_column(JSONB, nullable=True)
+    processing_profile: Mapped[str] = mapped_column(String(32), nullable=False, server_default=text("'balanced'"))
+    runtime_info_json: Mapped[Optional[dict]] = mapped_column(JSONB, nullable=True)
+    failure_code: Mapped[Optional[str]] = mapped_column(String(40), nullable=True)
+    failure_hint: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    stage_checkpoint: Mapped[str] = mapped_column(String(32), nullable=False, server_default=text("'queued'"))
+    retryable_from_stages: Mapped[Optional[list[str]]] = mapped_column(JSONB, nullable=True)
 
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())

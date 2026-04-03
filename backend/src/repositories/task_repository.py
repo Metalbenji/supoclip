@@ -39,6 +39,10 @@ class TaskRepository:
         ai_focus_tags: Optional[List[str]] = None,
         review_before_render_enabled: bool = True,
         timeline_editor_enabled: bool = True,
+        processing_profile: str = "balanced",
+        runtime_info_json: Optional[Dict[str, Any]] = None,
+        stage_checkpoint: str = "queued",
+        retryable_from_stages: Optional[List[str]] = None,
     ) -> str:
         """Create a new task and return its ID."""
         result = await db.execute(
@@ -55,6 +59,10 @@ class TaskRepository:
                     transcription_provider,
                     ai_provider,
                     ai_focus_tags,
+                    processing_profile,
+                    runtime_info_json,
+                    stage_checkpoint,
+                    retryable_from_stages,
                     review_before_render_enabled,
                     timeline_editor_enabled,
                     created_at,
@@ -72,6 +80,10 @@ class TaskRepository:
                     :transcription_provider,
                     :ai_provider,
                     :ai_focus_tags,
+                    :processing_profile,
+                    :runtime_info_json,
+                    :stage_checkpoint,
+                    :retryable_from_stages,
                     :review_before_render_enabled,
                     :timeline_editor_enabled,
                     NOW(),
@@ -81,6 +93,8 @@ class TaskRepository:
             """).bindparams(
                 bindparam("subtitle_style", type_=JSONB),
                 bindparam("ai_focus_tags", type_=JSONB),
+                bindparam("runtime_info_json", type_=JSONB),
+                bindparam("retryable_from_stages", type_=JSONB),
             ),
             {
                 "user_id": user_id,
@@ -94,6 +108,10 @@ class TaskRepository:
                 "transcription_provider": transcription_provider,
                 "ai_provider": ai_provider,
                 "ai_focus_tags": ai_focus_tags or None,
+                "processing_profile": processing_profile,
+                "runtime_info_json": runtime_info_json or None,
+                "stage_checkpoint": stage_checkpoint,
+                "retryable_from_stages": retryable_from_stages or None,
                 "review_before_render_enabled": review_before_render_enabled,
                 "timeline_editor_enabled": timeline_editor_enabled,
             }
@@ -139,6 +157,12 @@ class TaskRepository:
             "transcription_provider": getattr(row, "transcription_provider", "local"),
             "ai_provider": getattr(row, "ai_provider", "openai"),
             "ai_focus_tags": list(getattr(row, "ai_focus_tags", None) or []),
+            "processing_profile": str(getattr(row, "processing_profile", "balanced") or "balanced"),
+            "runtime_info": getattr(row, "runtime_info_json", None) or {},
+            "failure_code": getattr(row, "failure_code", None),
+            "failure_hint": getattr(row, "failure_hint", None),
+            "stage_checkpoint": str(getattr(row, "stage_checkpoint", "queued") or "queued"),
+            "retryable_from_stages": list(getattr(row, "retryable_from_stages", None) or []),
             "review_before_render_enabled": bool(getattr(row, "review_before_render_enabled", True)),
             "timeline_editor_enabled": bool(getattr(row, "timeline_editor_enabled", True)),
             "created_at": row.created_at,
@@ -326,14 +350,25 @@ class TaskRepository:
         task_id: str,
         status: str,
         progress: Optional[int] = None,
-        progress_message: Optional[str] = None
+        progress_message: Optional[str] = None,
+        runtime_info: Optional[Dict[str, Any]] = None,
+        failure_code: Optional[str] = None,
+        failure_hint: Optional[str] = None,
+        stage_checkpoint: Optional[str] = None,
+        retryable_from_stages: Optional[List[str]] = None,
+        clear_failure: bool = False,
     ) -> None:
         """Update task status and optional progress."""
         params = {
             "task_id": task_id,
             "status": status,
             "progress": progress,
-            "progress_message": progress_message
+            "progress_message": progress_message,
+            "runtime_info": runtime_info,
+            "failure_code": failure_code,
+            "failure_hint": failure_hint,
+            "stage_checkpoint": stage_checkpoint,
+            "retryable_from_stages": retryable_from_stages,
         }
 
         # Build SET clauses dynamically, then append WHERE separately.
@@ -345,11 +380,35 @@ class TaskRepository:
         if progress_message is not None:
             set_clauses.append("progress_message = :progress_message")
 
+        if runtime_info is not None:
+            set_clauses.append("runtime_info_json = :runtime_info")
+
+        if stage_checkpoint is not None:
+            set_clauses.append("stage_checkpoint = :stage_checkpoint")
+
+        if retryable_from_stages is not None:
+            set_clauses.append("retryable_from_stages = :retryable_from_stages")
+
+        if clear_failure:
+            set_clauses.append("failure_code = NULL")
+            set_clauses.append("failure_hint = NULL")
+        else:
+            if failure_code is not None:
+                set_clauses.append("failure_code = :failure_code")
+            if failure_hint is not None:
+                set_clauses.append("failure_hint = :failure_hint")
+
         set_clauses.append("updated_at = NOW()")
 
         query = f"UPDATE tasks SET {', '.join(set_clauses)} WHERE id = :task_id"
 
-        await db.execute(text(query), params)
+        await db.execute(
+            text(query).bindparams(
+                bindparam("runtime_info", type_=JSONB),
+                bindparam("retryable_from_stages", type_=JSONB),
+            ),
+            params,
+        )
         await db.commit()
         logger.info(f"Updated task {task_id} status to {status}" +
                    (f" (progress: {progress}%)" if progress else ""))
@@ -394,6 +453,14 @@ class TaskRepository:
                 "transcription_provider": getattr(row, "transcription_provider", "local"),
                 "ai_provider": getattr(row, "ai_provider", "openai"),
                 "ai_focus_tags": list(getattr(row, "ai_focus_tags", None) or []),
+                "processing_profile": str(getattr(row, "processing_profile", "balanced") or "balanced"),
+                "runtime_info": getattr(row, "runtime_info_json", None) or {},
+                "failure_code": getattr(row, "failure_code", None),
+                "failure_hint": getattr(row, "failure_hint", None),
+                "stage_checkpoint": str(getattr(row, "stage_checkpoint", "queued") or "queued"),
+                "retryable_from_stages": list(getattr(row, "retryable_from_stages", None) or []),
+                "progress": getattr(row, "progress", None),
+                "progress_message": getattr(row, "progress_message", None),
                 "review_before_render_enabled": bool(getattr(row, "review_before_render_enabled", True)),
                 "timeline_editor_enabled": bool(getattr(row, "timeline_editor_enabled", True)),
                 "clips_count": row.clips_count,
@@ -1355,6 +1422,7 @@ class TaskRepository:
                 SELECT
                     default_review_before_render_enabled,
                     default_timeline_editor_enabled,
+                    default_processing_profile,
                     default_framing_mode,
                     default_face_detection_mode,
                     default_fallback_crop_position
@@ -1369,6 +1437,7 @@ class TaskRepository:
             return {
                 "review_before_render_enabled": True,
                 "timeline_editor_enabled": True,
+                "default_processing_profile": "balanced",
                 "default_framing_mode": "auto",
                 "default_face_detection_mode": "balanced",
                 "default_fallback_crop_position": "center",
@@ -1376,6 +1445,9 @@ class TaskRepository:
         return {
             "review_before_render_enabled": bool(getattr(row, "default_review_before_render_enabled", True)),
             "timeline_editor_enabled": bool(getattr(row, "default_timeline_editor_enabled", True)),
+            "default_processing_profile": str(
+                getattr(row, "default_processing_profile", "balanced") or "balanced"
+            ),
             "default_framing_mode": str(getattr(row, "default_framing_mode", "auto") or "auto"),
             "default_face_detection_mode": str(
                 getattr(row, "default_face_detection_mode", "balanced") or "balanced"
@@ -1384,6 +1456,68 @@ class TaskRepository:
                 getattr(row, "default_fallback_crop_position", "center") or "center"
             ),
         }
+
+    @staticmethod
+    async def get_failure_summary(db: AsyncSession, limit: int = 5) -> List[Dict[str, Any]]:
+        result = await db.execute(
+            text(
+                """
+                SELECT
+                    COALESCE(NULLIF(TRIM(failure_code), ''), 'system') AS failure_code,
+                    COUNT(*) AS failure_count,
+                    MAX(updated_at) AS last_failure_at,
+                    MIN(progress_message) FILTER (WHERE progress_message IS NOT NULL) AS representative_message
+                FROM tasks
+                WHERE status = 'error'
+                GROUP BY COALESCE(NULLIF(TRIM(failure_code), ''), 'system')
+                ORDER BY MAX(updated_at) DESC, COUNT(*) DESC
+                LIMIT :limit
+                """
+            ),
+            {"limit": limit},
+        )
+        return [
+            {
+                "failure_code": str(row.failure_code or "system"),
+                "count": int(row.failure_count or 0),
+                "last_failure_at": row.last_failure_at,
+                "representative_message": getattr(row, "representative_message", None),
+            }
+            for row in result.fetchall()
+        ]
+
+    @staticmethod
+    async def get_recent_failed_tasks(db: AsyncSession, limit: int = 10) -> List[Dict[str, Any]]:
+        result = await db.execute(
+            text(
+                """
+                SELECT
+                    t.id,
+                    t.failure_code,
+                    t.failure_hint,
+                    t.progress_message,
+                    t.updated_at,
+                    s.title AS source_title
+                FROM tasks t
+                LEFT JOIN sources s ON s.id = t.source_id
+                WHERE t.status = 'error'
+                ORDER BY t.updated_at DESC
+                LIMIT :limit
+                """
+            ),
+            {"limit": limit},
+        )
+        return [
+            {
+                "id": row.id,
+                "source_title": getattr(row, "source_title", None),
+                "failure_code": getattr(row, "failure_code", None) or "system",
+                "failure_hint": getattr(row, "failure_hint", None),
+                "message": getattr(row, "progress_message", None),
+                "updated_at": row.updated_at,
+            }
+            for row in result.fetchall()
+        ]
 
     @staticmethod
     async def update_task_timeline_editor_enabled(db: AsyncSession, task_id: str, enabled: bool) -> None:

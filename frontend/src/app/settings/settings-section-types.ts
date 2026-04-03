@@ -14,6 +14,7 @@ export const WHISPER_MODEL_SIZES = ["tiny", "base", "small", "medium", "large", 
 export const DEFAULT_FRAMING_MODES = ["auto", "prefer_face", "fixed_position"] as const;
 export const FACE_DETECTION_MODES = ["balanced", "more_faces"] as const;
 export const FALLBACK_CROP_POSITIONS = ["center", "left_center", "right_center"] as const;
+export const PROCESSING_PROFILES = ["fast_draft", "balanced", "best_quality", "stream_layout"] as const;
 export const AI_PROVIDERS = ["openai", "google", "anthropic", "zai", "ollama"] as const;
 export const ZAI_ROUTING_MODES = ["auto", "subscription", "metered"] as const;
 export const OLLAMA_AUTH_MODES = ["none", "bearer", "custom_header"] as const;
@@ -24,6 +25,7 @@ export type WhisperModelSize = (typeof WHISPER_MODEL_SIZES)[number];
 export type DefaultFramingMode = (typeof DEFAULT_FRAMING_MODES)[number];
 export type FaceDetectionMode = (typeof FACE_DETECTION_MODES)[number];
 export type FallbackCropPosition = (typeof FALLBACK_CROP_POSITIONS)[number];
+export type ProcessingProfile = (typeof PROCESSING_PROFILES)[number];
 export type AiProvider = (typeof AI_PROVIDERS)[number];
 export type ZaiRoutingMode = (typeof ZAI_ROUTING_MODES)[number];
 export type OllamaAuthMode = (typeof OLLAMA_AUTH_MODES)[number];
@@ -61,6 +63,7 @@ export interface UserPreferences extends FontStyleOptions {
   transitionsEnabled: boolean;
   reviewBeforeRenderEnabled: boolean;
   timelineEditorEnabled: boolean;
+  defaultProcessingProfile: ProcessingProfile;
   defaultFramingMode: DefaultFramingMode;
   faceDetectionMode: FaceDetectionMode;
   fallbackCropPosition: FallbackCropPosition;
@@ -81,6 +84,7 @@ export const DEFAULT_USER_PREFERENCES: UserPreferences = {
   transitionsEnabled: false,
   reviewBeforeRenderEnabled: true,
   timelineEditorEnabled: true,
+  defaultProcessingProfile: "balanced",
   defaultFramingMode: "auto",
   faceDetectionMode: "balanced",
   fallbackCropPosition: "center",
@@ -155,6 +159,10 @@ export function isFallbackCropPosition(value: string): value is FallbackCropPosi
   return FALLBACK_CROP_POSITIONS.includes(value as FallbackCropPosition);
 }
 
+export function isProcessingProfile(value: string): value is ProcessingProfile {
+  return PROCESSING_PROFILES.includes(value as ProcessingProfile);
+}
+
 export function isAiProvider(value: string): value is AiProvider {
   return AI_PROVIDERS.includes(value as AiProvider);
 }
@@ -189,6 +197,7 @@ export function arePreferencesEqual(a: UserPreferences, b: UserPreferences): boo
     a.transitionsEnabled === b.transitionsEnabled &&
     a.reviewBeforeRenderEnabled === b.reviewBeforeRenderEnabled &&
     a.timelineEditorEnabled === b.timelineEditorEnabled &&
+    a.defaultProcessingProfile === b.defaultProcessingProfile &&
     a.defaultFramingMode === b.defaultFramingMode &&
     a.faceDetectionMode === b.faceDetectionMode &&
     a.fallbackCropPosition === b.fallbackCropPosition &&

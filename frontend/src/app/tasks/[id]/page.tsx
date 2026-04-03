@@ -91,6 +91,13 @@ interface DraftClip {
     fallback_crop_position?: "center" | "left_center" | "right_center" | string;
   } | null;
   framing_mode_override?: "auto" | "prefer_face" | "fixed_position" | string;
+  preview_url?: string;
+  selection_rationale?: {
+    transcript_relevance?: number;
+    framing_quality?: "strong" | "weak" | "none" | string;
+    hook_score?: number;
+    review_adjustments?: string[];
+  } | null;
   created_at?: string;
   updated_at?: string;
 }
@@ -123,9 +130,34 @@ interface TaskDetails {
   font_size?: number;
   font_color?: string;
   transitions_enabled?: boolean;
+  transcription_provider?: string;
+  ai_provider?: string;
   ai_focus_tags?: string[];
   review_before_render_enabled?: boolean;
   timeline_editor_enabled?: boolean;
+  processing_profile?: string;
+  runtime_info?: Record<string, unknown>;
+  failure_code?: string | null;
+  failure_hint?: string | null;
+  stage_checkpoint?: string;
+  retryable_from_stages?: string[];
+  diagnostics?: {
+    queue_target?: string;
+    worker_type?: string;
+    transcription?: {
+      provider?: string;
+      model?: string | null;
+      device_preference?: string | null;
+    };
+    ai?: {
+      provider?: string;
+      model?: string | null;
+    };
+    runtime_target?: string | null;
+    fallback_reason?: string | null;
+    current_stage?: string | null;
+    latest_stage_metadata?: Record<string, unknown> | null;
+  };
 }
 
 interface TranscriptProgressMetadata {
@@ -416,6 +448,13 @@ function deriveStageNotesFromMessage(
   return notes;
 }
 
+function formatRetryStageLabel(stage: string): string {
+  if (stage === "review_approved") {
+    return "approved drafts";
+  }
+  return stage.replace(/_/g, " ");
+}
+
 export default function TaskPage() {
   const params = useParams();
   const router = useRouter();
@@ -426,6 +465,7 @@ export default function TaskPage() {
   const [draftsDirty, setDraftsDirty] = useState(false);
   const [isSavingDrafts, setIsSavingDrafts] = useState(false);
   const [isFinalizing, setIsFinalizing] = useState(false);
+  const [isRetryingTask, setIsRetryingTask] = useState(false);
   const [framingFilter, setFramingFilter] = useState<FramingFilter>("all");
   const [sourceVideoUrl, setSourceVideoUrl] = useState<string | null>(null);
   const [timelineEditorEnabled, setTimelineEditorEnabled] = useState(true);
@@ -475,6 +515,7 @@ export default function TaskPage() {
     return ids;
   }, [overlapConflicts]);
   const hasOverlapConflicts = overlapConflicts.length > 0;
+  const retryableStages = task?.retryable_from_stages || [];
 
   const extractTaskApiErrorMessage = useCallback((payload: unknown, fallback: string): string => {
     if (
@@ -1231,6 +1272,32 @@ export default function TaskPage() {
     }
   };
 
+  const handleRetryTask = async (retryFromStage?: string) => {
+    if (!session?.user?.id || !params.id) return;
+    setIsRetryingTask(true);
+    try {
+      const response = await fetch(`${apiUrl}/tasks/${params.id}/retry`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          user_id: session.user.id,
+        },
+        body: JSON.stringify({
+          retry_from_stage: retryFromStage,
+        }),
+      });
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        throw new Error(extractTaskApiErrorMessage(payload, "Failed to retry task"));
+      }
+      await fetchTaskStatus();
+    } catch (retryError) {
+      setError(retryError instanceof Error ? retryError.message : "Failed to retry task");
+    } finally {
+      setIsRetryingTask(false);
+    }
+  };
+
   const displayProgressMessage = (() => {
     const msg = progressMessage || "";
     const lower = msg.toLowerCase();
@@ -1536,6 +1603,65 @@ export default function TaskPage() {
 
       {/* Main Content */}
       <div className="max-w-6xl mx-auto px-4 py-8">
+        {task ? (
+          <Card className="mb-6 border-slate-200 bg-slate-50/80 dark:border-slate-700 dark:bg-slate-900/70">
+            <CardContent className="space-y-3 p-4">
+              <div className="flex items-center justify-between gap-3">
+                <h3 className="text-sm font-semibold text-slate-900 dark:text-slate-100">Task Diagnostics</h3>
+                {task.processing_profile ? (
+                  <Badge variant="outline" className="bg-white dark:bg-slate-950">
+                    Profile {task.processing_profile.replace(/_/g, " ")}
+                  </Badge>
+                ) : null}
+              </div>
+              <div className="grid gap-3 text-xs sm:grid-cols-2 xl:grid-cols-4">
+                <div>
+                  <p className="text-slate-500">Queue target</p>
+                  <p className="font-medium text-slate-900 dark:text-slate-100">{task.diagnostics?.queue_target || "n/a"}</p>
+                </div>
+                <div>
+                  <p className="text-slate-500">Worker type</p>
+                  <p className="font-medium text-slate-900 dark:text-slate-100">{task.diagnostics?.worker_type || "n/a"}</p>
+                </div>
+                <div>
+                  <p className="text-slate-500">Transcription</p>
+                  <p className="font-medium text-slate-900 dark:text-slate-100">
+                    {task.diagnostics?.transcription?.provider || task.transcription_provider || "n/a"}
+                    {task.diagnostics?.transcription?.model ? ` / ${task.diagnostics.transcription.model}` : ""}
+                  </p>
+                </div>
+                <div>
+                  <p className="text-slate-500">Runtime target</p>
+                  <p className="font-medium text-slate-900 dark:text-slate-100">{task.diagnostics?.runtime_target || "n/a"}</p>
+                </div>
+                <div>
+                  <p className="text-slate-500">AI provider</p>
+                  <p className="font-medium text-slate-900 dark:text-slate-100">
+                    {task.diagnostics?.ai?.provider || task.ai_provider || "n/a"}
+                    {task.diagnostics?.ai?.model ? ` / ${task.diagnostics.ai.model}` : ""}
+                  </p>
+                </div>
+                <div>
+                  <p className="text-slate-500">Stage checkpoint</p>
+                  <p className="font-medium text-slate-900 dark:text-slate-100">{task.stage_checkpoint || "n/a"}</p>
+                </div>
+                <div>
+                  <p className="text-slate-500">Current stage</p>
+                  <p className="font-medium text-slate-900 dark:text-slate-100">{task.diagnostics?.current_stage || "n/a"}</p>
+                </div>
+                <div>
+                  <p className="text-slate-500">Fallback reason</p>
+                  <p className="font-medium text-slate-900 dark:text-slate-100">
+                    {task.diagnostics?.fallback_reason || task.failure_hint || "None"}
+                  </p>
+                </div>
+              </div>
+              {task.progress_message ? (
+                <p className="text-xs text-slate-600 dark:text-slate-300">{task.progress_message}</p>
+              ) : null}
+            </CardContent>
+          </Card>
+        ) : null}
         {task?.status === "processing" || task?.status === "queued" || !task ? (
           <div className="space-y-6">
             <div className="text-center mb-8">
@@ -2005,6 +2131,38 @@ export default function TaskPage() {
 
                           {isExpanded && (
                             <div className="space-y-3 border-t border-slate-200 bg-slate-50/60 px-4 py-3.5 dark:border-slate-700 dark:bg-slate-900/70">
+                              {draft.preview_url ? (
+                                <div className="overflow-hidden rounded-lg border border-slate-200 bg-white dark:border-slate-700 dark:bg-slate-950/70">
+                                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                                  <img
+                                    src={`${apiUrl}${draft.preview_url}?user_id=${encodeURIComponent(userId || "")}`}
+                                    alt={`Preview strip for clip ${displayIndex + 1}`}
+                                    className="h-auto w-full object-cover"
+                                  />
+                                </div>
+                              ) : null}
+
+                              {draft.selection_rationale ? (
+                                <div className="rounded-lg border border-slate-200 bg-white px-3 py-3 dark:border-slate-700 dark:bg-slate-950/70">
+                                  <div className="flex flex-wrap items-center gap-2">
+                                    <Badge variant="outline">
+                                      Transcript {(Number(draft.selection_rationale.transcript_relevance || 0) * 100).toFixed(0)}%
+                                    </Badge>
+                                    <Badge variant="outline">
+                                      Hook {(Number(draft.selection_rationale.hook_score || 0) * 100).toFixed(0)}%
+                                    </Badge>
+                                    <Badge variant="outline">
+                                      Framing {String(draft.selection_rationale.framing_quality || "none")}
+                                    </Badge>
+                                    {(draft.selection_rationale.review_adjustments || []).map((adjustment) => (
+                                      <Badge key={adjustment} variant="outline">
+                                        {adjustment}
+                                      </Badge>
+                                    ))}
+                                  </div>
+                                </div>
+                              ) : null}
+
                               <div className="rounded-lg border border-slate-200 bg-white px-3 py-3 dark:border-slate-700 dark:bg-slate-950/70">
                                 <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
                                   <div className="space-y-2">
@@ -2165,7 +2323,27 @@ export default function TaskPage() {
                 <AlertCircle className="w-12 h-12 mx-auto mb-2" />
                 <h2 className="text-xl font-semibold">Processing Failed</h2>
               </div>
-              <p className="text-gray-600 mb-4">There was an error processing your video. Please try again.</p>
+              <p className="text-gray-600 mb-2">There was an error processing your video.</p>
+              {task.failure_code ? (
+                <p className="mb-2 text-sm font-medium text-red-700">Failure code: {task.failure_code}</p>
+              ) : null}
+              {task.failure_hint ? (
+                <p className="mx-auto mb-4 max-w-2xl text-sm text-slate-600 dark:text-slate-300">{task.failure_hint}</p>
+              ) : null}
+              {retryableStages.length > 0 ? (
+                <div className="mb-4 flex flex-wrap justify-center gap-2">
+                  {retryableStages.map((stage) => (
+                    <Button
+                      key={stage}
+                      variant="outline"
+                      onClick={() => void handleRetryTask(stage)}
+                      disabled={isRetryingTask}
+                    >
+                      Retry from {formatRetryStageLabel(stage)}
+                    </Button>
+                  ))}
+                </div>
+              ) : null}
               <Link href="/">
                 <Button>
                   <ArrowLeft className="w-4 h-4" />

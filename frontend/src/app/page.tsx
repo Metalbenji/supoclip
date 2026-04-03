@@ -27,6 +27,10 @@ import {
   type LocalWhisperModelOption,
 } from "@/lib/whisper-transcription";
 import {
+  getProcessingProfilePreset,
+  PROCESSING_PROFILE_PRESETS,
+} from "@/lib/processing-profiles";
+import {
   normalizeFontSize,
   normalizeFontStyleOptions,
   normalizeFontWeight,
@@ -60,6 +64,7 @@ type AiProvider = (typeof AI_PROVIDERS)[number];
 const WHISPER_MODEL_SIZES = ["tiny", "base", "small", "medium", "large", "turbo"] as const;
 type WhisperDevicePreference = "auto" | "cpu" | "gpu";
 type WhisperModelSize = (typeof WHISPER_MODEL_SIZES)[number];
+type ProcessingProfile = keyof typeof PROCESSING_PROFILE_PRESETS;
 
 const DEFAULT_AI_MODELS = {
   openai: "gpt-5",
@@ -87,6 +92,10 @@ function isAiProvider(value: unknown): value is AiProvider {
 
 function isWhisperModelSize(value: unknown): value is WhisperModelSize {
   return typeof value === "string" && WHISPER_MODEL_SIZES.includes(value as WhisperModelSize);
+}
+
+function isProcessingProfile(value: unknown): value is ProcessingProfile {
+  return typeof value === "string" && value in PROCESSING_PROFILE_PRESETS;
 }
 
 function applyTextTransform(text: string, mode: TextTransformOption): string {
@@ -176,6 +185,10 @@ export default function Home() {
   const [reviewBeforeRenderEnabled, setReviewBeforeRenderEnabled] = useState(true);
   const [transitionsEnabled, setTransitionsEnabled] = useState(false);
   const [timelineEditorEnabled, setTimelineEditorEnabled] = useState(true);
+  const [processingProfile, setProcessingProfile] = useState<ProcessingProfile>("balanced");
+  const [defaultFramingMode, setDefaultFramingMode] = useState<"auto" | "prefer_face" | "fixed_position">("auto");
+  const [faceDetectionMode, setFaceDetectionMode] = useState<"balanced" | "more_faces">("balanced");
+  const [fallbackCropPosition, setFallbackCropPosition] = useState<"center" | "left_center" | "right_center">("center");
   const [transcriptionProvider, setTranscriptionProvider] = useState<"local" | "assemblyai">("local");
   const [whisperChunkingEnabled, setWhisperChunkingEnabled] = useState(DEFAULT_WHISPER_CHUNKING_ENABLED);
   const [whisperChunkDurationSeconds, setWhisperChunkDurationSeconds] = useState(DEFAULT_WHISPER_CHUNK_DURATION_SECONDS);
@@ -193,6 +206,20 @@ export default function Home() {
   const [aiModel, setAiModel] = useState<string>(DEFAULT_AI_MODELS.openai);
   const [aiFocusTags, setAiFocusTags] = useState<AiFocusTag[]>([]);
   const selectedLocalWhisperModel = getWhisperModelOption(localWhisperModels, whisperModelSize);
+  const selectedProcessingProfile = getProcessingProfilePreset(processingProfile);
+
+  const applyProcessingProfile = useCallback((profile: ProcessingProfile) => {
+    const preset = getProcessingProfilePreset(profile);
+    setProcessingProfile(profile);
+    setReviewBeforeRenderEnabled(preset.reviewBeforeRenderEnabled);
+    setTimelineEditorEnabled(preset.timelineEditorEnabled);
+    setTransitionsEnabled(preset.transitionsEnabled);
+    setTranscriptionProvider(preset.transcriptionProvider);
+    setWhisperModelSize(preset.whisperModelSize);
+    setDefaultFramingMode(preset.defaultFramingMode);
+    setFaceDetectionMode(preset.faceDetectionMode);
+    setFallbackCropPosition(preset.fallbackCropPosition);
+  }, []);
 
   // Latest task state
   const [latestTask, setLatestTask] = useState<LatestTask | null>(null);
@@ -288,6 +315,10 @@ export default function Home() {
             reviewBeforeRenderEnabled?: unknown;
             transitionsEnabled?: unknown;
             timelineEditorEnabled?: unknown;
+            defaultProcessingProfile?: unknown;
+            defaultFramingMode?: unknown;
+            faceDetectionMode?: unknown;
+            fallbackCropPosition?: unknown;
             transcriptionProvider?: unknown;
             whisperChunkingEnabled?: unknown;
             whisperChunkDurationSeconds?: unknown;
@@ -323,6 +354,18 @@ export default function Home() {
           setTransitionsEnabled(Boolean(data.transitionsEnabled));
           setTimelineEditorEnabled(
             typeof data.timelineEditorEnabled === "boolean" ? data.timelineEditorEnabled : true,
+          );
+          setProcessingProfile(isProcessingProfile(data.defaultProcessingProfile) ? data.defaultProcessingProfile : "balanced");
+          setDefaultFramingMode(
+            data.defaultFramingMode === "prefer_face" || data.defaultFramingMode === "fixed_position"
+              ? data.defaultFramingMode
+              : "auto",
+          );
+          setFaceDetectionMode(data.faceDetectionMode === "more_faces" ? "more_faces" : "balanced");
+          setFallbackCropPosition(
+            data.fallbackCropPosition === "left_center" || data.fallbackCropPosition === "right_center"
+              ? data.fallbackCropPosition
+              : "center",
           );
 
           const savedTranscriptionProvider = data.transcriptionProvider;
@@ -654,8 +697,14 @@ export default function Home() {
             url: videoUrl,
             title: null
           },
+          processing_profile: processingProfile,
           review_before_render_enabled: reviewBeforeRenderEnabled,
           timeline_editor_enabled: timelineEditorEnabled,
+          video_options: {
+            default_framing_mode: defaultFramingMode,
+            face_detection_mode: faceDetectionMode,
+            fallback_crop_position: fallbackCropPosition,
+          },
           font_options: {
             font_family: fontFamily,
             font_size: fontSize,
@@ -1213,6 +1262,23 @@ export default function Home() {
 
               {showAdvancedOptions && (
                 <div className="space-y-4 pt-2">
+                  <div className="space-y-2 rounded border border-gray-200 bg-white p-3">
+                    <label className="text-sm font-medium text-black">Processing Profile</label>
+                    <Select value={processingProfile} onValueChange={(value) => applyProcessingProfile(value as ProcessingProfile)} disabled={isLoading}>
+                      <SelectTrigger className="w-full">
+                        <SelectValue placeholder="Select processing profile for this task" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {Object.values(PROCESSING_PROFILE_PRESETS).map((profile) => (
+                          <SelectItem key={profile.id} value={profile.id}>
+                            {profile.label}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                    <p className="text-xs text-gray-500">{selectedProcessingProfile.description}</p>
+                  </div>
+
                   {transcriptionProvider === "local" ? (
                     <div className="space-y-2 rounded border border-gray-200 bg-white p-3">
                       <label className="text-sm font-medium text-black">Local Whisper Quality Override</label>
