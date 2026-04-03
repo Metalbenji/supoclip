@@ -57,6 +57,11 @@ RUN if [ "${UV_SYNC_EXTRA}" = "worker" ] && [ "${TORCH_VARIANT}" = "cpu" ]; then
       uv pip install --no-cache-dir --index-url https://download.pytorch.org/whl/cpu "torch==2.10.0+cpu"; \
     fi
 
+ARG CUDA_NVCC_WHEEL_VERSION=
+RUN if [ -n "${CUDA_NVCC_WHEEL_VERSION}" ]; then \
+      uv pip install --python .venv/bin/python --no-cache-dir "nvidia-cuda-nvcc-cu12==${CUDA_NVCC_WHEEL_VERSION}"; \
+    fi
+
 # Keep yt-dlp at latest to handle upstream site/API changes.
 RUN uv pip install --upgrade --force-reinstall --no-cache-dir "yt-dlp[default]"
 
@@ -93,6 +98,19 @@ COPY --from=builder /app/models /app/models
 COPY --from=builder /app/src /app/src
 COPY --from=builder /app/fonts /app/fonts
 COPY --from=builder /app/transitions /app/transitions
+
+ARG CUDA_NVCC_WHEEL_VERSION=
+RUN if [ -n "${CUDA_NVCC_WHEEL_VERSION}" ]; then \
+      mkdir -p /usr/local/cuda/bin \
+      && CUDA_NVCC_BIN_DIR="$(dirname "$(find /app/.venv -path '*/site-packages/nvidia/cuda_nvcc/bin/ptxas' -print -quit)")" \
+      && if [ -n "${CUDA_NVCC_BIN_DIR}" ] && [ -d "${CUDA_NVCC_BIN_DIR}" ]; then \
+           for tool in "${CUDA_NVCC_BIN_DIR}"/*; do \
+             ln -sf "${tool}" "/usr/local/cuda/bin/$(basename "${tool}")"; \
+           done; \
+         fi; \
+    fi
+
+ENV PATH=/usr/local/cuda/bin:${PATH}
 
 RUN mkdir -p /app/uploads /app/clips /app/logs /tmp
 

@@ -231,6 +231,7 @@ services:
       args:
         UV_SYNC_EXTRA: worker
         TORCH_VARIANT: default
+        CUDA_NVCC_WHEEL_VERSION: 12.8.93
       platforms:
         - linux/amd64
     container_name: supoclip-worker-gpu

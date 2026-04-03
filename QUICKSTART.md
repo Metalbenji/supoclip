@@ -275,6 +275,7 @@ MrglSnips runs 6 Docker containers by default:
 Optional:
 - **Worker 2** (same queue, enabled with `--profile multi-worker`)
 - **Worker GPU** (same queue, enabled with `--profile gpu-worker`)
+  - this image now installs the CUDA compiler toolchain so Triton Whisper kernels can use `ptxas` on GPU
 
 All services are connected via a Docker network and start automatically with proper health checks.
 
