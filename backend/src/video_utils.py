@@ -2490,27 +2490,37 @@ def create_optimized_clip(
                 effective_framing_metadata.get("fallback_crop_position")
             )
             tracking_points = list(framing_analysis.get("tracking_points") or [])
+            reliable_face_frames = int(effective_framing_metadata.get("reliable_face_frames") or 0)
             fixed_offsets = tuple(
                 framing_analysis.get("fixed_crop_offsets")
                 or _get_fallback_crop_offsets(video.w, video.h, new_width, new_height, fallback_crop_position)
             )
+            if reliable_face_frames <= 0:
+                fixed_offsets = _get_fallback_crop_offsets(
+                    video.w,
+                    video.h,
+                    new_width,
+                    new_height,
+                    fallback_crop_position,
+                )
 
             should_use_face_crop = False
             if framing_mode == "prefer_face":
-                should_use_face_crop = detection_state in {"weak", "strong"} or bool(effective_framing_metadata.get("face_detected"))
+                should_use_face_crop = reliable_face_frames > 0
             elif crop_confidence in {"high", "medium"}:
                 should_use_face_crop = True
 
             if should_use_face_crop:
-                cropped_clip = _build_tracked_crop_clip(
-                    clip,
-                    new_width,
-                    new_height,
-                    tracking_points,
-                    (int(fixed_offsets[0]), int(fixed_offsets[1])),
+                cropped_clip = clip.cropped(
+                    x1=int(fixed_offsets[0]),
+                    y1=int(fixed_offsets[1]),
+                    x2=int(fixed_offsets[0]) + new_width,
+                    y2=int(fixed_offsets[1]) + new_height,
                 )
-                crop_mode = "face-tracked" if tracking_points else "face-fixed"
-                crop_reason = crop_confidence if crop_confidence != "none" else detection_state
+                crop_mode = "face-locked"
+                crop_reason = crop_confidence if crop_confidence != "none" else (
+                    "stable_face_lock" if tracking_points else detection_state
+                )
             else:
                 cropped_clip = clip.cropped(
                     x1=int(fixed_offsets[0]),
