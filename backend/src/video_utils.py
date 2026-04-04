@@ -10,7 +10,7 @@ import logging
 import gc
 from datetime import datetime
 import numpy as np
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, as_completed
 import json
 import hashlib
 import threading
@@ -23,6 +23,10 @@ from difflib import SequenceMatcher
 import re
 
 import cv2
+
+if Path("/usr/bin/ffmpeg").exists():
+    os.environ.setdefault("IMAGEIO_FFMPEG_EXE", "/usr/bin/ffmpeg")
+
 from moviepy import VideoFileClip, CompositeVideoClip, TextClip, ColorClip
 
 try:
@@ -54,6 +58,8 @@ SUPPORTED_FALLBACK_CROP_POSITIONS = ("center", "left_center", "right_center")
 FRAMING_SCORE_BONUS_HIGH = 0.06
 FRAMING_SCORE_BONUS_MEDIUM = 0.03
 FRAMING_MULTI_FACE_PENALTY_MAX = 0.02
+_ffmpeg_encoder_cache: Optional[set[str]] = None
+_ffmpeg_encoder_lock = threading.Lock()
 
 
 def _normalize_face_detection_mode(value: Any) -> str:
@@ -70,6 +76,41 @@ def _normalize_fallback_crop_position(value: Any) -> str:
     if normalized not in SUPPORTED_FALLBACK_CROP_POSITIONS:
         return "center"
     return normalized
+
+
+def _list_available_ffmpeg_encoders() -> set[str]:
+    global _ffmpeg_encoder_cache
+
+    with _ffmpeg_encoder_lock:
+        if _ffmpeg_encoder_cache is not None:
+            return set(_ffmpeg_encoder_cache)
+
+        try:
+            result = subprocess.run(
+                ["ffmpeg", "-hide_banner", "-encoders"],
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+            encoders: set[str] = set()
+            for raw_line in result.stdout.splitlines():
+                parts = raw_line.strip().split()
+                if len(parts) >= 2 and parts[0].startswith("V"):
+                    encoders.add(parts[1].strip())
+            _ffmpeg_encoder_cache = encoders
+        except Exception as exc:
+            logger.warning("Failed to probe ffmpeg encoders: %s", exc)
+            _ffmpeg_encoder_cache = set()
+
+        return set(_ffmpeg_encoder_cache)
+
+
+def _ffmpeg_supports_encoder(name: str) -> bool:
+    return name in _list_available_ffmpeg_encoders()
+
+
+def _increment_count(counter: Dict[str, int], key: str) -> None:
+    counter[key] = int(counter.get(key) or 0) + 1
 
 class VideoProcessor:
     """Handles video processing operations with optimized settings."""
@@ -104,6 +145,46 @@ class VideoProcessor:
             }
         }
         return settings.get(target_quality, settings["high"])
+
+    def get_clip_render_encoding_candidates(self) -> List[Dict[str, Any]]:
+        runtime_info = get_local_whisper_runtime_info()
+        candidates: List[Dict[str, Any]] = []
+
+        if bool(runtime_info.get("cuda_available")) and _ffmpeg_supports_encoder("h264_nvenc"):
+            candidates.append(
+                {
+                    "encoder_backend": "h264_nvenc",
+                    "encoder_profile": "gpu_fast",
+                    "settings": {
+                        "codec": "h264_nvenc",
+                        "audio_codec": "aac",
+                        "bitrate": "6000k",
+                        "audio_bitrate": "192k",
+                        "preset": "p4",
+                        "ffmpeg_params": [
+                            "-pix_fmt",
+                            "yuv420p",
+                            "-profile:v",
+                            "main",
+                        ],
+                    },
+                }
+            )
+
+        candidates.append(
+            {
+                "encoder_backend": "libx264",
+                "encoder_profile": "cpu_fast",
+                "settings": {
+                    "codec": "libx264",
+                    "audio_codec": "aac",
+                    "audio_bitrate": "192k",
+                    "preset": "veryfast",
+                    "ffmpeg_params": ["-crf", "22", "-pix_fmt", "yuv420p", "-profile:v", "main"],
+                },
+            }
+        )
+        return candidates
 
 def _get_transcription_provider(provider_override: Optional[str] = None) -> str:
     provider = (provider_override or config.transcription_provider or "local").strip().lower()
@@ -1315,6 +1396,144 @@ def _calculate_weighted_crop_offsets(
     return round_to_even(x_offset), round_to_even(y_offset)
 
 
+def _calculate_face_tracking_offset(
+    center_x: int,
+    center_y: int,
+    frame_width: int,
+    frame_height: int,
+    crop_width: int,
+    crop_height: int,
+) -> Tuple[int, int]:
+    target_y = max(0.0, float(center_y) - crop_height * 0.1)
+    tracked_x = max(0, min(int(float(center_x) - crop_width / 2), frame_width - crop_width))
+    tracked_y = max(0, min(int(target_y - crop_height / 2), frame_height - crop_height))
+    return round_to_even(tracked_x), round_to_even(tracked_y)
+
+
+def _select_dominant_face_track(
+    candidate_points: List[Dict[str, Any]],
+    frame_width: int,
+    frame_height: int,
+    crop_width: int,
+    crop_height: int,
+) -> Tuple[List[Dict[str, Any]], Dict[str, float]]:
+    if not candidate_points:
+        return [], {
+            "consistency_rate": 0.0,
+            "rejected_rate": 0.0,
+            "x_spread": 0.0,
+            "y_spread": 0.0,
+        }
+
+    enriched_points: List[Dict[str, Any]] = []
+    for point in candidate_points:
+        x_offset, y_offset = _calculate_face_tracking_offset(
+            int(point.get("center_x") or 0),
+            int(point.get("center_y") or 0),
+            frame_width,
+            frame_height,
+            crop_width,
+            crop_height,
+        )
+        enriched_points.append(
+            {
+                **point,
+                "x_offset": x_offset,
+                "y_offset": y_offset,
+            }
+        )
+
+    if len(enriched_points) < 3:
+        return enriched_points, {
+            "consistency_rate": 1.0,
+            "rejected_rate": 0.0,
+            "x_spread": 0.0,
+            "y_spread": 0.0,
+        }
+
+    cluster_window_x = max(80, round_to_even(int(crop_width * 0.22)))
+    cluster_window_y = max(40, round_to_even(int(crop_height * 0.12)))
+    best_cluster: List[Dict[str, Any]] = []
+    best_score = (-1, -1.0, 1.0)
+
+    for seed in enriched_points:
+        cluster = [
+            point
+            for point in enriched_points
+            if abs(int(point["x_offset"]) - int(seed["x_offset"])) <= cluster_window_x
+            and abs(int(point["y_offset"]) - int(seed["y_offset"])) <= cluster_window_y
+        ]
+        weight_total = sum(float(point.get("area") or 0) * max(0.1, float(point.get("confidence") or 0.0)) for point in cluster)
+        mean_offset = (
+            sum(float(point["x_offset"]) for point in cluster) / len(cluster)
+            if cluster
+            else float(seed["x_offset"])
+        )
+        score = (len(cluster), weight_total, -abs(float(seed["x_offset"]) - mean_offset))
+        if score > best_score:
+            best_score = score
+            best_cluster = cluster
+
+    if not best_cluster:
+        return enriched_points, {
+            "consistency_rate": 1.0,
+            "rejected_rate": 0.0,
+            "x_spread": 0.0,
+            "y_spread": 0.0,
+        }
+
+    median_x = float(np.median([point["x_offset"] for point in best_cluster]))
+    median_y = float(np.median([point["y_offset"] for point in best_cluster]))
+    refined_cluster = [
+        point
+        for point in enriched_points
+        if abs(float(point["x_offset"]) - median_x) <= cluster_window_x
+        and abs(float(point["y_offset"]) - median_y) <= cluster_window_y
+    ]
+    if len(refined_cluster) >= max(2, int(len(enriched_points) * 0.35)):
+        best_cluster = refined_cluster
+
+    best_cluster = sorted(best_cluster, key=lambda point: float(point.get("time") or 0.0))
+    x_positions = [int(point["x_offset"]) for point in best_cluster]
+    y_positions = [int(point["y_offset"]) for point in best_cluster]
+
+    return best_cluster, {
+        "consistency_rate": round(len(best_cluster) / len(enriched_points), 4),
+        "rejected_rate": round(max(0.0, 1.0 - (len(best_cluster) / len(enriched_points))), 4),
+        "x_spread": float(max(x_positions) - min(x_positions)) if len(x_positions) > 1 else 0.0,
+        "y_spread": float(max(y_positions) - min(y_positions)) if len(y_positions) > 1 else 0.0,
+    }
+
+
+def _calculate_weighted_tracking_offsets(
+    tracking_points: List[Dict[str, Any]],
+    original_width: int,
+    original_height: int,
+    crop_width: int,
+    crop_height: int,
+) -> Tuple[int, int]:
+    if not tracking_points:
+        return _get_default_center_crop_offsets(original_width, original_height, crop_width, crop_height)
+
+    total_weight = sum(float(point.get("area") or 0) * max(0.1, float(point.get("confidence") or 0.0)) for point in tracking_points)
+    if total_weight <= 0:
+        x_values = [int(point.get("x_offset") or 0) for point in tracking_points]
+        y_values = [int(point.get("y_offset") or 0) for point in tracking_points]
+        return (
+            round_to_even(int(np.median(x_values))) if x_values else 0,
+            round_to_even(int(np.median(y_values))) if y_values else 0,
+        )
+
+    weighted_x = sum(float(point.get("x_offset") or 0) * float(point.get("area") or 0) * max(0.1, float(point.get("confidence") or 0.0)) for point in tracking_points) / total_weight
+    weighted_y = sum(float(point.get("y_offset") or 0) * float(point.get("area") or 0) * max(0.1, float(point.get("confidence") or 0.0)) for point in tracking_points) / total_weight
+    max_x = max(0, original_width - crop_width)
+    max_y = max(0, original_height - crop_height)
+    return (
+        round_to_even(max(0, min(int(weighted_x), max_x))),
+        round_to_even(max(0, min(int(weighted_y), max_y))),
+    )
+
+
 def _summarize_face_detection_samples(
     samples: List[Dict[str, Any]],
     start_time: float,
@@ -1357,6 +1576,7 @@ def _summarize_face_detection_samples(
     face_counts: List[int] = []
     face_centers: List[Tuple[int, int, int, float]] = []
     tracking_points: List[Dict[str, Any]] = []
+    candidate_tracking_points: List[Dict[str, Any]] = []
     raw_face_frames = 0
     reliable_face_frames = 0
     multi_face_frames = 0
@@ -1383,31 +1603,55 @@ def _summarize_face_detection_samples(
         if not faces:
             continue
 
-        reliable_face_frames += 1
         face_count = len(faces)
-        face_counts.append(face_count)
-        if face_count > 1:
-            multi_face_frames += 1
-
         primary_face = sample.get("primary_face") or faces[0]
-        area_ratio = float(primary_face.get("area_ratio") or 0.0)
-        primary_area_ratios.append(area_ratio)
-        face_centers.append(
-            (
-                int(primary_face.get("center_x") or 0),
-                int(primary_face.get("center_y") or 0),
-                int(primary_face.get("area") or 0),
-                float(primary_face.get("confidence") or 0.0),
-            )
-        )
-        tracking_points.append(
+        candidate_tracking_points.append(
             {
                 "time": round(float(sample.get("time") or 0.0) - start_time, 4),
                 "center_x": int(primary_face.get("center_x") or 0),
                 "center_y": int(primary_face.get("center_y") or 0),
                 "area": int(primary_face.get("area") or 0),
+                "area_ratio": float(primary_face.get("area_ratio") or 0.0),
                 "confidence": float(primary_face.get("confidence") or 0.0),
                 "face_count": face_count,
+                "detector_backend": backend_name,
+            }
+        )
+
+    frame_width = int(samples[0].get("frame_width") or 0)
+    frame_height = int(samples[0].get("frame_height") or 0)
+    dominant_track_points, tracking_metrics = _select_dominant_face_track(
+        candidate_tracking_points,
+        frame_width,
+        frame_height,
+        crop_width,
+        crop_height,
+    )
+
+    for point in dominant_track_points:
+        reliable_face_frames += 1
+        face_count = int(point.get("face_count") or 0)
+        face_counts.append(face_count)
+        if face_count > 1:
+            multi_face_frames += 1
+
+        area_ratio = float(point.get("area_ratio") or 0.0)
+        primary_area_ratios.append(area_ratio)
+        face_centers.append(
+            (
+                int(point.get("center_x") or 0),
+                int(point.get("center_y") or 0),
+                int(point.get("area") or 0),
+                float(point.get("confidence") or 0.0),
+            )
+        )
+        tracking_points.append(
+            {
+                "time": round(float(point.get("time") or 0.0), 4),
+                "x_offset": int(point.get("x_offset") or 0),
+                "y_offset": int(point.get("y_offset") or 0),
+                "face_count": face_count,
+                "confidence": float(point.get("confidence") or 0.0),
             }
         )
 
@@ -1438,6 +1682,8 @@ def _summarize_face_detection_samples(
             and reliable_face_rate >= 0.6
             and (primary_face_area_ratio or 0.0) >= 0.02
             and multi_face_frames_rate <= 0.15
+            and tracking_metrics.get("consistency_rate", 0.0) >= 0.7
+            and tracking_metrics.get("x_spread", 0.0) <= max(120.0, crop_width * 0.22)
         ):
             crop_confidence = "high"
         elif (
@@ -1445,8 +1691,13 @@ def _summarize_face_detection_samples(
             and reliable_face_rate >= 0.35
             and (primary_face_area_ratio or 0.0) >= (0.008 if normalized_face_detection_mode == "more_faces" else 0.01)
             and multi_face_frames_rate <= 0.35
+            and tracking_metrics.get("consistency_rate", 0.0) >= 0.5
+            and tracking_metrics.get("x_spread", 0.0) <= max(180.0, crop_width * 0.32)
         ):
             crop_confidence = "medium"
+
+    if detector_backend == "haar" and tracking_metrics.get("consistency_rate", 0.0) < 0.65:
+        crop_confidence = "low" if reliable_face_frames > 0 else "none"
 
     suggested_crop_mode = "face" if crop_confidence in {"high", "medium"} else "center"
     detection_state = "none"
@@ -1464,30 +1715,13 @@ def _summarize_face_detection_samples(
     if reliable_face_frames > 0 and multi_face_frames_rate > 0.25:
         score_adjustment -= min(FRAMING_MULTI_FACE_PENALTY_MAX, round(multi_face_frames_rate * 0.05, 4))
 
-    x_offset, y_offset = _calculate_weighted_crop_offsets(
-        face_centers,
-        int(samples[0].get("frame_width") or 0),
-        int(samples[0].get("frame_height") or 0),
+    x_offset, y_offset = _calculate_weighted_tracking_offsets(
+        dominant_track_points,
+        frame_width,
+        frame_height,
         crop_width,
         crop_height,
     )
-
-    processed_tracking_points: List[Dict[str, Any]] = []
-    frame_width = int(samples[0].get("frame_width") or 0)
-    frame_height = int(samples[0].get("frame_height") or 0)
-    for point in tracking_points:
-        target_y = max(0.0, float(point["center_y"]) - crop_height * 0.1)
-        tracked_x = max(0, min(int(float(point["center_x"]) - crop_width / 2), frame_width - crop_width))
-        tracked_y = max(0, min(int(target_y - crop_height / 2), frame_height - crop_height))
-        processed_tracking_points.append(
-            {
-                "time": round(float(point["time"]), 4),
-                "x_offset": round_to_even(tracked_x),
-                "y_offset": round_to_even(tracked_y),
-                "face_count": int(point["face_count"]),
-                "confidence": float(point["confidence"]),
-            }
-        )
 
     return {
         "face_detected": bool(raw_face_frames > 0),
@@ -1507,7 +1741,11 @@ def _summarize_face_detection_samples(
         "face_detection_mode": normalized_face_detection_mode,
         "fallback_crop_position": normalized_fallback_crop_position,
         "face_centers": face_centers,
-        "tracking_points": processed_tracking_points,
+        "tracking_points": tracking_points,
+        "tracking_consistency_rate": round(float(tracking_metrics.get("consistency_rate") or 0.0), 4),
+        "tracking_rejected_rate": round(float(tracking_metrics.get("rejected_rate") or 0.0), 4),
+        "tracking_x_spread": round(float(tracking_metrics.get("x_spread") or 0.0), 2),
+        "tracking_y_spread": round(float(tracking_metrics.get("y_spread") or 0.0), 2),
         "fixed_crop_offsets": (x_offset, y_offset),
     }
 
@@ -1651,13 +1889,19 @@ def analyze_single_segment_framing(
     if end_seconds <= start_seconds:
         return {}
     with VideoFileClip(str(video_path)) as video:
-        return analyze_clip_framing(
+        analysis = analyze_clip_framing(
             video,
             start_seconds,
             end_seconds,
             face_detection_mode=face_detection_mode,
             fallback_crop_position=fallback_crop_position,
-        ).get("framing_metadata", {})
+        )
+    metadata = dict(analysis.get("framing_metadata") or {})
+    metadata["crop_width"] = int(analysis.get("crop_width") or 0)
+    metadata["crop_height"] = int(analysis.get("crop_height") or 0)
+    metadata["fixed_crop_offsets"] = list(analysis.get("fixed_crop_offsets") or [])
+    metadata["tracking_points"] = list(analysis.get("tracking_points") or [])
+    return metadata
 
 
 def analyze_segment_framing_batch(
@@ -1686,7 +1930,12 @@ def analyze_segment_framing_batch(
                         or fallback_crop_position
                     ),
                 )
-                results.append(dict(analysis.get("framing_metadata") or {}))
+                metadata = dict(analysis.get("framing_metadata") or {})
+                metadata["crop_width"] = int(analysis.get("crop_width") or 0)
+                metadata["crop_height"] = int(analysis.get("crop_height") or 0)
+                metadata["fixed_crop_offsets"] = list(analysis.get("fixed_crop_offsets") or [])
+                metadata["tracking_points"] = list(analysis.get("tracking_points") or [])
+                results.append(metadata)
             except Exception as exc:
                 logger.warning(
                     "Failed framing analysis for segment %s -> %s: %s",
@@ -2457,6 +2706,7 @@ def create_optimized_clip(
     framing_mode_override: str = "auto",
     framing_metadata: Optional[Dict[str, Any]] = None,
     error_collector: Optional[List[str]] = None,
+    render_details_sink: Optional[Dict[str, Any]] = None,
 ) -> bool:
     """Create optimized 9:16 clip with word-timed subtitles."""
     try:
@@ -2502,6 +2752,20 @@ def create_optimized_clip(
         crop_confidence = str(effective_framing_metadata.get("crop_confidence") or "none")
         detection_state = str(effective_framing_metadata.get("detection_state") or "none")
         face_detection_mode = _normalize_face_detection_mode(effective_framing_metadata.get("face_detection_mode"))
+        framing_analysis_source = "persisted_metadata"
+        tracking_points = list(effective_framing_metadata.get("tracking_points") or [])
+        persisted_crop_width = int(effective_framing_metadata.get("crop_width") or 0)
+        persisted_crop_height = int(effective_framing_metadata.get("crop_height") or 0)
+        persisted_fixed_offsets_raw = effective_framing_metadata.get("fixed_crop_offsets")
+        persisted_fixed_offsets: Optional[Tuple[int, int]] = None
+        if isinstance(persisted_fixed_offsets_raw, (list, tuple)) and len(persisted_fixed_offsets_raw) == 2:
+            try:
+                persisted_fixed_offsets = (
+                    int(persisted_fixed_offsets_raw[0]),
+                    int(persisted_fixed_offsets_raw[1]),
+                )
+            except (TypeError, ValueError):
+                persisted_fixed_offsets = None
 
         if framing_mode == "fixed_position":
             cropped_clip = clip.cropped(
@@ -2511,34 +2775,48 @@ def create_optimized_clip(
                 y2=fallback_y_offset + new_height,
             )
         else:
-            framing_analysis = analyze_clip_framing(
-                video,
-                start_time,
-                end_time,
-                target_ratio=9 / 16,
-                face_detection_mode=face_detection_mode,
-                fallback_crop_position=fallback_crop_position,
+            can_reuse_framing_metadata = (
+                persisted_fixed_offsets is not None
+                and persisted_crop_width == new_width
+                and persisted_crop_height == new_height
             )
-            effective_framing_metadata = dict(framing_analysis.get("framing_metadata") or effective_framing_metadata)
-            crop_confidence = str(effective_framing_metadata.get("crop_confidence") or "none")
-            detection_state = str(effective_framing_metadata.get("detection_state") or "none")
-            fallback_crop_position = _normalize_fallback_crop_position(
-                effective_framing_metadata.get("fallback_crop_position")
-            )
-            tracking_points = list(framing_analysis.get("tracking_points") or [])
-            reliable_face_frames = int(effective_framing_metadata.get("reliable_face_frames") or 0)
-            fixed_offsets = tuple(
-                framing_analysis.get("fixed_crop_offsets")
-                or _get_fallback_crop_offsets(video.w, video.h, new_width, new_height, fallback_crop_position)
-            )
-            if reliable_face_frames <= 0:
-                fixed_offsets = _get_fallback_crop_offsets(
-                    video.w,
-                    video.h,
-                    new_width,
-                    new_height,
-                    fallback_crop_position,
+            if can_reuse_framing_metadata:
+                reliable_face_frames = int(effective_framing_metadata.get("reliable_face_frames") or 0)
+                fixed_offsets = persisted_fixed_offsets
+            else:
+                framing_analysis_source = "render_reanalysis"
+                framing_analysis = analyze_clip_framing(
+                    video,
+                    start_time,
+                    end_time,
+                    target_ratio=9 / 16,
+                    face_detection_mode=face_detection_mode,
+                    fallback_crop_position=fallback_crop_position,
                 )
+                effective_framing_metadata = dict(framing_analysis.get("framing_metadata") or effective_framing_metadata)
+                effective_framing_metadata["crop_width"] = int(framing_analysis.get("crop_width") or new_width)
+                effective_framing_metadata["crop_height"] = int(framing_analysis.get("crop_height") or new_height)
+                effective_framing_metadata["fixed_crop_offsets"] = list(framing_analysis.get("fixed_crop_offsets") or [])
+                effective_framing_metadata["tracking_points"] = list(framing_analysis.get("tracking_points") or [])
+                crop_confidence = str(effective_framing_metadata.get("crop_confidence") or "none")
+                detection_state = str(effective_framing_metadata.get("detection_state") or "none")
+                fallback_crop_position = _normalize_fallback_crop_position(
+                    effective_framing_metadata.get("fallback_crop_position")
+                )
+                tracking_points = list(framing_analysis.get("tracking_points") or [])
+                reliable_face_frames = int(effective_framing_metadata.get("reliable_face_frames") or 0)
+                fixed_offsets = tuple(
+                    framing_analysis.get("fixed_crop_offsets")
+                    or _get_fallback_crop_offsets(video.w, video.h, new_width, new_height, fallback_crop_position)
+                )
+                if reliable_face_frames <= 0:
+                    fixed_offsets = _get_fallback_crop_offsets(
+                        video.w,
+                        video.h,
+                        new_width,
+                        new_height,
+                        fallback_crop_position,
+                    )
 
             should_use_face_crop = False
             if framing_mode == "prefer_face":
@@ -2601,21 +2879,60 @@ def create_optimized_clip(
         final_clip = CompositeVideoClip(final_clips) if len(final_clips) > 1 else cropped_clip
 
         processor = VideoProcessor(font_family, font_size, font_color)
-        encoding_settings = processor.get_optimal_encoding_settings("high")
+        clip_encoding_candidates = processor.get_clip_render_encoding_candidates()
+        selected_encoder_backend = ""
+        selected_encoder_profile = ""
+        last_encode_error: Optional[Exception] = None
 
-        final_clip.write_videofile(
-            str(output_path),
-            temp_audiofile='temp-audio.m4a',
-            remove_temp=True,
-            logger=None,
-            **encoding_settings
-        )
+        for encoding_candidate in clip_encoding_candidates:
+            selected_encoder_backend = str(encoding_candidate.get("encoder_backend") or "")
+            selected_encoder_profile = str(encoding_candidate.get("encoder_profile") or "")
+            temp_audiofile = output_path.with_name(
+                f"{output_path.stem}.{selected_encoder_profile or 'render'}.temp-audio.m4a"
+            )
+            try:
+                final_clip.write_videofile(
+                    str(output_path),
+                    temp_audiofile=str(temp_audiofile),
+                    remove_temp=True,
+                    logger=None,
+                    **dict(encoding_candidate.get("settings") or {}),
+                )
+                break
+            except Exception as encode_error:
+                last_encode_error = encode_error
+                logger.warning(
+                    "Clip encode failed using %s (%s); retrying if fallback remains: %s",
+                    selected_encoder_backend,
+                    selected_encoder_profile,
+                    encode_error,
+                )
+                try:
+                    output_path.unlink(missing_ok=True)
+                except Exception:
+                    pass
+                try:
+                    temp_audiofile.unlink(missing_ok=True)
+                except Exception:
+                    pass
+        else:
+            if last_encode_error is not None:
+                raise last_encode_error
 
         # Cleanup
         final_clip.close()
         clip.close()
         video.close()
 
+        if render_details_sink is not None:
+            render_details_sink.update(
+                {
+                    "encoder_backend": selected_encoder_backend,
+                    "encoder_profile": selected_encoder_profile,
+                    "framing_analysis_source": framing_analysis_source,
+                    "framing_metadata_reused": framing_analysis_source == "persisted_metadata",
+                }
+            )
         logger.info(f"Successfully created clip: {output_path}")
         return True
 
@@ -2636,6 +2953,7 @@ def create_clips_from_segments(
     diagnostics: Optional[Dict[str, Any]] = None,
     progress_callback: Optional[Callable[[Dict[str, Any]], None]] = None,
     filename_prefix: Optional[str] = None,
+    max_workers: int = 1,
 ) -> List[Dict[str, Any]]:
     """Create optimized video clips from segments."""
     video_path = Path(video_path)
@@ -2643,58 +2961,95 @@ def create_clips_from_segments(
     logger.info(f"Creating {len(segments)} clips")
 
     output_dir.mkdir(parents=True, exist_ok=True)
-    clips_info = []
+    clips_info: List[Dict[str, Any]] = []
     clip_failures: List[Dict[str, Any]] = []
     resolved_filename_prefix = _format_clip_run_prefix(filename_prefix)
 
     total_segments = len(segments)
-    for i, segment in enumerate(segments):
+    parallel_workers = max(1, min(int(max_workers or 1), total_segments or 1))
+    progress_state_lock = threading.Lock()
+    completed_count = 0
+    encoder_backend_counts: Dict[str, int] = {}
+    encoder_profile_counts: Dict[str, int] = {}
+    framing_analysis_source_counts: Dict[str, int] = {}
+
+    def _emit_progress(event: Dict[str, Any]) -> None:
+        if progress_callback:
+            progress_callback(event)
+
+    def render_segment(segment_index: int, segment: Dict[str, Any]) -> Dict[str, Any]:
+        nonlocal completed_count
+
+        clip_index = segment_index + 1
         try:
-            # Debug log the segment data
-            logger.info(f"Processing segment {i+1}: start='{segment.get('start_time')}', end='{segment.get('end_time')}'")
+            logger.info(
+                "Processing segment %s: start='%s', end='%s'",
+                clip_index,
+                segment.get("start_time"),
+                segment.get("end_time"),
+            )
 
-            start_seconds = parse_timestamp_to_seconds(segment['start_time'])
-            end_seconds = parse_timestamp_to_seconds(segment['end_time'])
-
+            start_seconds = parse_timestamp_to_seconds(segment["start_time"])
+            end_seconds = parse_timestamp_to_seconds(segment["end_time"])
             duration = end_seconds - start_seconds
-            logger.info(f"Segment {i+1} duration: {duration:.1f}s (start: {start_seconds}s, end: {end_seconds}s)")
+            logger.info(
+                "Segment %s duration: %.1fs (start: %ss, end: %ss)",
+                clip_index,
+                duration,
+                start_seconds,
+                end_seconds,
+            )
 
             if duration <= 0:
-                logger.warning(f"Skipping clip {i+1}: invalid duration {duration:.1f}s (start: {start_seconds}s, end: {end_seconds}s)")
-                if progress_callback:
-                    progress_callback(
-                        {
-                            "kind": "completed",
-                            "clip_index": i + 1,
-                            "clip_total": total_segments,
-                            "stage_label": f"Skipped clip {i + 1} of {total_segments}",
-                            "start_time": segment.get("start_time"),
-                            "end_time": segment.get("end_time"),
-                        }
-                    )
-                continue
+                logger.warning(
+                    "Skipping clip %s: invalid duration %.1fs (start: %ss, end: %ss)",
+                    clip_index,
+                    duration,
+                    start_seconds,
+                    end_seconds,
+                )
+                with progress_state_lock:
+                    completed_count += 1
+                    current_completed = completed_count
+                _emit_progress(
+                    {
+                        "kind": "completed",
+                        "clip_index": clip_index,
+                        "clip_total": total_segments,
+                        "completed_count": current_completed,
+                        "stage_label": f"Skipped clip {clip_index} of {total_segments}",
+                        "start_time": segment.get("start_time"),
+                        "end_time": segment.get("end_time"),
+                        "success": False,
+                        "error": "invalid_duration",
+                    }
+                )
+                return {"clip_index": clip_index, "clip_info": None, "failure": "invalid_duration", "render_details": {}}
 
             clip_filename = _build_clip_filename(
-                clip_index=i + 1,
+                clip_index=clip_index,
                 start_seconds=start_seconds,
                 end_seconds=end_seconds,
                 filename_prefix=resolved_filename_prefix,
             )
             clip_path = output_dir / clip_filename
-            if progress_callback:
-                progress_callback(
-                    {
-                        "kind": "started",
-                        "clip_index": i + 1,
-                        "clip_total": total_segments,
-                        "stage_label": f"Rendering clip {i + 1} of {total_segments}",
-                        "start_time": segment.get("start_time"),
-                        "end_time": segment.get("end_time"),
-                        "filename": clip_filename,
-                    }
-                )
+            with progress_state_lock:
+                current_completed = completed_count
+            _emit_progress(
+                {
+                    "kind": "started",
+                    "clip_index": clip_index,
+                    "clip_total": total_segments,
+                    "completed_count": current_completed,
+                    "stage_label": f"Rendering clip {clip_index} of {total_segments}",
+                    "start_time": segment.get("start_time"),
+                    "end_time": segment.get("end_time"),
+                    "filename": clip_filename,
+                }
+            )
 
             clip_errors: List[str] = []
+            render_details: Dict[str, Any] = {}
             success = create_optimized_clip(
                 video_path,
                 start_seconds,
@@ -2713,72 +3068,102 @@ def create_clips_from_segments(
                     else None
                 ),
                 error_collector=clip_errors,
+                render_details_sink=render_details,
             )
 
             if success:
                 clip_info = {
-                    "clip_id": i + 1,
+                    "clip_id": clip_index,
                     "filename": clip_filename,
                     "path": str(clip_path),
-                    "start_time": segment['start_time'],
-                    "end_time": segment['end_time'],
+                    "start_time": segment["start_time"],
+                    "end_time": segment["end_time"],
                     "duration": duration,
-                    "text": segment['text'],
-                    "relevance_score": segment['relevance_score'],
-                    "reasoning": segment['reasoning'],
+                    "text": segment["text"],
+                    "relevance_score": segment["relevance_score"],
+                    "reasoning": segment["reasoning"],
                     "framing_metadata": segment.get("framing_metadata") or {},
                     "framing_mode_override": str(segment.get("framing_mode_override") or "auto"),
+                    "encoder_backend": render_details.get("encoder_backend"),
+                    "encoder_profile": render_details.get("encoder_profile"),
+                    "framing_analysis_source": render_details.get("framing_analysis_source"),
                 }
-                clips_info.append(clip_info)
-                logger.info(f"Created clip {i+1}: {duration:.1f}s")
+                logger.info("Created clip %s: %.1fs", clip_index, duration)
             else:
-                logger.error(f"Failed to create clip {i+1}")
-                clip_failures.append(
-                    {
-                        "clip_index": i + 1,
-                        "start_time": segment.get("start_time"),
-                        "end_time": segment.get("end_time"),
-                        "error": clip_errors[-1] if clip_errors else "unknown_error",
-                    }
-                )
+                clip_info = None
+                logger.error("Failed to create clip %s", clip_index)
 
-            if progress_callback:
-                progress_callback(
-                    {
-                        "kind": "completed",
-                        "clip_index": i + 1,
-                        "clip_total": total_segments,
-                        "stage_label": f"Rendered clip {i + 1} of {total_segments}",
-                        "start_time": segment.get("start_time"),
-                        "end_time": segment.get("end_time"),
-                        "filename": clip_filename,
-                        "success": success,
-                    }
-                )
+            with progress_state_lock:
+                completed_count += 1
+                current_completed = completed_count
 
-        except Exception as e:
-            logger.error(f"Error processing clip {i+1}: {e}")
-            clip_failures.append(
+            _emit_progress(
                 {
-                    "clip_index": i + 1,
+                    "kind": "completed",
+                    "clip_index": clip_index,
+                    "clip_total": total_segments,
+                    "completed_count": current_completed,
+                    "stage_label": f"Rendered clip {clip_index} of {total_segments}",
                     "start_time": segment.get("start_time"),
                     "end_time": segment.get("end_time"),
-                    "error": str(e),
+                    "filename": clip_filename,
+                    "success": success,
                 }
             )
-            if progress_callback:
-                progress_callback(
-                    {
-                        "kind": "completed",
-                        "clip_index": i + 1,
-                        "clip_total": total_segments,
-                        "stage_label": f"Clip {i + 1} failed during render",
-                        "start_time": segment.get("start_time"),
-                        "end_time": segment.get("end_time"),
-                        "success": False,
-                        "error": str(e),
-                    }
-                )
+
+            return {
+                "clip_index": clip_index,
+                "clip_info": clip_info,
+                "failure": clip_errors[-1] if clip_errors else None,
+                "render_details": render_details,
+            }
+        except Exception as exc:
+            logger.error("Error processing clip %s: %s", clip_index, exc)
+            with progress_state_lock:
+                completed_count += 1
+                current_completed = completed_count
+            _emit_progress(
+                {
+                    "kind": "completed",
+                    "clip_index": clip_index,
+                    "clip_total": total_segments,
+                    "completed_count": current_completed,
+                    "stage_label": f"Clip {clip_index} failed during render",
+                    "start_time": segment.get("start_time"),
+                    "end_time": segment.get("end_time"),
+                    "success": False,
+                    "error": str(exc),
+                }
+            )
+            return {"clip_index": clip_index, "clip_info": None, "failure": str(exc), "render_details": {}}
+
+    results: List[Dict[str, Any]] = []
+    with ThreadPoolExecutor(max_workers=parallel_workers) as executor:
+        futures = [
+            executor.submit(render_segment, segment_index, segment)
+            for segment_index, segment in enumerate(segments)
+        ]
+        for future in as_completed(futures):
+            results.append(future.result())
+
+    for result in sorted(results, key=lambda item: int(item.get("clip_index") or 0)):
+        clip_info = result.get("clip_info")
+        render_details = result.get("render_details") if isinstance(result.get("render_details"), dict) else {}
+        if clip_info:
+            clips_info.append(clip_info)
+            if render_details.get("encoder_backend"):
+                _increment_count(encoder_backend_counts, str(render_details["encoder_backend"]))
+            if render_details.get("encoder_profile"):
+                _increment_count(encoder_profile_counts, str(render_details["encoder_profile"]))
+            if render_details.get("framing_analysis_source"):
+                _increment_count(framing_analysis_source_counts, str(render_details["framing_analysis_source"]))
+            continue
+        clip_failures.append(
+            {
+                "clip_index": int(result.get("clip_index") or 0),
+                "error": str(result.get("failure") or "unknown_error"),
+            }
+        )
 
     logger.info(f"Successfully created {len(clips_info)}/{len(segments)} clips")
     if diagnostics is not None:
@@ -2788,6 +3173,10 @@ def create_clips_from_segments(
                 "created_clips": len(clips_info),
                 "failed_segments": len(clip_failures),
                 "failure_samples": clip_failures[:3],
+                "parallel_workers": parallel_workers,
+                "encoder_backend_counts": encoder_backend_counts,
+                "encoder_profile_counts": encoder_profile_counts,
+                "framing_analysis_source_counts": framing_analysis_source_counts,
             }
         )
     return clips_info
@@ -2844,7 +3233,7 @@ def apply_transition_effect(clip1_path: Path, clip2_path: Path, transition_path:
 
         final_clip.write_videofile(
             str(output_path),
-            temp_audiofile='temp-audio.m4a',
+            temp_audiofile=str(output_path.with_name(f"{output_path.stem}.transition.temp-audio.m4a")),
             remove_temp=True,
             logger=None,
             **encoding_settings
@@ -2874,6 +3263,7 @@ def create_clips_with_transitions(
     diagnostics: Optional[Dict[str, Any]] = None,
     progress_callback: Optional[Callable[[Dict[str, Any]], None]] = None,
     filename_prefix: Optional[str] = None,
+    max_workers: int = 1,
 ) -> List[Dict[str, Any]]:
     """Create video clips with transition effects between them."""
     video_path = Path(video_path)
@@ -2893,6 +3283,7 @@ def create_clips_with_transitions(
         diagnostics=render_diagnostics,
         progress_callback=progress_callback,
         filename_prefix=filename_prefix,
+        max_workers=1,
     )
 
     if len(clips_info) < 2:

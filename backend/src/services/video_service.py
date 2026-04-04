@@ -374,11 +374,10 @@ class VideoService:
             if not progress_callback:
                 return
             total = int(event.get("clip_total") or 0)
-            clip_index = int(event.get("clip_index") or 0)
-            kind = str(event.get("kind") or "completed").strip().lower()
             if total <= 0:
                 return
-            completed = clip_index - 1 if kind == "started" else clip_index
+            clip_index = int(event.get("clip_index") or 0)
+            completed = int(event.get("completed_count") or 0)
             pct = int((max(0, min(total, completed)) / total) * 100)
             stage_progress = max(0, min(100, pct))
             overall_progress = 70 + int((stage_progress / 100) * 25)  # 70..95
@@ -393,9 +392,10 @@ class VideoService:
                         "overall_progress": overall_progress,
                         "clip_index": clip_index,
                         "clip_total": total,
+                        "completed_count": completed,
                         "stage_label": stage_label,
-                        "clip_started": kind == "started",
-                        "clip_completed": kind != "started",
+                        "clip_started": str(event.get("kind") or "completed").strip().lower() == "started",
+                        "clip_completed": str(event.get("kind") or "completed").strip().lower() != "started",
                         "start_time": event.get("start_time"),
                         "end_time": event.get("end_time"),
                         "filename": event.get("filename"),
@@ -420,6 +420,7 @@ class VideoService:
             render_diagnostics,
             on_clip_progress,
             filename_prefix,
+            1 if transitions_enabled else 2,
         )
         if not transitions_enabled:
             render_diagnostics["transitions_disabled"] = True
