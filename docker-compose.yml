@@ -36,6 +36,7 @@ services:
 
   backend:
     image: supoclip-backend:latest
+    pull_policy: never
     build:
       context: ./backend
       dockerfile: Dockerfile
@@ -105,6 +106,7 @@ services:
   # Worker process for background video processing
   worker:
     image: supoclip-worker:latest
+    pull_policy: never
     build:
       context: ./backend
       dockerfile: Dockerfile
@@ -169,6 +171,7 @@ services:
   worker2:
     profiles: ["multi-worker"]
     image: supoclip-worker:latest
+    pull_policy: never
     container_name: supoclip-worker-2
     platform: linux/amd64
     gpus: ${DOCKER_GPU_REQUEST_WORKER2:-all}
@@ -225,6 +228,7 @@ services:
   worker-gpu:
     profiles: ["gpu-worker"]
     image: supoclip-worker-gpu:latest
+    pull_policy: never
     build:
       context: ./backend
       dockerfile: Dockerfile
@@ -288,7 +292,9 @@ services:
 
   # Dedicated single-worker queue for AssemblyAI transcription tasks.
   worker-assembly:
+    profiles: ["assembly-worker"]
     image: supoclip-worker:latest
+    pull_policy: never
     container_name: supoclip-worker-assembly
     platform: linux/amd64
     gpus: ${DOCKER_GPU_REQUEST_WORKER_ASSEMBLY:-all}

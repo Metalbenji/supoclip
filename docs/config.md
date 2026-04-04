@@ -38,6 +38,7 @@ This is the single source of truth for MrglSnips runtime environment variables.
 | `ENABLE_MULTI_WORKER` | No | `false` | start.sh | When true, `./start.sh` runs Docker Compose with profile `multi-worker` to include `worker2`. |
 | `WORKER_GPU_WHISPER_DEVICE` | No | `cuda` | worker-gpu (optional) | Whisper target device for optional GPU worker profile. |
 | `ENABLE_GPU_WORKER` | No | `false` | start.sh | When true, `./start.sh` runs Docker Compose with profile `gpu-worker` to include `worker-gpu`. |
+| `ENABLE_ASSEMBLY_WORKER` | No | `false` | start.sh | When true, `./start.sh` runs Docker Compose with profile `assembly-worker` to include `worker-assembly`. `./start.sh` also enables that profile automatically when `TRANSCRIPTION_PROVIDER=assemblyai`. |
 | `ARQ_QUEUE_NAME_LOCAL` | No | `arq:queue:local` | backend, workers | Queue name for local Whisper jobs. |
 | `ARQ_QUEUE_NAME_LOCAL_GPU` | No | `arq:queue:local-gpu` | backend, workers | Queue name for local Whisper jobs that should prefer the GPU worker. |
 | `ARQ_QUEUE_NAME_ASSEMBLY` | No | `arq:queue:assembly` | backend, workers | Queue name for AssemblyAI jobs. |
@@ -51,7 +52,7 @@ This is the single source of truth for MrglSnips runtime environment variables.
 | `DOCKER_GPU_REQUEST` | No | `all` | docker-compose | GPU device request for backend/worker (`all` or `0`). |
 | `DOCKER_GPU_REQUEST_WORKER2` | No | `all` | docker-compose | GPU device request for optional `worker2` profile (`all` or `0`). |
 | `DOCKER_GPU_REQUEST_WORKER_GPU` | No | `all` | docker-compose | GPU device request for optional `worker-gpu` profile (`all` or `0`). |
-| `DOCKER_GPU_REQUEST_WORKER_ASSEMBLY` | No | `all` | docker-compose | GPU device request for dedicated AssemblyAI worker. |
+| `DOCKER_GPU_REQUEST_WORKER_ASSEMBLY` | No | `all` | docker-compose | GPU device request for optional `worker-assembly` profile. |
 | `SECRET_ENCRYPTION_KEY` | No | - | backend | Optional encryption secret for user-stored API keys (recommended for production). |
 | `WHISPER_CACHE_HOST_DIR` | No | `./backend/.cache/whisper` | docker-compose | Host bind-mount location for Whisper model cache (`/root/.cache/whisper` in containers). |
 | `TEMP_DIR` | No | `temp` (local) / `/app/uploads` (Docker) | backend, worker | Working directory for uploaded/downloaded files and clip output paths. |

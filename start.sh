@@ -81,6 +81,7 @@ BACKEND_ORIGIN="${BACKEND_ORIGIN:-http://${APP_HOST}:${BACKEND_HOST_PORT}}"
 API_DOCS_URL="${BACKEND_ORIGIN}/docs"
 ENABLE_MULTI_WORKER="${ENABLE_MULTI_WORKER:-false}"
 ENABLE_GPU_WORKER="${ENABLE_GPU_WORKER:-false}"
+ENABLE_ASSEMBLY_WORKER="${ENABLE_ASSEMBLY_WORKER:-false}"
 
 COMPOSE_ARGS=()
 if [[ "${ENABLE_MULTI_WORKER,,}" =~ ^(1|true|yes|on)$ ]]; then
@@ -89,6 +90,11 @@ fi
 if [[ "${ENABLE_GPU_WORKER,,}" =~ ^(1|true|yes|on)$ ]]; then
     COMPOSE_ARGS+=(--profile gpu-worker)
 fi
+if [[ "${ENABLE_ASSEMBLY_WORKER,,}" =~ ^(1|true|yes|on)$ ]]; then
+    COMPOSE_ARGS+=(--profile assembly-worker)
+elif [[ "${TRANSCRIPTION_PROVIDER,,}" == "assemblyai" ]]; then
+    COMPOSE_ARGS+=(--profile assembly-worker)
+fi
 
 echo -e "${GREEN}Starting MrglSnips...${NC}"
 if [[ "${ENABLE_MULTI_WORKER,,}" =~ ^(1|true|yes|on)$ ]]; then
@@ -96,6 +102,11 @@ if [[ "${ENABLE_MULTI_WORKER,,}" =~ ^(1|true|yes|on)$ ]]; then
 fi
 if [[ "${ENABLE_GPU_WORKER,,}" =~ ^(1|true|yes|on)$ ]]; then
     echo "GPU worker profile enabled (worker-gpu)."
+fi
+if [[ "${ENABLE_ASSEMBLY_WORKER,,}" =~ ^(1|true|yes|on)$ ]]; then
+    echo "AssemblyAI worker profile enabled (worker-assembly)."
+elif [[ "${TRANSCRIPTION_PROVIDER,,}" == "assemblyai" ]]; then
+    echo "AssemblyAI worker profile enabled automatically because TRANSCRIPTION_PROVIDER=assemblyai."
 fi
 echo ""
 

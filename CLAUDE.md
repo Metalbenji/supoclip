@@ -187,11 +187,12 @@ uvicorn src.main:app --reload --host 0.0.0.0 --port 8000
 - `WORKER2_MAX_JOBS` - Max concurrent jobs for optional second worker profile
 - `WORKER2_WHISPER_DEVICE` - Whisper device target for optional second worker (`auto`, `cuda`, `cpu`)
 - `ENABLE_MULTI_WORKER` - If `true`, `./start.sh` enables compose profile `multi-worker`
+- `ENABLE_ASSEMBLY_WORKER` - If `true`, `./start.sh` enables compose profile `assembly-worker`; `./start.sh` also enables it automatically when `TRANSCRIPTION_PROVIDER=assemblyai`
 - `ARQ_QUEUE_NAME_LOCAL` - Queue used for local Whisper transcription jobs
 - `ARQ_QUEUE_NAME_ASSEMBLY` - Queue used for AssemblyAI transcription jobs
 - `DOCKER_GPU_REQUEST` - GPU request for backend/worker containers (`all` or `0`)
 - `DOCKER_GPU_REQUEST_WORKER2` - GPU request override for optional second worker (`all` or `0`)
-- `DOCKER_GPU_REQUEST_WORKER_ASSEMBLY` - GPU request override for dedicated AssemblyAI worker
+- `DOCKER_GPU_REQUEST_WORKER_ASSEMBLY` - GPU request override for optional dedicated AssemblyAI worker profile
 - `SECRET_ENCRYPTION_KEY` - Encryption secret for user-stored API keys
 
 Canonical env reference: `docs/config.md`

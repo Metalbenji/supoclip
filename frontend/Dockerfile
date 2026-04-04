@@ -61,7 +61,8 @@ RUN bunx prisma generate
 ENV NEXT_TELEMETRY_DISABLED=1
 # Skip linting during build (generated Prisma code has lint warnings)
 ENV SKIP_LINT=1
-RUN bun run build
+# Next 16.2.x uses worker_threads options Bun does not fully implement yet.
+RUN npm run build
 
 # Runner stage (for production)
 FROM base AS runner

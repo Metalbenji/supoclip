@@ -94,7 +94,7 @@ TRANSCRIPTION_PROVIDER=local
 If you prefer to use Docker commands directly:
 
 ```bash
-# Start all services
+# Start all default local-transcription services
 docker-compose up -d --build
 
 # Start with optional second worker (parallel job processing)
@@ -103,9 +103,13 @@ docker-compose --profile multi-worker up -d --build
 # Start with optional GPU worker profile
 docker-compose --profile gpu-worker up -d --build
 
+# Start with optional dedicated AssemblyAI worker profile
+docker-compose --profile assembly-worker up -d --build
+
 # Or via start script using .env toggle:
 # ENABLE_MULTI_WORKER=true
 # ENABLE_GPU_WORKER=true
+# ENABLE_ASSEMBLY_WORKER=true
 # ./start.sh
 
 # View logs
@@ -155,6 +159,7 @@ Local URL/port mapping reference: `docs/local-host-mappings.md`
 | `ENABLE_MULTI_WORKER` | `false` | When `true`, `./start.sh` automatically enables `worker2` profile |
 | `WORKER_GPU_WHISPER_DEVICE` | `cuda` | Device target for optional `worker-gpu` profile |
 | `ENABLE_GPU_WORKER` | `false` | When `true`, `./start.sh` automatically enables `worker-gpu` profile |
+| `ENABLE_ASSEMBLY_WORKER` | `false` | When `true`, `./start.sh` automatically enables `worker-assembly`; it is also auto-enabled when `TRANSCRIPTION_PROVIDER=assemblyai` |
 | `ARQ_QUEUE_NAME_LOCAL` | `arq:queue:local` | Queue name for local Whisper jobs |
 | `ARQ_QUEUE_NAME_LOCAL_GPU` | `arq:queue:local-gpu` | Queue name for local Whisper jobs that should prefer the GPU worker |
 | `ARQ_QUEUE_NAME_ASSEMBLY` | `arq:queue:assembly` | Queue name for AssemblyAI jobs |
@@ -168,7 +173,7 @@ Local URL/port mapping reference: `docs/local-host-mappings.md`
 | `DOCKER_GPU_REQUEST` | `all` | Docker GPU request for backend/worker (`all` or `0`) |
 | `DOCKER_GPU_REQUEST_WORKER2` | `all` | Docker GPU request for optional second worker (`all` or `0`) |
 | `DOCKER_GPU_REQUEST_WORKER_GPU` | `all` | Docker GPU request for optional `worker-gpu` profile |
-| `DOCKER_GPU_REQUEST_WORKER_ASSEMBLY` | `all` | Docker GPU request for dedicated AssemblyAI worker |
+| `DOCKER_GPU_REQUEST_WORKER_ASSEMBLY` | `all` | Docker GPU request for optional `worker-assembly` profile |
 | `SECRET_ENCRYPTION_KEY` | - | Encryption secret for user-stored API keys (recommended in production) |
 | `WHISPER_CACHE_HOST_DIR` | `./backend/.cache/whisper` | Host path for Whisper model cache (prevents re-downloads after rebuilds) |
 | `BETTER_AUTH_SECRET` | dev secret | Auth secret (change in production!) |
@@ -263,16 +268,16 @@ docker-compose up -d
 
 ## Architecture
 
-MrglSnips runs 6 Docker containers by default:
+MrglSnips runs 5 Docker containers by default for the local transcription setup:
 
 1. **Frontend** (Next.js 15) - Port 3000
 2. **Backend** (FastAPI + Python) - Port 8000
 3. **Worker** (ARQ background processor)
-4. **Worker Assembly** (single-worker queue for AssemblyAI transcription jobs)
-5. **PostgreSQL** - Port 5432
-6. **Redis** - Port 6379
+4. **PostgreSQL** - Port 5432
+5. **Redis** - Port 6379
 
 Optional:
+- **Worker Assembly** (dedicated queue, enabled with `--profile assembly-worker`, or auto-enabled by `./start.sh` when `TRANSCRIPTION_PROVIDER=assemblyai`)
 - **Worker 2** (same queue, enabled with `--profile multi-worker`)
 - **Worker GPU** (same queue, enabled with `--profile gpu-worker`)
   - this image now installs the CUDA compiler toolchain so Triton Whisper kernels can use `ptxas` on GPU

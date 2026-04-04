@@ -91,6 +91,7 @@ Backend compatibility behavior:
 Backend is started by `docker-compose.yml` with:
 - app entrypoint: `src.main_refactored:app`
 - worker: `src.workers.tasks.WorkerSettings`
+- optional `worker-assembly` profile for the dedicated AssemblyAI queue
 - optional `worker-gpu` now installs the CUDA compiler toolchain (`ptxas`) so Triton Whisper kernels can JIT instead of falling back
 
 ## API Docs
