@@ -10,6 +10,7 @@ import asyncio
 import re
 import time
 import json
+import shutil
 from datetime import datetime
 from pathlib import Path
 
@@ -839,8 +840,160 @@ class TaskService:
     def _build_preview_strip_url(task_id: str, draft_id: str) -> str:
         return f"/tasks/{task_id}/draft-clips/{draft_id}/preview-strip"
 
+    def _task_artifact_dir(self, task_id: str) -> Path:
+        return Path(config.temp_dir) / "task-artifacts" / task_id
+
+    def _draft_preview_strip_dir(self, task_id: str) -> Path:
+        return self._task_artifact_dir(task_id) / "draft-previews"
+
     def _draft_preview_strip_path(self, task_id: str, draft_id: str) -> Path:
-        return Path(config.temp_dir) / "draft-previews" / task_id / f"{draft_id}.jpg"
+        return self._draft_preview_strip_dir(task_id) / f"{draft_id}.jpg"
+
+    def _reset_draft_preview_strip_dir(self, task_id: str) -> None:
+        preview_dir = self._draft_preview_strip_dir(task_id)
+        if preview_dir.exists():
+            shutil.rmtree(preview_dir, ignore_errors=True)
+        preview_dir.mkdir(parents=True, exist_ok=True)
+
+    def _attach_draft_view_fields(self, task_id: str, drafts: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        for draft in drafts:
+            draft["preview_url"] = self._build_preview_strip_url(task_id, str(draft["id"]))
+            draft["selection_rationale"] = self._build_draft_selection_rationale(draft)
+        return drafts
+
+    @staticmethod
+    def _default_worker_runtime_info() -> Dict[str, Any]:
+        return {
+            "supported_device_preferences": ["auto", "cpu", "gpu"],
+            "cuda_available": False,
+            "gpu_count": 0,
+            "gpu_devices": [],
+            "gpu_device_name": None,
+            "probe_source": "worker_heartbeat_unavailable",
+            "runtime_scope": "worker_process",
+            "cache_dir": None,
+            "triton_package_installed": False,
+            "cuda_toolkit_ptxas_available": False,
+            "cuda_toolkit_ptxas_path": None,
+            "triton_timing_kernels_enabled": False,
+            "triton_fallback_reason": "No active worker heartbeat available",
+            "triton_probe_source": "none",
+        }
+
+    @staticmethod
+    def _select_worker_runtime_from_heartbeats(worker_heartbeats: List[Dict[str, Any]]) -> Dict[str, Any]:
+        preferred_queue_names = [
+            config.arq_local_gpu_queue_name,
+            config.arq_local_queue_name,
+            config.arq_assembly_queue_name,
+        ]
+        for queue_name in preferred_queue_names:
+            for worker in worker_heartbeats:
+                if str(worker.get("queue_name") or "") != queue_name:
+                    continue
+                runtime = worker.get("runtime")
+                if not isinstance(runtime, dict):
+                    continue
+                selected = dict(runtime)
+                selected["heartbeat_queue_name"] = queue_name
+                selected["heartbeat_worker_name"] = worker.get("worker_name")
+                selected["heartbeat_timestamp"] = worker.get("timestamp")
+                selected["runtime_scope"] = str(selected.get("runtime_scope") or "worker_process")
+                return selected
+        return TaskService._default_worker_runtime_info()
+
+    @staticmethod
+    async def _read_worker_heartbeats(pool: Any) -> List[Dict[str, Any]]:
+        worker_heartbeats: List[Dict[str, Any]] = []
+        async for raw_key in pool.scan_iter(match="supoclip:worker-heartbeat:*"):
+            key = raw_key.decode("utf-8") if isinstance(raw_key, bytes) else str(raw_key)
+            payload = await pool.get(key)
+            if not payload:
+                continue
+            try:
+                parsed = json.loads(payload)
+            except Exception:
+                parsed = {"raw": payload}
+            parsed["key"] = key
+            worker_heartbeats.append(parsed)
+        worker_heartbeats.sort(key=lambda item: str(item.get("queue_name") or item.get("worker_name") or ""))
+        return worker_heartbeats
+
+    async def get_worker_runtime_snapshot(self) -> Dict[str, Any]:
+        from ..workers.job_queue import JobQueue
+
+        pool = await JobQueue.get_pool()
+        worker_heartbeats = await self._read_worker_heartbeats(pool)
+        return {
+            "workers": worker_heartbeats,
+            "local_whisper_runtime": self._select_worker_runtime_from_heartbeats(worker_heartbeats),
+        }
+
+    async def _persist_draft_preview_strips(
+        self,
+        task_id: str,
+        drafts: List[Dict[str, Any]],
+        *,
+        video_path: Path,
+        reset_existing: bool = False,
+    ) -> None:
+        if not drafts:
+            return
+        if reset_existing:
+            self._reset_draft_preview_strip_dir(task_id)
+        else:
+            self._draft_preview_strip_dir(task_id).mkdir(parents=True, exist_ok=True)
+
+        for draft in drafts:
+            draft_id = str(draft.get("id") or "").strip()
+            if not draft_id:
+                continue
+            output_path = self._draft_preview_strip_path(task_id, draft_id)
+            try:
+                await asyncio.to_thread(
+                    self._generate_preview_strip,
+                    video_path=video_path,
+                    start_time=str(draft.get("start_time") or "00:00"),
+                    end_time=str(draft.get("end_time") or "00:00"),
+                    output_path=output_path,
+                )
+            except Exception as error:
+                logger.warning(
+                    "Failed to persist draft preview strip for task %s draft %s: %s",
+                    task_id,
+                    draft_id,
+                    error,
+                )
+
+    async def _refresh_draft_preview_strips(
+        self,
+        task_id: str,
+        draft_ids: List[str],
+    ) -> None:
+        normalized_ids = [str(draft_id).strip() for draft_id in draft_ids if str(draft_id).strip()]
+        if not normalized_ids:
+            return
+
+        task = await self.task_repo.get_task_by_id(self.db, task_id)
+        if not task:
+            logger.warning("Skipping draft preview refresh for missing task %s", task_id)
+            return
+
+        source_url = str(task.get("source_url") or "").strip()
+        source_type = str(task.get("source_type") or "").strip()
+        if not source_url or not source_type:
+            logger.warning("Skipping draft preview refresh for task %s because source metadata is missing", task_id)
+            return
+
+        try:
+            video_path = await self.video_service.resolve_video_path(url=source_url, source_type=source_type)
+        except Exception as error:
+            logger.warning("Failed to resolve source video for task %s draft preview refresh: %s", task_id, error)
+            return
+
+        draft_map = await self.draft_clip_repo.get_draft_map_by_task(self.db, task_id)
+        drafts_to_refresh = [draft_map[draft_id] for draft_id in normalized_ids if draft_id in draft_map]
+        await self._persist_draft_preview_strips(task_id, drafts_to_refresh, video_path=video_path)
 
     async def ensure_draft_preview_strip(
         self,
@@ -853,14 +1006,8 @@ class TaskService:
     ) -> Path:
         preview_path = self._draft_preview_strip_path(task_id, str(draft["id"]))
         preview_path.parent.mkdir(parents=True, exist_ok=True)
-        updated_at = str(draft.get("updated_at") or "")
         if preview_path.exists() and not force_regenerate:
-            try:
-                existing_mtime = datetime.fromtimestamp(preview_path.stat().st_mtime).isoformat()
-                if not updated_at or existing_mtime >= updated_at:
-                    return preview_path
-            except Exception:
-                pass
+            return preview_path
 
         video_path = await self.video_service.resolve_video_path(url=source_url, source_type=source_type)
         await asyncio.to_thread(
@@ -1581,7 +1728,16 @@ class TaskService:
             )
             drafts_payload[-1].update(self._build_draft_feedback_state(drafts_payload[-1]))
 
-        await self.draft_clip_repo.replace_task_drafts(self.db, task_id, drafts_payload)
+        created_draft_ids = await self.draft_clip_repo.replace_task_drafts(self.db, task_id, drafts_payload)
+        for draft, draft_id in zip(drafts_payload, created_draft_ids):
+            draft["id"] = draft_id
+        if analysis_video_path is not None:
+            await self._persist_draft_preview_strips(
+                task_id,
+                drafts_payload,
+                video_path=analysis_video_path,
+                reset_existing=True,
+            )
         await self.task_repo.update_task_status(
             self.db,
             task_id,
@@ -2125,14 +2281,10 @@ class TaskService:
         drafts = await self.draft_clip_repo.get_drafts_by_task(self.db, task_id)
         if not task:
             return drafts
-
-        for draft in drafts:
-            draft["preview_url"] = self._build_preview_strip_url(task_id, str(draft["id"]))
-            draft["selection_rationale"] = self._build_draft_selection_rationale(draft)
-        return drafts
+        return self._attach_draft_view_fields(task_id, drafts)
 
     async def get_runtime_overview(self) -> Dict[str, Any]:
-        from ..whisper_runtime import get_local_whisper_model_metadata, get_local_whisper_runtime_info
+        from ..whisper_runtime import get_local_whisper_model_metadata
         from ..workers.job_queue import JobQueue
 
         pool = await JobQueue.get_pool()
@@ -2146,32 +2298,21 @@ class TaskService:
             queue_depth = int(await pool.zcard(queue_name))
             queue_stats.append({"queue_name": queue_name, "depth": queue_depth})
 
-        worker_heartbeats: List[Dict[str, Any]] = []
-        async for raw_key in pool.scan_iter(match="supoclip:worker-heartbeat:*"):
-            key = raw_key.decode("utf-8") if isinstance(raw_key, bytes) else str(raw_key)
-            payload = await pool.get(key)
-            if not payload:
-                continue
-            try:
-                parsed = json.loads(payload)
-            except Exception:
-                parsed = {"raw": payload}
-            parsed["key"] = key
-            worker_heartbeats.append(parsed)
-        worker_heartbeats.sort(key=lambda item: str(item.get("queue_name") or item.get("worker_name") or ""))
+        worker_heartbeats = await self._read_worker_heartbeats(pool)
 
         retention_policy = {
             "downloads_max_age_hours": 24,
             "transcript_cache_max_age_hours": 72,
             "waveform_cache_max_age_hours": 72,
-            "draft_preview_max_age_hours": 72,
+            "draft_preview_storage": "task_artifacts",
+            "legacy_temp_draft_preview_max_age_hours": 72,
             "failed_task_artifacts_max_age_hours": 168,
         }
 
         return {
             "workers": worker_heartbeats,
             "queues": queue_stats,
-            "local_whisper_runtime": get_local_whisper_runtime_info(),
+            "local_whisper_runtime": self._select_worker_runtime_from_heartbeats(worker_heartbeats),
             "local_whisper_models": get_local_whisper_model_metadata(),
             "recent_failures": await self.task_repo.get_recent_failed_tasks(self.db, limit=8),
             "failure_summary": await self.task_repo.get_failure_summary(self.db, limit=8),
@@ -2254,6 +2395,7 @@ class TaskService:
             raise ValueError("No draft clips found for task")
 
         normalized_updates: List[Dict[str, Any]] = []
+        preview_refresh_ids: List[str] = []
         seen_ids: set[str] = set()
         draft_state: Dict[str, Dict[str, Any]] = {
             draft_id: dict(existing)
@@ -2310,6 +2452,8 @@ class TaskService:
             )
             if text_changed or timing_changed:
                 normalized_update["edited_word_timings_json"] = None
+            if timing_changed:
+                preview_refresh_ids.append(draft_id)
 
             draft_state[draft_id].update(normalized_update)
             normalized_update.update(self._build_draft_feedback_state(draft_state[draft_id]))
@@ -2318,7 +2462,9 @@ class TaskService:
         self._validate_non_overlapping_draft_windows(list(draft_state.values()))
 
         await self.draft_clip_repo.bulk_update_drafts(self.db, task_id, normalized_updates)
-        return await self.draft_clip_repo.get_drafts_by_task(self.db, task_id)
+        updated_drafts = await self.draft_clip_repo.get_drafts_by_task(self.db, task_id)
+        await self._refresh_draft_preview_strips(task_id, preview_refresh_ids)
+        return self._attach_draft_view_fields(task_id, updated_drafts)
 
     async def create_task_draft_clip(
         self,
@@ -2405,9 +2551,8 @@ class TaskService:
         draft = draft_map.get(created_id)
         if not draft:
             raise ValueError("Failed to create draft clip")
-        draft["preview_url"] = self._build_preview_strip_url(task_id, created_id)
-        draft["selection_rationale"] = self._build_draft_selection_rationale(draft)
-        return draft
+        await self._persist_draft_preview_strips(task_id, [draft], video_path=source_video_path)
+        return self._attach_draft_view_fields(task_id, [draft])[0]
 
     async def delete_task_draft_clip(self, task_id: str, draft_id: str) -> None:
         existing = await self.draft_clip_repo.get_draft_map_by_task(self.db, task_id)
@@ -2449,7 +2594,7 @@ class TaskService:
             )
         restored = await self.draft_clip_repo.get_drafts_by_task(self.db, task_id)
         self._validate_non_overlapping_draft_windows(restored)
-        return restored
+        return self._attach_draft_view_fields(task_id, restored)
 
     async def get_user_transcription_settings(self, user_id: str) -> Dict[str, Any]:
         if not await self.task_repo.user_exists(self.db, user_id):

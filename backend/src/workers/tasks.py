@@ -9,6 +9,8 @@ from datetime import datetime, timezone
 
 logger = logging.getLogger(__name__)
 WORKER_HEARTBEAT_PREFIX = "supoclip:worker-heartbeat:"
+WORKER_HEARTBEAT_TTL_SECONDS = 300
+WORKER_HEARTBEAT_REFRESH_SECONDS = 60
 
 
 async def _write_worker_heartbeat(ctx: Dict[str, Any], *, queue_name: str) -> None:
@@ -23,8 +25,21 @@ async def _write_worker_heartbeat(ctx: Dict[str, Any], *, queue_name: str) -> No
     await ctx["redis"].set(
         f"{WORKER_HEARTBEAT_PREFIX}{queue_name}",
         json.dumps(payload),
-        ex=300,
+        ex=WORKER_HEARTBEAT_TTL_SECONDS,
     )
+
+
+async def _delete_worker_heartbeat(ctx: Dict[str, Any], *, queue_name: str) -> None:
+    try:
+        await ctx["redis"].delete(f"{WORKER_HEARTBEAT_PREFIX}{queue_name}")
+    except Exception as exc:
+        logger.debug("Failed to delete worker heartbeat for %s: %s", queue_name, exc)
+
+
+async def _worker_heartbeat_loop(ctx: Dict[str, Any], *, queue_name: str) -> None:
+    while True:
+        await _write_worker_heartbeat(ctx, queue_name=queue_name)
+        await asyncio.sleep(WORKER_HEARTBEAT_REFRESH_SECONDS)
 
 
 class TaskCancelledError(Exception):
@@ -262,6 +277,21 @@ class WorkerSettings:
         log_local_whisper_runtime_summary("worker_startup")
         ctx["queue_name"] = WorkerSettings.queue_name
         await _write_worker_heartbeat(ctx, queue_name=WorkerSettings.queue_name)
+        ctx["worker_heartbeat_task"] = asyncio.create_task(
+            _worker_heartbeat_loop(ctx, queue_name=WorkerSettings.queue_name)
+        )
+
+    @staticmethod
+    async def on_shutdown(ctx: Dict[str, Any]) -> None:
+        heartbeat_task = ctx.pop("worker_heartbeat_task", None)
+        if heartbeat_task is not None:
+            heartbeat_task.cancel()
+            try:
+                await heartbeat_task
+            except asyncio.CancelledError:
+                pass
+        queue_name = str(ctx.get("queue_name") or WorkerSettings.queue_name)
+        await _delete_worker_heartbeat(ctx, queue_name=queue_name)
 
 
 from ..whisper_runtime import log_local_whisper_runtime_summary as _log_local_whisper_runtime_summary

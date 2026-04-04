@@ -1,10 +1,12 @@
 """
 Progress tracking using Redis for real-time updates.
 """
+import asyncio
 import json
 import logging
 from typing import Optional, Dict, Any
 from redis.asyncio import Redis
+from redis.exceptions import ConnectionError as RedisConnectionError
 
 logger = logging.getLogger(__name__)
 
@@ -83,6 +85,21 @@ class ProgressTracker:
                 if message["type"] == "message":
                     data = json.loads(message["data"])
                     yield data
+        except (asyncio.CancelledError, GeneratorExit):
+            logger.debug("Progress stream for task %s closed by client", task_id)
+            raise
         finally:
-            await pubsub.unsubscribe(f"progress:{task_id}")
-            await pubsub.close()
+            try:
+                await pubsub.unsubscribe(f"progress:{task_id}")
+            except RedisConnectionError:
+                logger.debug(
+                    "Progress stream Redis connection already closed during unsubscribe for task %s",
+                    task_id,
+                )
+            try:
+                await pubsub.close()
+            except RedisConnectionError:
+                logger.debug(
+                    "Progress stream Redis connection already closed during pubsub close for task %s",
+                    task_id,
+                )

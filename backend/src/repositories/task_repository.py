@@ -402,13 +402,16 @@ class TaskRepository:
 
         query = f"UPDATE tasks SET {', '.join(set_clauses)} WHERE id = :task_id"
 
-        await db.execute(
-            text(query).bindparams(
-                bindparam("runtime_info", type_=JSONB),
-                bindparam("retryable_from_stages", type_=JSONB),
-            ),
-            params,
-        )
+        statement = text(query)
+        bind_params = []
+        if runtime_info is not None:
+            bind_params.append(bindparam("runtime_info", type_=JSONB))
+        if retryable_from_stages is not None:
+            bind_params.append(bindparam("retryable_from_stages", type_=JSONB))
+        if bind_params:
+            statement = statement.bindparams(*bind_params)
+
+        await db.execute(statement, params)
         await db.commit()
         logger.info(f"Updated task {task_id} status to {status}" +
                    (f" (progress: {progress}%)" if progress else ""))

@@ -1045,6 +1045,20 @@ class VideoService:
         )
         await ensure_not_cancelled()
 
+        if progress_callback:
+            await progress_callback(
+                30,
+                "Preparing audio for transcription...",
+                {
+                    "stage": "transcript",
+                    "stage_progress": 0,
+                    "overall_progress": 30,
+                    "transcription_provider": transcription_provider,
+                    "source_type": source_type,
+                    "video_ready": True,
+                },
+            )
+
         provider_resolution = await run_in_thread(
             VideoService._resolve_transcription_provider_for_media,
             transcription_provider,

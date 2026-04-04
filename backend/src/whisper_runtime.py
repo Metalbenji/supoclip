@@ -72,13 +72,16 @@ LOCAL_WHISPER_MODEL_CATALOG = (
 def _detect_triton_timing_kernel_support() -> Dict[str, Any]:
     triton_installed = importlib.util.find_spec("triton") is not None
     ptxas_path = shutil.which("ptxas")
-    enabled = bool(triton_installed and ptxas_path)
+    c_compiler_path = shutil.which("cc") or shutil.which("gcc") or shutil.which("clang")
+    enabled = bool(triton_installed and ptxas_path and c_compiler_path)
     fallback_reason: Optional[str] = None
 
     if not triton_installed:
         fallback_reason = "Python Triton package is not installed"
     elif not ptxas_path:
         fallback_reason = "CUDA toolkit binary 'ptxas' is not available in the worker image"
+    elif not c_compiler_path:
+        fallback_reason = "C compiler ('cc'/'gcc') is not available in the worker image"
 
     return {
         "triton_package_installed": triton_installed,

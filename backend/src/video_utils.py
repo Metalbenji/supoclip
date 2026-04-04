@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import List, Dict, Any, Tuple, Optional, Union, Callable
 import os
 import logging
+import gc
 from datetime import datetime
 import numpy as np
 from concurrent.futures import ThreadPoolExecutor
@@ -34,6 +35,7 @@ from datetime import timedelta
 from .config import Config
 from .subtitle_style import normalize_subtitle_style
 from .whisper_runtime import (
+    get_local_whisper_runtime_info,
     log_local_whisper_runtime_summary,
     record_whisper_triton_fallback,
     resolve_whisper_device,
@@ -124,6 +126,34 @@ def _get_whisper_model(model_name: str, device: str):
         loaded_model = whisper.load_model(model_name, device=device)
         _whisper_model_cache[cache_key] = loaded_model
         return loaded_model
+
+
+def release_local_whisper_model_cache() -> None:
+    with _whisper_model_lock:
+        cached_models = list(_whisper_model_cache.values())
+        _whisper_model_cache.clear()
+
+    if not cached_models:
+        return
+
+    for model in cached_models:
+        try:
+            if hasattr(model, "cpu"):
+                model.cpu()
+        except Exception:
+            pass
+
+    del cached_models
+    gc.collect()
+
+    try:
+        import torch
+
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+            logger.info("Released cached local Whisper models and emptied CUDA cache")
+    except Exception as exc:
+        logger.debug("Failed to empty CUDA cache after releasing Whisper models: %s", exc)
 
 
 def _compute_file_sha256(path: Path) -> str:
@@ -380,7 +410,10 @@ def _run_whisper_transcription(model: Any, media_path: Union[Path, str], use_fp1
     for caught in caught_warnings:
         message = str(caught.message)
         if "Failed to launch Triton kernels" in message:
-            record_whisper_triton_fallback(message)
+            runtime_info = get_local_whisper_runtime_info()
+            record_whisper_triton_fallback(
+                str(runtime_info.get("triton_fallback_reason") or message)
+            )
             continue
         logger.warning("Whisper runtime warning: %s", message)
 
@@ -799,16 +832,19 @@ def get_video_transcript(
         if provider == "assemblyai":
             transcript_data = _transcribe_with_assemblyai(video_path, assembly_api_key)
         else:
-            transcript_data = _transcribe_with_local_whisper(
-                video_path,
-                chunking_enabled_override=whisper_chunking_enabled,
-                chunk_duration_seconds_override=whisper_chunk_duration_seconds,
-                chunk_overlap_seconds_override=whisper_chunk_overlap_seconds,
-                device_preference_override=whisper_device_preference,
-                gpu_index_override=whisper_gpu_index,
-                model_name_override=whisper_model_size,
-                progress_callback=progress_callback,
-            )
+            try:
+                transcript_data = _transcribe_with_local_whisper(
+                    video_path,
+                    chunking_enabled_override=whisper_chunking_enabled,
+                    chunk_duration_seconds_override=whisper_chunk_duration_seconds,
+                    chunk_overlap_seconds_override=whisper_chunk_overlap_seconds,
+                    device_preference_override=whisper_device_preference,
+                    gpu_index_override=whisper_gpu_index,
+                    model_name_override=whisper_model_size,
+                    progress_callback=progress_callback,
+                )
+            finally:
+                release_local_whisper_model_cache()
 
         cache_transcript_data(video_path, transcript_data)
         formatted_transcript = build_formatted_transcript_from_words(transcript_data["words"])

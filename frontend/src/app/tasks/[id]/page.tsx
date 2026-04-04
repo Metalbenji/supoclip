@@ -426,6 +426,20 @@ function deriveStageProgress(
   return next;
 }
 
+function getChunkStageProgress(metadata: TaskProgressMetadata): number | null {
+  if (
+    metadata.mode !== "chunked" ||
+    typeof metadata.chunk_total !== "number" ||
+    metadata.chunk_total <= 0
+  ) {
+    return null;
+  }
+
+  return clampPercent(
+    ((metadata.chunks_completed ?? 0) / metadata.chunk_total) * 100
+  );
+}
+
 function deriveStageNotesFromMessage(
   message: string,
   sourceType?: string
@@ -796,12 +810,17 @@ export default function TaskPage() {
         }
         const metadata = (data?.metadata ?? {}) as TaskProgressMetadata;
         if (metadata.stage && metadata.stage in STAGE_LABELS) {
+          const chunkStageProgress = getChunkStageProgress(metadata);
+          const resolvedStageProgress =
+            metadata.stage === "transcript" && chunkStageProgress !== null
+              ? chunkStageProgress
+              : clampPercent(metadata.stage_progress ?? 0);
           setStageProgress((prev) => ({
             ...prev,
-            [metadata.stage as StageKey]: Math.max(
-              prev[metadata.stage as StageKey],
-              clampPercent(metadata.stage_progress ?? 0)
-            ),
+            [metadata.stage as StageKey]:
+              metadata.stage === "transcript" && chunkStageProgress !== null
+                ? resolvedStageProgress
+                : Math.max(prev[metadata.stage as StageKey], resolvedStageProgress),
           }));
           if (metadata.cached) {
             setStageNotes((prev) => {
@@ -1355,6 +1374,12 @@ export default function TaskPage() {
     typeof transcriptProgress.chunk_end_seconds === "number"
       ? `${transcriptProgress.chunk_start_seconds.toFixed(1)}s -> ${transcriptProgress.chunk_end_seconds.toFixed(1)}s`
       : null;
+  const getDisplayedStageProgress = (stage: StageKey): number => {
+    if (stage === "transcript" && transcriptProgress?.mode === "chunked") {
+      return transcriptChunkProgressPercent;
+    }
+    return stageProgress[stage];
+  };
   const selectedDraftCount = draftClips.filter((clip) => clip.is_selected).length;
   const selectedStrongFramingCount = draftClips.filter(
     (clip) => clip.is_selected && getFramingStrength(clip.framing_metadata_json) === "strong",
@@ -1718,7 +1743,7 @@ export default function TaskPage() {
                           <div className="w-full bg-muted rounded-full h-1.5">
                             <div
                               className="bg-emerald-500 h-1.5 rounded-full transition-all duration-500 ease-out"
-                              style={{ width: `${stageProgress[stage]}%` }}
+                              style={{ width: `${getDisplayedStageProgress(stage)}%` }}
                             />
                           </div>
                         </div>

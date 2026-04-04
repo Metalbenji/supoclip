@@ -82,6 +82,10 @@ FROM python:3.11-slim AS runtime
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ffmpeg \
     curl \
+    gcc \
+    g++ \
+    libegl1 \
+    libgles2 \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
@@ -102,12 +106,15 @@ COPY --from=builder /app/transitions /app/transitions
 ARG CUDA_NVCC_WHEEL_VERSION=
 RUN if [ -n "${CUDA_NVCC_WHEEL_VERSION}" ]; then \
       mkdir -p /usr/local/cuda/bin \
-      && CUDA_NVCC_BIN_DIR="$(dirname "$(find /app/.venv -path '*/site-packages/nvidia/cuda_nvcc/bin/ptxas' -print -quit)")" \
-      && if [ -n "${CUDA_NVCC_BIN_DIR}" ] && [ -d "${CUDA_NVCC_BIN_DIR}" ]; then \
-           for tool in "${CUDA_NVCC_BIN_DIR}"/*; do \
-             ln -sf "${tool}" "/usr/local/cuda/bin/$(basename "${tool}")"; \
-           done; \
-         fi; \
+      && PTXAS_PATH="$(find /app/.venv -path '*/site-packages/nvidia/cuda_nvcc/bin/ptxas' -print -quit)" \
+      && if [ -z "${PTXAS_PATH}" ]; then \
+           echo "Expected ptxas in the copied virtualenv, but none was found" >&2; \
+           exit 1; \
+         fi \
+      && CUDA_NVCC_BIN_DIR="$(dirname "${PTXAS_PATH}")" \
+      && for tool in "${CUDA_NVCC_BIN_DIR}"/*; do \
+           ln -sf "${tool}" "/usr/local/cuda/bin/$(basename "${tool}")"; \
+         done; \
     fi
 
 ENV PATH=/usr/local/cuda/bin:${PATH}

@@ -225,6 +225,18 @@ def _resolve_local_queue_name(transcription_runtime_options: Dict[str, Any]) -> 
     return config.arq_local_queue_name
 
 
+def _resolve_finalize_queue_name(task: Dict[str, Any]) -> str:
+    transcription_provider = str(task.get("transcription_provider") or "local").strip().lower()
+    if transcription_provider == "assemblyai":
+        return config.arq_local_queue_name
+
+    runtime_info = task.get("runtime_info") if isinstance(task.get("runtime_info"), dict) else {}
+    queue_target = str(runtime_info.get("queue_target") or "").strip()
+    if queue_target == config.arq_local_gpu_queue_name:
+        return config.arq_local_gpu_queue_name
+    return config.arq_local_queue_name
+
+
 def _resolve_transcription_runtime_options(
     transcription_options: Dict[str, Any],
     provider: str,
@@ -490,11 +502,11 @@ async def get_transcription_settings(request: Request, db: AsyncSession = Depend
     """Get user transcription settings (key presence only, never returns the key)."""
     user_id = _require_user_id(request)
     try:
-        from ...whisper_runtime import get_local_whisper_model_metadata, get_local_whisper_runtime_info
+        from ...whisper_runtime import get_local_whisper_model_metadata
 
         task_service = TaskService(db)
         settings = await task_service.get_user_transcription_settings(user_id)
-        runtime_info = get_local_whisper_runtime_info()
+        runtime_snapshot = await task_service.get_worker_runtime_snapshot()
         return {
             "provider_options": sorted(SUPPORTED_TRANSCRIPTION_PROVIDERS),
             "local_whisper_device_options": sorted(SUPPORTED_WHISPER_DEVICE_PREFERENCES),
@@ -514,7 +526,8 @@ async def get_transcription_settings(request: Request, db: AsyncSession = Depend
             "max_whisper_chunk_duration_seconds": MAX_WHISPER_CHUNK_DURATION_SECONDS,
             "min_whisper_chunk_overlap_seconds": MIN_WHISPER_CHUNK_OVERLAP_SECONDS,
             "max_whisper_chunk_overlap_seconds": MAX_WHISPER_CHUNK_OVERLAP_SECONDS,
-            "local_whisper_runtime": runtime_info,
+            "local_whisper_runtime": runtime_snapshot["local_whisper_runtime"],
+            "local_whisper_workers": runtime_snapshot["workers"],
         }
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
@@ -2198,6 +2211,7 @@ async def finalize_task(task_id: str, request: Request, db: AsyncSession = Depen
     )
 
     try:
+        queue_name = _resolve_finalize_queue_name(task)
         job_id = await JobQueue.enqueue_job(
             "process_video_task",
             task_id,
@@ -2214,7 +2228,7 @@ async def finalize_task(task_id: str, request: Request, db: AsyncSession = Depen
             subtitle_style,
             None,
             {},
-            queue_name=config.arq_local_queue_name,
+            queue_name=queue_name,
             render_from_drafts=True,
         )
     except Exception as enqueue_error:
