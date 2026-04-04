@@ -69,6 +69,14 @@ SUPPORTED_FRAMING_MODE_OVERRIDES = {"auto", "prefer_face", "fixed_position"}
 SUPPORTED_FACE_DETECTION_MODES = {"balanced", "more_faces"}
 SUPPORTED_FALLBACK_CROP_POSITIONS = {"center", "left_center", "right_center"}
 SUPPORTED_PROCESSING_PROFILES = {"fast_draft", "balanced", "best_quality", "stream_layout"}
+SUPPORTED_FACE_ANCHOR_PROFILES = {
+    "auto",
+    "left_only",
+    "left_or_center",
+    "center_only",
+    "right_or_center",
+    "right_only",
+}
 RETRYABLE_STAGE_ORDER = ("downloaded", "transcribed", "analyzed", "review_approved")
 FAILURE_HINTS = {
     "download": "Check the source URL or uploaded file and retry from download.",
@@ -689,6 +697,13 @@ class TaskService:
             return "center"
         return normalized
 
+    @staticmethod
+    def _normalize_face_anchor_profile(value: Any) -> str:
+        normalized = str(value or "auto").strip().lower()
+        if normalized not in SUPPORTED_FACE_ANCHOR_PROFILES:
+            return "auto"
+        return normalized
+
     @classmethod
     def _resolve_effective_default_framing_mode(
         cls,
@@ -710,6 +725,7 @@ class TaskService:
                 "default_framing_mode": "auto",
                 "default_face_detection_mode": "balanced",
                 "default_fallback_crop_position": "center",
+                "default_face_anchor_profile": "auto",
                 "effective_default_framing_mode": "auto",
             }
         else:
@@ -721,6 +737,7 @@ class TaskService:
                 "default_framing_mode": task_video_overrides.get("default_framing_mode", preferences.get("default_framing_mode")),
                 "default_face_detection_mode": task_video_overrides.get("face_detection_mode", preferences.get("default_face_detection_mode")),
                 "default_fallback_crop_position": task_video_overrides.get("fallback_crop_position", preferences.get("default_fallback_crop_position")),
+                "default_face_anchor_profile": task_video_overrides.get("face_anchor_profile", preferences.get("default_face_anchor_profile")),
             }
         raw_detection_mode = str(preferences.get("default_face_detection_mode") or "balanced").strip().lower()
         default_framing_mode = self._normalize_framing_mode_override(preferences.get("default_framing_mode"))
@@ -728,12 +745,19 @@ class TaskService:
         fallback_crop_position = self._normalize_fallback_crop_position(
             preferences.get("default_fallback_crop_position")
         )
+        face_anchor_profile = self._normalize_face_anchor_profile(
+            preferences.get("default_face_anchor_profile")
+        )
         effective_default_framing_mode = self._resolve_effective_default_framing_mode(
             "fixed_position" if raw_detection_mode == "center_only" else default_framing_mode,
             face_detection_mode,
         )
         if raw_detection_mode == "center_only":
             fallback_crop_position = "center"
+        if face_anchor_profile == "auto" and fallback_crop_position == "left_center":
+            face_anchor_profile = "left_or_center"
+        elif face_anchor_profile == "auto" and fallback_crop_position == "right_center":
+            face_anchor_profile = "right_or_center"
         return {
             **preferences,
             "default_processing_profile": self._normalize_processing_profile(
@@ -742,6 +766,7 @@ class TaskService:
             "default_framing_mode": default_framing_mode,
             "default_face_detection_mode": face_detection_mode,
             "default_fallback_crop_position": fallback_crop_position,
+            "default_face_anchor_profile": face_anchor_profile,
             "effective_default_framing_mode": effective_default_framing_mode,
         }
 
@@ -1713,6 +1738,7 @@ class TaskService:
             default_framing_mode=str(user_video_preferences.get("effective_default_framing_mode") or "auto"),
             face_detection_mode=str(user_video_preferences.get("default_face_detection_mode") or "balanced"),
             fallback_crop_position=str(user_video_preferences.get("default_fallback_crop_position") or "center"),
+            face_anchor_profile=str(user_video_preferences.get("default_face_anchor_profile") or "auto"),
             progress_callback=update_progress,
             cancel_check=cancel_check,
         )
@@ -1891,6 +1917,7 @@ class TaskService:
             default_framing_mode=str(user_video_preferences.get("effective_default_framing_mode") or "auto"),
             face_detection_mode=str(user_video_preferences.get("default_face_detection_mode") or "balanced"),
             fallback_crop_position=str(user_video_preferences.get("default_fallback_crop_position") or "center"),
+            face_anchor_profile=str(user_video_preferences.get("default_face_anchor_profile") or "auto"),
             progress_callback=update_progress,
             cancel_check=cancel_check,
             filename_prefix=render_filename_prefix,
@@ -2582,6 +2609,7 @@ class TaskService:
             end_time=normalized_end_time,
             face_detection_mode=str(user_video_preferences.get("default_face_detection_mode") or "balanced"),
             fallback_crop_position=str(user_video_preferences.get("default_fallback_crop_position") or "center"),
+            face_anchor_profile=str(user_video_preferences.get("default_face_anchor_profile") or "auto"),
         )
 
         preferred_text = str(edited_text or "").strip()

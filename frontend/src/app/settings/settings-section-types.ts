@@ -14,6 +14,14 @@ export const WHISPER_MODEL_SIZES = ["tiny", "base", "small", "medium", "large", 
 export const DEFAULT_FRAMING_MODES = ["auto", "prefer_face", "fixed_position"] as const;
 export const FACE_DETECTION_MODES = ["balanced", "more_faces"] as const;
 export const FALLBACK_CROP_POSITIONS = ["center", "left_center", "right_center"] as const;
+export const FACE_ANCHOR_PROFILES = [
+  "auto",
+  "left_only",
+  "left_or_center",
+  "center_only",
+  "right_or_center",
+  "right_only",
+] as const;
 export const PROCESSING_PROFILES = ["fast_draft", "balanced", "best_quality", "stream_layout"] as const;
 export const AI_PROVIDERS = ["openai", "google", "anthropic", "zai", "ollama"] as const;
 export const ZAI_ROUTING_MODES = ["auto", "subscription", "metered"] as const;
@@ -25,6 +33,7 @@ export type WhisperModelSize = (typeof WHISPER_MODEL_SIZES)[number];
 export type DefaultFramingMode = (typeof DEFAULT_FRAMING_MODES)[number];
 export type FaceDetectionMode = (typeof FACE_DETECTION_MODES)[number];
 export type FallbackCropPosition = (typeof FALLBACK_CROP_POSITIONS)[number];
+export type FaceAnchorProfile = (typeof FACE_ANCHOR_PROFILES)[number];
 export type ProcessingProfile = (typeof PROCESSING_PROFILES)[number];
 export type AiProvider = (typeof AI_PROVIDERS)[number];
 export type ZaiRoutingMode = (typeof ZAI_ROUTING_MODES)[number];
@@ -67,6 +76,7 @@ export interface UserPreferences extends FontStyleOptions {
   defaultFramingMode: DefaultFramingMode;
   faceDetectionMode: FaceDetectionMode;
   fallbackCropPosition: FallbackCropPosition;
+  faceAnchorProfile: FaceAnchorProfile;
   transcriptionProvider: TranscriptionProvider;
   whisperChunkingEnabled: boolean;
   whisperChunkDurationSeconds: number;
@@ -88,6 +98,7 @@ export const DEFAULT_USER_PREFERENCES: UserPreferences = {
   defaultFramingMode: "auto",
   faceDetectionMode: "balanced",
   fallbackCropPosition: "center",
+  faceAnchorProfile: "auto",
   transcriptionProvider: "local",
   whisperChunkingEnabled: true,
   whisperChunkDurationSeconds: 1200,
@@ -159,6 +170,10 @@ export function isFallbackCropPosition(value: string): value is FallbackCropPosi
   return FALLBACK_CROP_POSITIONS.includes(value as FallbackCropPosition);
 }
 
+export function isFaceAnchorProfile(value: string): value is FaceAnchorProfile {
+  return FACE_ANCHOR_PROFILES.includes(value as FaceAnchorProfile);
+}
+
 export function isProcessingProfile(value: string): value is ProcessingProfile {
   return PROCESSING_PROFILES.includes(value as ProcessingProfile);
 }
@@ -201,6 +216,7 @@ export function arePreferencesEqual(a: UserPreferences, b: UserPreferences): boo
     a.defaultFramingMode === b.defaultFramingMode &&
     a.faceDetectionMode === b.faceDetectionMode &&
     a.fallbackCropPosition === b.fallbackCropPosition &&
+    a.faceAnchorProfile === b.faceAnchorProfile &&
     a.transcriptionProvider === b.transcriptionProvider &&
     a.whisperChunkingEnabled === b.whisperChunkingEnabled &&
     a.whisperChunkDurationSeconds === b.whisperChunkDurationSeconds &&

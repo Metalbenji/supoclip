@@ -1,5 +1,5 @@
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import type { DefaultFramingMode, FaceDetectionMode, FallbackCropPosition, ProcessingProfile } from "../settings-section-types";
+import type { DefaultFramingMode, FaceAnchorProfile, FaceDetectionMode, FallbackCropPosition, ProcessingProfile } from "../settings-section-types";
 import { getProcessingProfilePreset, PROCESSING_PROFILE_PRESETS } from "@/lib/processing-profiles";
 
 interface SettingsSectionVideoProps {
@@ -11,6 +11,7 @@ interface SettingsSectionVideoProps {
   defaultFramingMode: DefaultFramingMode;
   faceDetectionMode: FaceDetectionMode;
   fallbackCropPosition: FallbackCropPosition;
+  faceAnchorProfile: FaceAnchorProfile;
   onToggleReviewBeforeRender: () => void;
   onToggleTransitions: () => void;
   onToggleTimelineEditor: () => void;
@@ -18,6 +19,7 @@ interface SettingsSectionVideoProps {
   onDefaultFramingModeChange: (value: DefaultFramingMode) => void;
   onFaceDetectionModeChange: (value: FaceDetectionMode) => void;
   onFallbackCropPositionChange: (value: FallbackCropPosition) => void;
+  onFaceAnchorProfileChange: (value: FaceAnchorProfile) => void;
 }
 
 export function SettingsSectionVideo({
@@ -29,6 +31,7 @@ export function SettingsSectionVideo({
   defaultFramingMode,
   faceDetectionMode,
   fallbackCropPosition,
+  faceAnchorProfile,
   onToggleReviewBeforeRender,
   onToggleTransitions,
   onToggleTimelineEditor,
@@ -36,6 +39,7 @@ export function SettingsSectionVideo({
   onDefaultFramingModeChange,
   onFaceDetectionModeChange,
   onFallbackCropPositionChange,
+  onFaceAnchorProfileChange,
 }: SettingsSectionVideoProps) {
   const selectedProfile = getProcessingProfilePreset(defaultProcessingProfile);
   return (
@@ -193,6 +197,31 @@ export function SettingsSectionVideo({
             <SelectItem value="center">Center</SelectItem>
             <SelectItem value="left_center">Left-center</SelectItem>
             <SelectItem value="right_center">Right-center</SelectItem>
+          </SelectContent>
+        </Select>
+      </div>
+      <div className="space-y-3 rounded-md border border-gray-200 bg-white p-3">
+        <div>
+          <p className="text-sm font-medium text-black">Face layout benchmark</p>
+          <p className="text-xs text-gray-500">
+            Tells face scoring where a good face track usually lives. Use left-or-center for streams where your camera is mostly on the left and sometimes centered.
+          </p>
+        </div>
+        <Select
+          value={faceAnchorProfile}
+          onValueChange={(value) => onFaceAnchorProfileChange(value as FaceAnchorProfile)}
+          disabled={isSaving}
+        >
+          <SelectTrigger className="bg-white">
+            <SelectValue placeholder="Select face layout benchmark" />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="auto">Auto</SelectItem>
+            <SelectItem value="left_or_center">Left or center</SelectItem>
+            <SelectItem value="left_only">Left only</SelectItem>
+            <SelectItem value="center_only">Center only</SelectItem>
+            <SelectItem value="right_or_center">Right or center</SelectItem>
+            <SelectItem value="right_only">Right only</SelectItem>
           </SelectContent>
         </Select>
       </div>

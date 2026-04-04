@@ -1,5 +1,6 @@
 import type {
   DefaultFramingMode,
+  FaceAnchorProfile,
   FaceDetectionMode,
   FallbackCropPosition,
   ProcessingProfile,
@@ -17,6 +18,7 @@ export interface ProcessingProfilePreset {
   defaultFramingMode: DefaultFramingMode;
   faceDetectionMode: FaceDetectionMode;
   fallbackCropPosition: FallbackCropPosition;
+  faceAnchorProfile: FaceAnchorProfile;
 }
 
 export const PROCESSING_PROFILE_PRESETS: Record<ProcessingProfile, ProcessingProfilePreset> = {
@@ -32,6 +34,7 @@ export const PROCESSING_PROFILE_PRESETS: Record<ProcessingProfile, ProcessingPro
     defaultFramingMode: "auto",
     faceDetectionMode: "balanced",
     fallbackCropPosition: "center",
+    faceAnchorProfile: "auto",
   },
   balanced: {
     id: "balanced",
@@ -45,6 +48,7 @@ export const PROCESSING_PROFILE_PRESETS: Record<ProcessingProfile, ProcessingPro
     defaultFramingMode: "auto",
     faceDetectionMode: "balanced",
     fallbackCropPosition: "center",
+    faceAnchorProfile: "auto",
   },
   best_quality: {
     id: "best_quality",
@@ -58,6 +62,7 @@ export const PROCESSING_PROFILE_PRESETS: Record<ProcessingProfile, ProcessingPro
     defaultFramingMode: "prefer_face",
     faceDetectionMode: "more_faces",
     fallbackCropPosition: "center",
+    faceAnchorProfile: "center_only",
   },
   stream_layout: {
     id: "stream_layout",
@@ -71,6 +76,7 @@ export const PROCESSING_PROFILE_PRESETS: Record<ProcessingProfile, ProcessingPro
     defaultFramingMode: "prefer_face",
     faceDetectionMode: "more_faces",
     fallbackCropPosition: "left_center",
+    faceAnchorProfile: "left_or_center",
   },
 };
 

@@ -451,6 +451,7 @@ class VideoService:
         segments: List[Dict[str, Any]],
         face_detection_mode: str = "balanced",
         fallback_crop_position: str = "center",
+        face_anchor_profile: str = "auto",
     ) -> List[Dict[str, Any]]:
         analyze_segment_framing = VideoService._video_utils_attr("analyze_segment_framing_batch")
         return await run_in_thread(
@@ -459,6 +460,7 @@ class VideoService:
             segments,
             face_detection_mode,
             fallback_crop_position,
+            face_anchor_profile,
         )
 
     @staticmethod
@@ -468,6 +470,7 @@ class VideoService:
         end_time: str,
         face_detection_mode: str = "balanced",
         fallback_crop_position: str = "center",
+        face_anchor_profile: str = "auto",
     ) -> Dict[str, Any]:
         analyze_segment_framing = VideoService._video_utils_attr("analyze_single_segment_framing")
         return await run_in_thread(
@@ -477,6 +480,7 @@ class VideoService:
             end_time,
             face_detection_mode,
             fallback_crop_position,
+            face_anchor_profile,
         )
 
     @staticmethod
@@ -1031,6 +1035,7 @@ class VideoService:
         default_framing_mode: str = "auto",
         face_detection_mode: str = "balanced",
         fallback_crop_position: str = "center",
+        face_anchor_profile: str = "auto",
         progress_callback: Optional[callable] = None,
         cancel_check: Optional[Callable[[], Awaitable[None]]] = None,
     ) -> Dict[str, Any]:
@@ -1197,11 +1202,15 @@ class VideoService:
                     segments_json,
                     face_detection_mode=face_detection_mode,
                     fallback_crop_position=fallback_crop_position,
+                    face_anchor_profile=face_anchor_profile,
                 )
                 for segment, framing_metadata in zip(segments_json, framing_results):
                     metadata = dict(framing_metadata or {})
                     metadata["fallback_crop_position"] = str(
                         metadata.get("fallback_crop_position") or fallback_crop_position or "center"
+                    )
+                    metadata["face_anchor_profile"] = str(
+                        metadata.get("face_anchor_profile") or face_anchor_profile or "auto"
                     )
                     segment["framing_metadata"] = metadata
                     segment["framing_mode_override"] = default_framing_mode

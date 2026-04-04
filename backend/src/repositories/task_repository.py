@@ -1428,7 +1428,8 @@ class TaskRepository:
                     default_processing_profile,
                     default_framing_mode,
                     default_face_detection_mode,
-                    default_fallback_crop_position
+                    default_fallback_crop_position,
+                    default_face_anchor_profile
                 FROM users
                 WHERE id = :user_id
                 """
@@ -1444,6 +1445,7 @@ class TaskRepository:
                 "default_framing_mode": "auto",
                 "default_face_detection_mode": "balanced",
                 "default_fallback_crop_position": "center",
+                "default_face_anchor_profile": "auto",
             }
         return {
             "review_before_render_enabled": bool(getattr(row, "default_review_before_render_enabled", True)),
@@ -1457,6 +1459,9 @@ class TaskRepository:
             ),
             "default_fallback_crop_position": str(
                 getattr(row, "default_fallback_crop_position", "center") or "center"
+            ),
+            "default_face_anchor_profile": str(
+                getattr(row, "default_face_anchor_profile", "auto") or "auto"
             ),
         }
 

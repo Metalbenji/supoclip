@@ -46,6 +46,7 @@ import {
   FALLBACK_AI_MODEL_OPTIONS,
   isAiProvider,
   isDefaultFramingMode,
+  isFaceAnchorProfile,
   isFaceDetectionMode,
   isFallbackCropPosition,
   isProcessingProfile,
@@ -1247,6 +1248,10 @@ function SettingsPageContent() {
             typeof data.fallbackCropPosition === "string" && isFallbackCropPosition(data.fallbackCropPosition)
               ? data.fallbackCropPosition
               : DEFAULT_USER_PREFERENCES.fallbackCropPosition,
+          faceAnchorProfile:
+            typeof data.faceAnchorProfile === "string" && isFaceAnchorProfile(data.faceAnchorProfile)
+              ? data.faceAnchorProfile
+              : DEFAULT_USER_PREFERENCES.faceAnchorProfile,
           transcriptionProvider:
             typeof data.transcriptionProvider === "string" && isTranscriptionProvider(data.transcriptionProvider)
               ? data.transcriptionProvider
@@ -1641,6 +1646,7 @@ function SettingsPageContent() {
                 defaultFramingMode={preferencesDraft.defaultFramingMode}
                 faceDetectionMode={preferencesDraft.faceDetectionMode}
                 fallbackCropPosition={preferencesDraft.fallbackCropPosition}
+                faceAnchorProfile={preferencesDraft.faceAnchorProfile}
                 onToggleReviewBeforeRender={() => {
                   setPreferencesDraft((prev) => ({
                     ...prev,
@@ -1664,6 +1670,9 @@ function SettingsPageContent() {
                 }}
                 onFallbackCropPositionChange={(value) => {
                   setPreferencesDraft((prev) => ({ ...prev, fallbackCropPosition: value }));
+                }}
+                onFaceAnchorProfileChange={(value) => {
+                  setPreferencesDraft((prev) => ({ ...prev, faceAnchorProfile: value }));
                 }}
               />
             ) : activeSection === "transcription" ? (

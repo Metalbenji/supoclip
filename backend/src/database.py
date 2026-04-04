@@ -296,6 +296,14 @@ async def init_db():
             text(
                 """
                 ALTER TABLE users
+                ADD COLUMN IF NOT EXISTS default_face_anchor_profile VARCHAR(24) NOT NULL DEFAULT 'auto'
+                """
+            )
+        )
+        await conn.execute(
+            text(
+                """
+                ALTER TABLE users
                 ADD COLUMN IF NOT EXISTS default_transcription_provider VARCHAR(20) NOT NULL DEFAULT 'local'
                 """
             )
@@ -390,6 +398,25 @@ async def init_db():
                         ELSE COALESCE(NULLIF(TRIM(default_face_detection_mode), ''), 'balanced')
                     END,
                     default_fallback_crop_position = COALESCE(NULLIF(TRIM(default_fallback_crop_position), ''), 'center')
+                """
+            )
+        )
+        await conn.execute(
+            text(
+                """
+                DO $$
+                BEGIN
+                    IF EXISTS (
+                        SELECT 1
+                        FROM pg_constraint
+                        WHERE conname = 'check_users_default_face_anchor_profile'
+                    ) THEN
+                        ALTER TABLE users DROP CONSTRAINT check_users_default_face_anchor_profile;
+                    END IF;
+                    ALTER TABLE users
+                    ADD CONSTRAINT check_users_default_face_anchor_profile
+                    CHECK (default_face_anchor_profile IN ('auto', 'left_only', 'left_or_center', 'center_only', 'right_or_center', 'right_only'));
+                END $$;
                 """
             )
         )

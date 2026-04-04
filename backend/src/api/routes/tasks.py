@@ -1463,6 +1463,7 @@ async def create_task(request: Request, db: AsyncSession = Depends(get_db)):
                 "default_framing_mode": video_options.get("default_framing_mode"),
                 "face_detection_mode": video_options.get("face_detection_mode"),
                 "fallback_crop_position": video_options.get("fallback_crop_position"),
+                "face_anchor_profile": video_options.get("face_anchor_profile"),
             },
             "latest_stage_metadata": {},
         }

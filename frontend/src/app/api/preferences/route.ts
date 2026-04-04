@@ -24,6 +24,14 @@ const SUPPORTED_WHISPER_MODEL_SIZES = new Set(["tiny", "base", "small", "medium"
 const SUPPORTED_DEFAULT_FRAMING_MODES = new Set(["auto", "prefer_face", "fixed_position"]);
 const SUPPORTED_FACE_DETECTION_MODES = new Set(["balanced", "more_faces"]);
 const SUPPORTED_FALLBACK_CROP_POSITIONS = new Set(["center", "left_center", "right_center"]);
+const SUPPORTED_FACE_ANCHOR_PROFILES = new Set([
+  "auto",
+  "left_only",
+  "left_or_center",
+  "center_only",
+  "right_or_center",
+  "right_only",
+]);
 const SUPPORTED_PROCESSING_PROFILES = new Set(["fast_draft", "balanced", "best_quality", "stream_layout"]);
 const SUPPORTED_AI_PROVIDERS = new Set(["openai", "google", "anthropic", "zai", "ollama"]);
 const MIN_WHISPER_CHUNK_DURATION_SECONDS = 300;
@@ -37,6 +45,10 @@ type WhisperPreferenceRow = {
   default_whisper_model_size: string | null;
   default_whisper_device: string | null;
   default_whisper_gpu_index: number | null;
+};
+
+type FaceAnchorPreferenceRow = {
+  default_face_anchor_profile: string | null;
 };
 
 async function getStoredWhisperPreferences(userId: string): Promise<WhisperPreferenceRow> {
@@ -89,6 +101,36 @@ async function updateStoredWhisperPreferences(
   `;
 }
 
+async function getStoredFaceAnchorPreference(userId: string): Promise<FaceAnchorPreferenceRow> {
+  const rows = await prisma.$queryRaw<FaceAnchorPreferenceRow[]>`
+    SELECT
+      "default_face_anchor_profile"
+    FROM "users"
+    WHERE "id" = ${userId}
+    LIMIT 1
+  `;
+
+  return rows[0] ?? {
+    default_face_anchor_profile: null,
+  };
+}
+
+async function updateStoredFaceAnchorPreference(
+  userId: string,
+  faceAnchorProfile: string | undefined,
+): Promise<void> {
+  if (faceAnchorProfile === undefined) {
+    return;
+  }
+
+  await prisma.$executeRaw`
+    UPDATE "users"
+    SET
+      "default_face_anchor_profile" = CAST(${faceAnchorProfile ?? "auto"} AS VARCHAR(24))
+    WHERE "id" = ${userId}
+  `;
+}
+
 function normalizeDefaultFramingMode(rawValue: unknown): "auto" | "prefer_face" | "fixed_position" {
   const normalized = typeof rawValue === "string" ? rawValue.trim().toLowerCase() : "";
   if (normalized === "disable_face_crop") {
@@ -117,6 +159,16 @@ function normalizeFallbackCropPosition(rawValue: unknown): "center" | "left_cent
     return normalized as "center" | "left_center" | "right_center";
   }
   return "center";
+}
+
+function normalizeFaceAnchorProfile(
+  rawValue: unknown,
+): "auto" | "left_only" | "left_or_center" | "center_only" | "right_or_center" | "right_only" {
+  const normalized = typeof rawValue === "string" ? rawValue.trim().toLowerCase() : "";
+  if (SUPPORTED_FACE_ANCHOR_PROFILES.has(normalized)) {
+    return normalized as "auto" | "left_only" | "left_or_center" | "center_only" | "right_or_center" | "right_only";
+  }
+  return "auto";
 }
 
 function normalizeProcessingProfile(rawValue: unknown): "fast_draft" | "balanced" | "best_quality" | "stream_layout" {
@@ -186,6 +238,7 @@ export async function GET() {
       ? user.default_text_align
       : DEFAULT_FONT_STYLE_OPTIONS.textAlign;
     const whisperPreferences = await getStoredWhisperPreferences(session.user.id);
+    const faceAnchorPreference = await getStoredFaceAnchorPreference(session.user.id);
     const hadLegacyCenterOnly = typeof user.default_face_detection_mode === "string" && user.default_face_detection_mode === "center_only";
     const defaultFramingMode = hadLegacyCenterOnly
       ? "fixed_position"
@@ -224,6 +277,7 @@ export async function GET() {
       defaultFramingMode,
       faceDetectionMode: normalizeFaceDetectionMode(user.default_face_detection_mode),
       fallbackCropPosition: normalizeFallbackCropPosition(user.default_fallback_crop_position),
+      faceAnchorProfile: normalizeFaceAnchorProfile(faceAnchorPreference.default_face_anchor_profile),
       transcriptionProvider: user.default_transcription_provider || "local",
       whisperChunkingEnabled: user.default_whisper_chunking_enabled ?? true,
       whisperChunkDurationSeconds: user.default_whisper_chunk_duration_seconds || 1200,
@@ -298,6 +352,7 @@ export async function PATCH(request: NextRequest) {
       defaultFramingMode,
       faceDetectionMode,
       fallbackCropPosition,
+      faceAnchorProfile,
       transcriptionProvider,
       whisperChunkingEnabled,
       whisperChunkDurationSeconds,
@@ -415,6 +470,15 @@ export async function PATCH(request: NextRequest) {
     ) {
       return NextResponse.json(
         { error: "Invalid fallbackCropPosition (must be center, left_center, or right_center)" },
+        { status: 400 },
+      );
+    }
+    if (
+      faceAnchorProfile !== undefined &&
+      (typeof faceAnchorProfile !== "string" || !SUPPORTED_FACE_ANCHOR_PROFILES.has(faceAnchorProfile))
+    ) {
+      return NextResponse.json(
+        { error: "Invalid faceAnchorProfile (must be auto, left_only, left_or_center, center_only, right_or_center, or right_only)" },
         { status: 400 },
       );
     }
@@ -596,7 +660,9 @@ export async function PATCH(request: NextRequest) {
     });
 
     await updateStoredWhisperPreferences(session.user.id, whisperModelSize, whisperDevice, whisperGpuIndex);
+    await updateStoredFaceAnchorPreference(session.user.id, faceAnchorProfile);
     const whisperPreferences = await getStoredWhisperPreferences(session.user.id);
+    const faceAnchorPreference = await getStoredFaceAnchorPreference(session.user.id);
     const hadLegacyCenterOnly = typeof updatedUser.default_face_detection_mode === "string" && updatedUser.default_face_detection_mode === "center_only";
 
     return NextResponse.json({
@@ -638,6 +704,7 @@ export async function PATCH(request: NextRequest) {
         : normalizeDefaultFramingMode(updatedUser.default_framing_mode),
       faceDetectionMode: normalizeFaceDetectionMode(updatedUser.default_face_detection_mode),
       fallbackCropPosition: normalizeFallbackCropPosition(updatedUser.default_fallback_crop_position),
+      faceAnchorProfile: normalizeFaceAnchorProfile(faceAnchorPreference.default_face_anchor_profile),
       transcriptionProvider: updatedUser.default_transcription_provider || "local",
       whisperChunkingEnabled: updatedUser.default_whisper_chunking_enabled ?? true,
       whisperChunkDurationSeconds: updatedUser.default_whisper_chunk_duration_seconds || 1200,

@@ -69,6 +69,11 @@ class User(Base):
         nullable=False,
         server_default=text("'center'"),
     )
+    default_face_anchor_profile: Mapped[str] = mapped_column(
+        String(24),
+        nullable=False,
+        server_default=text("'auto'"),
+    )
     default_transcription_provider: Mapped[str] = mapped_column(
         String(20),
         nullable=False,

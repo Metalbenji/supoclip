@@ -55,6 +55,7 @@ model User {
   default_framing_mode String? @default("auto") @db.VarChar(32)
   default_face_detection_mode String? @default("balanced") @db.VarChar(20)
   default_fallback_crop_position String? @default("center") @db.VarChar(20)
+  default_face_anchor_profile String? @default("auto") @db.VarChar(24)
   default_transcription_provider String? @default("local") @db.VarChar(20)
   default_whisper_chunking_enabled Boolean? @default(true)
   default_whisper_chunk_duration_seconds Int? @default(1200)

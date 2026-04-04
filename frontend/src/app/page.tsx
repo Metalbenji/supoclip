@@ -65,6 +65,7 @@ const WHISPER_MODEL_SIZES = ["tiny", "base", "small", "medium", "large", "turbo"
 type WhisperDevicePreference = "auto" | "cpu" | "gpu";
 type WhisperModelSize = (typeof WHISPER_MODEL_SIZES)[number];
 type ProcessingProfile = keyof typeof PROCESSING_PROFILE_PRESETS;
+type FaceAnchorProfile = "auto" | "left_only" | "left_or_center" | "center_only" | "right_or_center" | "right_only";
 
 const DEFAULT_AI_MODELS = {
   openai: "gpt-5",
@@ -97,6 +98,17 @@ function isWhisperModelSize(value: unknown): value is WhisperModelSize {
 
 function isProcessingProfile(value: unknown): value is ProcessingProfile {
   return typeof value === "string" && value in PROCESSING_PROFILE_PRESETS;
+}
+
+function isFaceAnchorProfile(value: unknown): value is FaceAnchorProfile {
+  return (
+    value === "auto" ||
+    value === "left_only" ||
+    value === "left_or_center" ||
+    value === "center_only" ||
+    value === "right_or_center" ||
+    value === "right_only"
+  );
 }
 
 function applyTextTransform(text: string, mode: TextTransformOption): string {
@@ -203,6 +215,7 @@ export default function Home() {
   const [defaultFramingMode, setDefaultFramingMode] = useState<"auto" | "prefer_face" | "fixed_position">("auto");
   const [faceDetectionMode, setFaceDetectionMode] = useState<"balanced" | "more_faces">("balanced");
   const [fallbackCropPosition, setFallbackCropPosition] = useState<"center" | "left_center" | "right_center">("center");
+  const [faceAnchorProfile, setFaceAnchorProfile] = useState<FaceAnchorProfile>("auto");
   const [transcriptionProvider, setTranscriptionProvider] = useState<"local" | "assemblyai">("local");
   const [whisperChunkingEnabled, setWhisperChunkingEnabled] = useState(DEFAULT_WHISPER_CHUNKING_ENABLED);
   const [whisperChunkDurationSeconds, setWhisperChunkDurationSeconds] = useState(DEFAULT_WHISPER_CHUNK_DURATION_SECONDS);
@@ -233,6 +246,7 @@ export default function Home() {
     setDefaultFramingMode(preset.defaultFramingMode);
     setFaceDetectionMode(preset.faceDetectionMode);
     setFallbackCropPosition(preset.fallbackCropPosition);
+    setFaceAnchorProfile(preset.faceAnchorProfile);
   }, []);
 
   // Latest task state
@@ -333,6 +347,7 @@ export default function Home() {
             defaultFramingMode?: unknown;
             faceDetectionMode?: unknown;
             fallbackCropPosition?: unknown;
+            faceAnchorProfile?: unknown;
             transcriptionProvider?: unknown;
             whisperChunkingEnabled?: unknown;
             whisperChunkDurationSeconds?: unknown;
@@ -381,6 +396,7 @@ export default function Home() {
               ? data.fallbackCropPosition
               : "center",
           );
+          setFaceAnchorProfile(isFaceAnchorProfile(data.faceAnchorProfile) ? data.faceAnchorProfile : "auto");
 
           const savedTranscriptionProvider = data.transcriptionProvider;
           if (savedTranscriptionProvider === "local" || savedTranscriptionProvider === "assemblyai") {
@@ -714,6 +730,7 @@ export default function Home() {
           default_framing_mode: defaultFramingMode,
           face_detection_mode: faceDetectionMode,
           fallback_crop_position: fallbackCropPosition,
+          face_anchor_profile: faceAnchorProfile,
         },
         font_options: {
           font_family: fontFamily,
@@ -1301,6 +1318,71 @@ export default function Home() {
                       </SelectContent>
                     </Select>
                     <p className="text-xs text-gray-500">{selectedProcessingProfile.description}</p>
+                  </div>
+
+                  <div className="space-y-3 rounded border border-gray-200 bg-white p-3">
+                    <div>
+                      <label className="text-sm font-medium text-black">Face Framing Benchmark</label>
+                      <p className="text-xs text-gray-500">
+                        Tell the scorer where a good face track usually appears in your stream so left-side facecams score as strong instead of weak.
+                      </p>
+                    </div>
+                    <div className="grid gap-3 md:grid-cols-2">
+                      <div className="space-y-1.5">
+                        <label className="text-xs font-medium text-gray-700">Default crop mode</label>
+                        <Select value={defaultFramingMode} onValueChange={(value) => setDefaultFramingMode(value as "auto" | "prefer_face" | "fixed_position")} disabled={isLoading}>
+                          <SelectTrigger className="w-full">
+                            <SelectValue placeholder="Select default crop mode" />
+                          </SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="auto">Auto</SelectItem>
+                            <SelectItem value="prefer_face">Prefer face</SelectItem>
+                            <SelectItem value="fixed_position">Fixed position</SelectItem>
+                          </SelectContent>
+                        </Select>
+                      </div>
+                      <div className="space-y-1.5">
+                        <label className="text-xs font-medium text-gray-700">Face detection mode</label>
+                        <Select value={faceDetectionMode} onValueChange={(value) => setFaceDetectionMode(value as "balanced" | "more_faces")} disabled={isLoading}>
+                          <SelectTrigger className="w-full">
+                            <SelectValue placeholder="Select face detection mode" />
+                          </SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="balanced">Balanced</SelectItem>
+                            <SelectItem value="more_faces">More faces</SelectItem>
+                          </SelectContent>
+                        </Select>
+                      </div>
+                      <div className="space-y-1.5">
+                        <label className="text-xs font-medium text-gray-700">Fallback crop position</label>
+                        <Select value={fallbackCropPosition} onValueChange={(value) => setFallbackCropPosition(value as "center" | "left_center" | "right_center")} disabled={isLoading}>
+                          <SelectTrigger className="w-full">
+                            <SelectValue placeholder="Select fallback crop position" />
+                          </SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="center">Center</SelectItem>
+                            <SelectItem value="left_center">Left-center</SelectItem>
+                            <SelectItem value="right_center">Right-center</SelectItem>
+                          </SelectContent>
+                        </Select>
+                      </div>
+                      <div className="space-y-1.5">
+                        <label className="text-xs font-medium text-gray-700">Face layout benchmark</label>
+                        <Select value={faceAnchorProfile} onValueChange={(value) => setFaceAnchorProfile(value as FaceAnchorProfile)} disabled={isLoading}>
+                          <SelectTrigger className="w-full">
+                            <SelectValue placeholder="Select face layout benchmark" />
+                          </SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="auto">Auto</SelectItem>
+                            <SelectItem value="left_or_center">Left or center</SelectItem>
+                            <SelectItem value="left_only">Left only</SelectItem>
+                            <SelectItem value="center_only">Center only</SelectItem>
+                            <SelectItem value="right_or_center">Right or center</SelectItem>
+                            <SelectItem value="right_only">Right only</SelectItem>
+                          </SelectContent>
+                        </Select>
+                      </div>
+                    </div>
                   </div>
 
                   {transcriptionProvider === "local" ? (

@@ -55,6 +55,14 @@ _mediapipe_detector_tls = threading.local()
 SUPPORTED_FRAMING_MODE_OVERRIDES = ("auto", "prefer_face", "fixed_position")
 SUPPORTED_FACE_DETECTION_MODES = ("balanced", "more_faces")
 SUPPORTED_FALLBACK_CROP_POSITIONS = ("center", "left_center", "right_center")
+SUPPORTED_FACE_ANCHOR_PROFILES = (
+    "auto",
+    "left_only",
+    "left_or_center",
+    "center_only",
+    "right_or_center",
+    "right_only",
+)
 FRAMING_SCORE_BONUS_HIGH = 0.06
 FRAMING_SCORE_BONUS_MEDIUM = 0.03
 FRAMING_MULTI_FACE_PENALTY_MAX = 0.02
@@ -75,6 +83,13 @@ def _normalize_fallback_crop_position(value: Any) -> str:
     normalized = str(value or "center").strip().lower()
     if normalized not in SUPPORTED_FALLBACK_CROP_POSITIONS:
         return "center"
+    return normalized
+
+
+def _normalize_face_anchor_profile(value: Any) -> str:
+    normalized = str(value or "auto").strip().lower()
+    if normalized not in SUPPORTED_FACE_ANCHOR_PROFILES:
+        return "auto"
     return normalized
 
 
@@ -1410,12 +1425,62 @@ def _calculate_face_tracking_offset(
     return round_to_even(tracked_x), round_to_even(tracked_y)
 
 
+def _get_face_anchor_target_offsets(face_anchor_profile: str, max_x: int) -> List[int]:
+    normalized_profile = _normalize_face_anchor_profile(face_anchor_profile)
+    center_target = round_to_even(max_x / 2) if max_x > 0 else 0
+    if normalized_profile == "left_only":
+        return [0]
+    if normalized_profile == "left_or_center":
+        return [0, center_target]
+    if normalized_profile == "center_only":
+        return [center_target]
+    if normalized_profile == "right_or_center":
+        return [center_target, round_to_even(max_x)]
+    if normalized_profile == "right_only":
+        return [round_to_even(max_x)]
+    return []
+
+
+def _compute_face_anchor_alignment(
+    x_offset: float,
+    target_offsets: List[int],
+    max_x: int,
+    crop_width: int,
+) -> float:
+    if not target_offsets:
+        return 0.0
+    tolerance = max(90.0, crop_width * 0.35, max_x * 0.18 if max_x > 0 else 0.0)
+    min_distance = min(abs(float(target) - float(x_offset)) for target in target_offsets)
+    return max(0.0, 1.0 - (min_distance / max(1.0, tolerance)))
+
+
+def _calculate_face_visibility_score(face_box: Dict[str, Any], frame_width: int, frame_height: int) -> float:
+    x = int(face_box.get("x") or 0)
+    y = int(face_box.get("y") or 0)
+    width = max(0, int(face_box.get("width") or 0))
+    height = max(0, int(face_box.get("height") or 0))
+    if width <= 0 or height <= 0 or frame_width <= 0 or frame_height <= 0:
+        return 0.0
+
+    left_margin = x
+    right_margin = max(0, frame_width - (x + width))
+    top_margin = y
+    bottom_margin = max(0, frame_height - (y + height))
+    min_horizontal_margin = min(left_margin, right_margin)
+    min_vertical_margin = min(top_margin, bottom_margin)
+
+    horizontal_score = min(1.0, max(0.0, min_horizontal_margin / max(12.0, width * 0.12)))
+    vertical_score = min(1.0, max(0.0, min_vertical_margin / max(12.0, height * 0.12)))
+    return round((horizontal_score * 0.7) + (vertical_score * 0.3), 4)
+
+
 def _select_dominant_face_track(
     candidate_points: List[Dict[str, Any]],
     frame_width: int,
     frame_height: int,
     crop_width: int,
     crop_height: int,
+    face_anchor_profile: str = "auto",
 ) -> Tuple[List[Dict[str, Any]], Dict[str, float]]:
     if not candidate_points:
         return [], {
@@ -1423,9 +1488,14 @@ def _select_dominant_face_track(
             "rejected_rate": 0.0,
             "x_spread": 0.0,
             "y_spread": 0.0,
+            "anchor_alignment_score": 0.0,
+            "anchor_presence_rate": 0.0,
+            "visibility_score": 0.0,
         }
 
     enriched_points: List[Dict[str, Any]] = []
+    max_x = max(0, frame_width - crop_width)
+    anchor_targets = _get_face_anchor_target_offsets(face_anchor_profile, max_x)
     for point in candidate_points:
         x_offset, y_offset = _calculate_face_tracking_offset(
             int(point.get("center_x") or 0),
@@ -1440,6 +1510,13 @@ def _select_dominant_face_track(
                 **point,
                 "x_offset": x_offset,
                 "y_offset": y_offset,
+                "anchor_alignment": _compute_face_anchor_alignment(
+                    x_offset,
+                    anchor_targets,
+                    max_x,
+                    crop_width,
+                ),
+                "visibility_score": _calculate_face_visibility_score(point, frame_width, frame_height),
             }
         )
 
@@ -1449,12 +1526,37 @@ def _select_dominant_face_track(
             "rejected_rate": 0.0,
             "x_spread": 0.0,
             "y_spread": 0.0,
+            "anchor_alignment_score": round(
+                float(np.mean([float(point.get("anchor_alignment") or 0.0) for point in enriched_points]))
+                if enriched_points
+                else 0.0,
+                4,
+            ),
+            "anchor_presence_rate": round(
+                float(
+                    np.mean(
+                        [
+                            1.0 if float(point.get("anchor_alignment") or 0.0) >= 0.6 else 0.0
+                            for point in enriched_points
+                        ]
+                    )
+                )
+                if enriched_points
+                else 0.0,
+                4,
+            ),
+            "visibility_score": round(
+                float(np.mean([float(point.get("visibility_score") or 0.0) for point in enriched_points]))
+                if enriched_points
+                else 0.0,
+                4,
+            ),
         }
 
     cluster_window_x = max(80, round_to_even(int(crop_width * 0.22)))
     cluster_window_y = max(40, round_to_even(int(crop_height * 0.12)))
     best_cluster: List[Dict[str, Any]] = []
-    best_score = (-1, -1.0, 1.0)
+    best_score = (-1.0, -1.0, -1.0, 1.0)
 
     for seed in enriched_points:
         cluster = [
@@ -1469,7 +1571,17 @@ def _select_dominant_face_track(
             if cluster
             else float(seed["x_offset"])
         )
-        score = (len(cluster), weight_total, -abs(float(seed["x_offset"]) - mean_offset))
+        anchor_alignment = (
+            float(np.mean([float(point.get("anchor_alignment") or 0.0) for point in cluster]))
+            if cluster
+            else 0.0
+        )
+        score = (
+            round(len(cluster) + (anchor_alignment * 0.75), 4),
+            anchor_alignment,
+            weight_total,
+            -abs(float(seed["x_offset"]) - mean_offset),
+        )
         if score > best_score:
             best_score = score
             best_cluster = cluster
@@ -1502,6 +1614,25 @@ def _select_dominant_face_track(
         "rejected_rate": round(max(0.0, 1.0 - (len(best_cluster) / len(enriched_points))), 4),
         "x_spread": float(max(x_positions) - min(x_positions)) if len(x_positions) > 1 else 0.0,
         "y_spread": float(max(y_positions) - min(y_positions)) if len(y_positions) > 1 else 0.0,
+        "anchor_alignment_score": round(
+            float(np.mean([float(point.get("anchor_alignment") or 0.0) for point in best_cluster])),
+            4,
+        ),
+        "anchor_presence_rate": round(
+            float(
+                np.mean(
+                    [
+                        1.0 if float(point.get("anchor_alignment") or 0.0) >= 0.6 else 0.0
+                        for point in best_cluster
+                    ]
+                )
+            ),
+            4,
+        ),
+        "visibility_score": round(
+            float(np.mean([float(point.get("visibility_score") or 0.0) for point in best_cluster])),
+            4,
+        ),
     }
 
 
@@ -1541,9 +1672,11 @@ def _summarize_face_detection_samples(
     crop_height: int,
     face_detection_mode: str = "balanced",
     fallback_crop_position: str = "center",
+    face_anchor_profile: str = "auto",
 ) -> Dict[str, Any]:
     normalized_face_detection_mode = _normalize_face_detection_mode(face_detection_mode)
     normalized_fallback_crop_position = _normalize_fallback_crop_position(fallback_crop_position)
+    normalized_face_anchor_profile = _normalize_face_anchor_profile(face_anchor_profile)
     if not samples:
         return {
             "face_detected": False,
@@ -1567,6 +1700,7 @@ def _summarize_face_detection_samples(
             },
             "face_detection_mode": normalized_face_detection_mode,
             "fallback_crop_position": normalized_fallback_crop_position,
+            "face_anchor_profile": normalized_face_anchor_profile,
             "face_centers": [],
             "tracking_points": [],
         }
@@ -1610,6 +1744,10 @@ def _summarize_face_detection_samples(
                 "time": round(float(sample.get("time") or 0.0) - start_time, 4),
                 "center_x": int(primary_face.get("center_x") or 0),
                 "center_y": int(primary_face.get("center_y") or 0),
+                "x": int(primary_face.get("x") or 0),
+                "y": int(primary_face.get("y") or 0),
+                "width": int(primary_face.get("width") or 0),
+                "height": int(primary_face.get("height") or 0),
                 "area": int(primary_face.get("area") or 0),
                 "area_ratio": float(primary_face.get("area_ratio") or 0.0),
                 "confidence": float(primary_face.get("confidence") or 0.0),
@@ -1626,6 +1764,7 @@ def _summarize_face_detection_samples(
         frame_height,
         crop_width,
         crop_height,
+        face_anchor_profile=normalized_face_anchor_profile,
     )
 
     for point in dominant_track_points:
@@ -1675,29 +1814,82 @@ def _summarize_face_detection_samples(
         dominant_face_count = int(unique_counts[int(np.argmax(count_totals))])
 
     crop_confidence = "none"
+    anchor_alignment_score = float(tracking_metrics.get("anchor_alignment_score") or 0.0)
+    anchor_presence_rate = float(tracking_metrics.get("anchor_presence_rate") or 0.0)
+    visibility_score = float(tracking_metrics.get("visibility_score") or 0.0)
+    anchored_layout_expected = normalized_face_anchor_profile != "auto"
     if reliable_face_frames > 0:
         crop_confidence = "low"
-        if (
+        auto_high = (
             dominant_face_count == 1
             and reliable_face_rate >= 0.6
             and (primary_face_area_ratio or 0.0) >= 0.02
             and multi_face_frames_rate <= 0.15
             and tracking_metrics.get("consistency_rate", 0.0) >= 0.7
             and tracking_metrics.get("x_spread", 0.0) <= max(120.0, crop_width * 0.22)
-        ):
+        )
+        anchored_high = (
+            anchored_layout_expected
+            and dominant_face_count == 1
+            and reliable_face_rate >= 0.45
+            and (primary_face_area_ratio or 0.0) >= 0.008
+            and multi_face_frames_rate <= 0.45
+            and tracking_metrics.get("consistency_rate", 0.0) >= 0.45
+            and anchor_alignment_score >= 0.72
+            and anchor_presence_rate >= 0.65
+            and visibility_score >= 0.45
+            and tracking_metrics.get("x_spread", 0.0) <= max(160.0, crop_width * 0.3)
+        )
+        if auto_high or anchored_high:
             crop_confidence = "high"
-        elif (
-            dominant_face_count == 1
-            and reliable_face_rate >= 0.35
-            and (primary_face_area_ratio or 0.0) >= (0.008 if normalized_face_detection_mode == "more_faces" else 0.01)
-            and multi_face_frames_rate <= 0.35
-            and tracking_metrics.get("consistency_rate", 0.0) >= 0.5
-            and tracking_metrics.get("x_spread", 0.0) <= max(180.0, crop_width * 0.32)
-        ):
-            crop_confidence = "medium"
+        else:
+            auto_medium = (
+                dominant_face_count == 1
+                and reliable_face_rate >= 0.35
+                and (primary_face_area_ratio or 0.0) >= (0.008 if normalized_face_detection_mode == "more_faces" else 0.01)
+                and multi_face_frames_rate <= 0.35
+                and tracking_metrics.get("consistency_rate", 0.0) >= 0.5
+                and tracking_metrics.get("x_spread", 0.0) <= max(180.0, crop_width * 0.32)
+            )
+            anchored_medium = (
+                anchored_layout_expected
+                and dominant_face_count == 1
+                and reliable_face_rate >= 0.28
+                and (primary_face_area_ratio or 0.0) >= 0.0045
+                and multi_face_frames_rate <= 0.6
+                and tracking_metrics.get("consistency_rate", 0.0) >= 0.32
+                and anchor_alignment_score >= 0.58
+                and anchor_presence_rate >= 0.5
+                and visibility_score >= 0.3
+                and tracking_metrics.get("x_spread", 0.0) <= max(240.0, crop_width * 0.4)
+            )
+            if auto_medium or anchored_medium:
+                crop_confidence = "medium"
 
-    if detector_backend == "haar" and tracking_metrics.get("consistency_rate", 0.0) < 0.65:
+    if (
+        anchored_layout_expected
+        and crop_confidence == "low"
+        and reliable_face_frames > 0
+        and dominant_face_count == 1
+        and anchor_presence_rate >= 0.45
+        and visibility_score >= 0.25
+    ):
+        crop_confidence = "medium"
+
+    if (
+        detector_backend == "haar"
+        and tracking_metrics.get("consistency_rate", 0.0) < 0.65
+        and anchor_presence_rate < 0.6
+    ):
         crop_confidence = "low" if reliable_face_frames > 0 else "none"
+    elif (
+        detector_backend == "haar"
+        and anchored_layout_expected
+        and anchor_presence_rate >= 0.65
+        and visibility_score >= 0.45
+        and crop_confidence == "low"
+    ):
+        crop_confidence = "medium"
 
     suggested_crop_mode = "face" if crop_confidence in {"high", "medium"} else "center"
     detection_state = "none"
@@ -1740,12 +1932,16 @@ def _summarize_face_detection_samples(
         "filter_reason_counts": filter_reason_counts,
         "face_detection_mode": normalized_face_detection_mode,
         "fallback_crop_position": normalized_fallback_crop_position,
+        "face_anchor_profile": normalized_face_anchor_profile,
         "face_centers": face_centers,
         "tracking_points": tracking_points,
         "tracking_consistency_rate": round(float(tracking_metrics.get("consistency_rate") or 0.0), 4),
         "tracking_rejected_rate": round(float(tracking_metrics.get("rejected_rate") or 0.0), 4),
         "tracking_x_spread": round(float(tracking_metrics.get("x_spread") or 0.0), 2),
         "tracking_y_spread": round(float(tracking_metrics.get("y_spread") or 0.0), 2),
+        "tracking_anchor_alignment_score": round(anchor_alignment_score, 4),
+        "tracking_anchor_presence_rate": round(anchor_presence_rate, 4),
+        "tracking_visibility_score": round(visibility_score, 4),
         "fixed_crop_offsets": (x_offset, y_offset),
     }
 
@@ -1821,11 +2017,13 @@ def analyze_clip_framing(
     target_ratio: float = 9 / 16,
     face_detection_mode: str = "balanced",
     fallback_crop_position: str = "center",
+    face_anchor_profile: str = "auto",
 ) -> Dict[str, Any]:
     original_width, original_height = video_clip.size
     crop_width, crop_height = _get_target_crop_dimensions(original_width, original_height, target_ratio)
     normalized_face_detection_mode = _normalize_face_detection_mode(face_detection_mode)
     normalized_fallback_crop_position = _normalize_fallback_crop_position(fallback_crop_position)
+    normalized_face_anchor_profile = _normalize_face_anchor_profile(face_anchor_profile)
     samples = _collect_face_detection_samples(
         video_clip,
         start_time,
@@ -1839,6 +2037,7 @@ def analyze_clip_framing(
         crop_height,
         face_detection_mode=normalized_face_detection_mode,
         fallback_crop_position=normalized_fallback_crop_position,
+        face_anchor_profile=normalized_face_anchor_profile,
     )
     fallback_offsets = _get_fallback_crop_offsets(
         original_width,
@@ -1866,6 +2065,14 @@ def analyze_clip_framing(
         "filter_reason_counts": dict(summary.get("filter_reason_counts") or {}),
         "face_detection_mode": str(summary.get("face_detection_mode") or normalized_face_detection_mode),
         "fallback_crop_position": str(summary.get("fallback_crop_position") or normalized_fallback_crop_position),
+        "face_anchor_profile": str(summary.get("face_anchor_profile") or normalized_face_anchor_profile),
+        "tracking_consistency_rate": float(summary.get("tracking_consistency_rate") or 0.0),
+        "tracking_rejected_rate": float(summary.get("tracking_rejected_rate") or 0.0),
+        "tracking_x_spread": float(summary.get("tracking_x_spread") or 0.0),
+        "tracking_y_spread": float(summary.get("tracking_y_spread") or 0.0),
+        "tracking_anchor_alignment_score": float(summary.get("tracking_anchor_alignment_score") or 0.0),
+        "tracking_anchor_presence_rate": float(summary.get("tracking_anchor_presence_rate") or 0.0),
+        "tracking_visibility_score": float(summary.get("tracking_visibility_score") or 0.0),
     }
     return {
         "framing_metadata": framing_metadata,
@@ -1883,6 +2090,7 @@ def analyze_single_segment_framing(
     end_time: str,
     face_detection_mode: str = "balanced",
     fallback_crop_position: str = "center",
+    face_anchor_profile: str = "auto",
 ) -> Dict[str, Any]:
     start_seconds = parse_timestamp_to_seconds(start_time)
     end_seconds = parse_timestamp_to_seconds(end_time)
@@ -1895,6 +2103,7 @@ def analyze_single_segment_framing(
             end_seconds,
             face_detection_mode=face_detection_mode,
             fallback_crop_position=fallback_crop_position,
+            face_anchor_profile=face_anchor_profile,
         )
     metadata = dict(analysis.get("framing_metadata") or {})
     metadata["crop_width"] = int(analysis.get("crop_width") or 0)
@@ -1909,6 +2118,7 @@ def analyze_segment_framing_batch(
     segments: List[Dict[str, Any]],
     face_detection_mode: str = "balanced",
     fallback_crop_position: str = "center",
+    face_anchor_profile: str = "auto",
 ) -> List[Dict[str, Any]]:
     video_path = Path(video_path)
     results: List[Dict[str, Any]] = []
@@ -1928,6 +2138,10 @@ def analyze_segment_framing_batch(
                     fallback_crop_position=(
                         segment.get("fallback_crop_position")
                         or fallback_crop_position
+                    ),
+                    face_anchor_profile=(
+                        segment.get("face_anchor_profile")
+                        or face_anchor_profile
                     ),
                 )
                 metadata = dict(analysis.get("framing_metadata") or {})
@@ -2752,6 +2966,7 @@ def create_optimized_clip(
         crop_confidence = str(effective_framing_metadata.get("crop_confidence") or "none")
         detection_state = str(effective_framing_metadata.get("detection_state") or "none")
         face_detection_mode = _normalize_face_detection_mode(effective_framing_metadata.get("face_detection_mode"))
+        face_anchor_profile = _normalize_face_anchor_profile(effective_framing_metadata.get("face_anchor_profile"))
         framing_analysis_source = "persisted_metadata"
         tracking_points = list(effective_framing_metadata.get("tracking_points") or [])
         persisted_crop_width = int(effective_framing_metadata.get("crop_width") or 0)
@@ -2792,6 +3007,7 @@ def create_optimized_clip(
                     target_ratio=9 / 16,
                     face_detection_mode=face_detection_mode,
                     fallback_crop_position=fallback_crop_position,
+                    face_anchor_profile=face_anchor_profile,
                 )
                 effective_framing_metadata = dict(framing_analysis.get("framing_metadata") or effective_framing_metadata)
                 effective_framing_metadata["crop_width"] = int(framing_analysis.get("crop_width") or new_width)
@@ -2802,6 +3018,9 @@ def create_optimized_clip(
                 detection_state = str(effective_framing_metadata.get("detection_state") or "none")
                 fallback_crop_position = _normalize_fallback_crop_position(
                     effective_framing_metadata.get("fallback_crop_position")
+                )
+                face_anchor_profile = _normalize_face_anchor_profile(
+                    effective_framing_metadata.get("face_anchor_profile")
                 )
                 tracking_points = list(framing_analysis.get("tracking_points") or [])
                 reliable_face_frames = int(effective_framing_metadata.get("reliable_face_frames") or 0)
