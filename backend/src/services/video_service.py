@@ -9,6 +9,7 @@ import json
 import math
 import subprocess
 from array import array
+from uuid import uuid4
 
 from ..utils.async_helpers import run_in_thread
 from ..youtube_utils import (
@@ -672,7 +673,7 @@ class VideoService:
     @staticmethod
     def _save_waveform_base_cache(video_path: Path, payload: Dict[str, Any]) -> None:
         cache_path = VideoService._waveform_base_cache_path(video_path)
-        temporary_path = cache_path.with_suffix(f"{cache_path.suffix}.tmp")
+        temporary_path = cache_path.with_name(f"{cache_path.name}.{uuid4().hex}.tmp")
         try:
             cache_payload = {
                 "video_mtime": video_path.stat().st_mtime,
