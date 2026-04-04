@@ -56,6 +56,8 @@ MAX_WHISPER_CHUNK_OVERLAP_SECONDS = 120
 MIN_WHISPER_GPU_INDEX = 0
 MIN_TASK_TIMEOUT_SECONDS = 300
 MAX_TASK_TIMEOUT_SECONDS = 86400
+MIN_REVIEW_AUTO_SELECT_MIN_SCORE_PERCENT = 0
+MAX_REVIEW_AUTO_SELECT_MIN_SCORE_PERCENT = 100
 SUPPORTED_FRAMING_MODE_OVERRIDES = {"auto", "prefer_face", "fixed_position"}
 SUPPORTED_PROCESSING_PROFILES = {"fast_draft", "balanced", "best_quality", "stream_layout"}
 DRAFT_UPDATE_FIELDS = {"id", "start_time", "end_time", "edited_text", "is_selected", "framing_mode_override"}
@@ -212,6 +214,43 @@ def _resolve_whisper_model_size(raw: object) -> Optional[str]:
             detail="transcription_options.whisper_model_size must be tiny, base, small, medium, large, or turbo",
         )
     return normalized
+
+
+def _resolve_review_auto_select_min_score_percent(raw: object) -> Optional[int]:
+    if raw is None:
+        return None
+    threshold_percent = _coerce_int(
+        raw,
+        "review_options.auto_select_strong_face_min_score_percent",
+    )
+    if (
+        threshold_percent < MIN_REVIEW_AUTO_SELECT_MIN_SCORE_PERCENT
+        or threshold_percent > MAX_REVIEW_AUTO_SELECT_MIN_SCORE_PERCENT
+    ):
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "review_options.auto_select_strong_face_min_score_percent must be between "
+                f"{MIN_REVIEW_AUTO_SELECT_MIN_SCORE_PERCENT} and {MAX_REVIEW_AUTO_SELECT_MIN_SCORE_PERCENT}"
+            ),
+        )
+    return threshold_percent
+
+
+def _resolve_review_options(review_options: object) -> Dict[str, Any]:
+    if review_options is None:
+        return {}
+    if not isinstance(review_options, dict):
+        raise HTTPException(status_code=400, detail="review_options must be an object")
+
+    options: Dict[str, Any] = {}
+    if "auto_select_strong_face_min_score_percent" in review_options:
+        threshold_percent = _resolve_review_auto_select_min_score_percent(
+            review_options.get("auto_select_strong_face_min_score_percent")
+        )
+        if threshold_percent is not None:
+            options["auto_select_strong_face_min_score_percent"] = threshold_percent
+    return options
 
 
 def _resolve_local_queue_name(transcription_runtime_options: Dict[str, Any]) -> str:
@@ -1295,6 +1334,7 @@ async def create_task(request: Request, db: AsyncSession = Depends(get_db)):
     video_options = data.get("video_options", {})
     if not isinstance(video_options, dict):
         video_options = {}
+    review_options = _resolve_review_options(data.get("review_options"))
     ai_options = data.get("ai_options", {})
     if not isinstance(ai_options, dict):
         ai_options = {}
@@ -1418,6 +1458,7 @@ async def create_task(request: Request, db: AsyncSession = Depends(get_db)):
             "ai_model": ai_model,
             "ai_routing_mode": resolved_zai_routing_mode,
             "processing_profile": processing_profile,
+            "review_options": review_options,
             "video_preferences_override": {
                 "default_framing_mode": video_options.get("default_framing_mode"),
                 "face_detection_mode": video_options.get("face_detection_mode"),

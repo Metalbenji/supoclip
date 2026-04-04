@@ -63,6 +63,8 @@ REVIEW_TEXT_EDIT_BONUS = 0.07
 REVIEW_TIMING_EDIT_BASE_BONUS = 0.03
 REVIEW_TIMING_EDIT_PER_SECOND = 0.01
 REVIEW_TIMING_EDIT_MAX_BONUS = 0.12
+MIN_REVIEW_AUTO_SELECT_MIN_SCORE = 0.0
+MAX_REVIEW_AUTO_SELECT_MIN_SCORE = 1.0
 SUPPORTED_FRAMING_MODE_OVERRIDES = {"auto", "prefer_face", "fixed_position"}
 SUPPORTED_FACE_DETECTION_MODES = {"balanced", "more_faces"}
 SUPPORTED_FALLBACK_CROP_POSITIONS = {"center", "left_center", "right_center"}
@@ -1079,6 +1081,42 @@ class TaskService:
             return 0.0
         return round(max(-0.02, min(0.06, float(metadata.get("score_adjustment") or 0.0))), 4)
 
+    @staticmethod
+    def _resolve_review_auto_select_min_score(task_record: Optional[Dict[str, Any]]) -> Optional[float]:
+        runtime_info = (
+            task_record.get("runtime_info")
+            if isinstance(task_record, dict) and isinstance(task_record.get("runtime_info"), dict)
+            else {}
+        )
+        review_options = runtime_info.get("review_options") if isinstance(runtime_info.get("review_options"), dict) else {}
+        raw_threshold_percent = review_options.get("auto_select_strong_face_min_score_percent")
+        if raw_threshold_percent is None:
+            return None
+        try:
+            threshold_percent = int(raw_threshold_percent)
+        except (TypeError, ValueError):
+            return None
+        if threshold_percent < 0 or threshold_percent > 100:
+            return None
+        return max(
+            MIN_REVIEW_AUTO_SELECT_MIN_SCORE,
+            min(MAX_REVIEW_AUTO_SELECT_MIN_SCORE, threshold_percent / 100.0),
+        )
+
+    @staticmethod
+    def _should_auto_select_review_draft(
+        *,
+        review_score: float,
+        framing_metadata: Optional[Dict[str, Any]],
+        min_review_score: Optional[float],
+    ) -> bool:
+        if min_review_score is None:
+            return True
+        detection_state = ""
+        if isinstance(framing_metadata, dict):
+            detection_state = str(framing_metadata.get("detection_state") or "").strip().lower()
+        return detection_state == "strong" and float(review_score) >= float(min_review_score)
+
     def _build_draft_feedback_state(self, draft: Dict[str, Any]) -> Dict[str, Any]:
         base_score = self._clamp_review_score(
             float(draft.get("relevance_score") or 0.0) + self._extract_framing_score_adjustment(draft)
@@ -1102,6 +1140,15 @@ class TaskService:
             self._normalize_text_for_compare(draft.get("edited_text"))
             != self._normalize_text_for_compare(draft.get("original_text"))
         )
+        existing_feedback = draft.get("feedback_signals_json") if isinstance(draft.get("feedback_signals_json"), dict) else {}
+        auto_selection_rule_excluded = bool(
+            draft.get("auto_selection_rule_excluded", existing_feedback.get("auto_selection_rule_excluded", False))
+        )
+        user_selection_overridden = bool(
+            draft.get("selection_changed_by_user", existing_feedback.get("user_selection_overridden", False))
+        )
+        is_user_deselected = not is_selected and (user_selection_overridden or not auto_selection_rule_excluded)
+        is_auto_unselected = not is_selected and auto_selection_rule_excluded and not user_selection_overridden
 
         adjustment = 0.0
         if created_by_user:
@@ -1113,7 +1160,7 @@ class TaskService:
             )
         if text_edited:
             adjustment += REVIEW_TEXT_EDIT_BONUS
-        if not is_selected:
+        if is_user_deselected:
             adjustment += REVIEW_DESELECT_PENALTY
         if is_deleted:
             adjustment += REVIEW_DELETE_PENALTY
@@ -1125,12 +1172,15 @@ class TaskService:
             "feedback_signals_json": {
                 "version": 1,
                 "selected": is_selected,
-                "deselected": not is_selected,
+                "deselected": is_user_deselected,
                 "deleted": is_deleted,
                 "created_by_user": created_by_user,
                 "timing_changed": timing_changed,
                 "timing_shift_seconds": timing_shift_seconds,
                 "text_edited": text_edited,
+                "auto_unselected": is_auto_unselected,
+                "auto_selection_rule_excluded": auto_selection_rule_excluded,
+                "user_selection_overridden": user_selection_overridden,
             },
         }
 
@@ -1667,6 +1717,9 @@ class TaskService:
             cancel_check=cancel_check,
         )
         analysis_video_path = Path(str(analysis_result.get("video_path") or "")) if analysis_result.get("video_path") else None
+        review_auto_select_min_score = self._resolve_review_auto_select_min_score(
+            await self.task_repo.get_task_by_id(self.db, task_id)
+        )
 
         await self.task_repo.update_task_status(
             self.db,
@@ -1698,6 +1751,21 @@ class TaskService:
                 end_seconds,
             ) if analysis_video_path is not None else ""
             text_value = transcript_text or str(segment.get("text") or "").strip()
+            framing_metadata = (
+                dict(segment.get("framing_metadata"))
+                if isinstance(segment.get("framing_metadata"), dict)
+                else {}
+            )
+            review_score = float(
+                segment.get("review_score")
+                if segment.get("review_score") is not None
+                else segment.get("relevance_score") or 0.0
+            )
+            is_selected = self._should_auto_select_review_draft(
+                review_score=review_score,
+                framing_metadata=framing_metadata,
+                min_review_score=review_auto_select_min_score,
+            )
             drafts_payload.append(
                 {
                     "clip_order": index,
@@ -1710,18 +1778,16 @@ class TaskService:
                     "original_text": text_value,
                     "edited_text": text_value,
                     "relevance_score": float(segment.get("relevance_score") or 0.0),
-                    "framing_metadata_json": (
-                        dict(segment.get("framing_metadata"))
-                        if isinstance(segment.get("framing_metadata"), dict)
-                        else {}
-                    ),
+                    "review_score": review_score,
+                    "framing_metadata_json": framing_metadata,
                     "framing_mode_override": self._normalize_framing_mode_override(
                         segment.get("framing_mode_override")
                         or user_video_preferences.get("effective_default_framing_mode")
                     ),
                     "reasoning": segment.get("reasoning"),
                     "created_by_user": False,
-                    "is_selected": True,
+                    "is_selected": is_selected,
+                    "auto_selection_rule_excluded": review_auto_select_min_score is not None and not is_selected,
                     "is_deleted": False,
                     "edited_word_timings_json": None,
                 }
@@ -2436,6 +2502,7 @@ class TaskService:
 
             if "is_selected" in item:
                 normalized_update["is_selected"] = bool(item.get("is_selected"))
+                normalized_update["selection_changed_by_user"] = True
             if "framing_mode_override" in item:
                 normalized_update["framing_mode_override"] = self._normalize_framing_mode_override(
                     item.get("framing_mode_override")

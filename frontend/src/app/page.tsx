@@ -84,6 +84,7 @@ const MIN_WHISPER_CHUNK_OVERLAP_SECONDS = 0;
 const MAX_WHISPER_CHUNK_OVERLAP_SECONDS = 120;
 const MIN_TASK_TIMEOUT_SECONDS = 300;
 const MAX_TASK_TIMEOUT_SECONDS = 86400;
+const DEFAULT_REVIEW_AUTO_SELECT_STRONG_FACE_MIN_SCORE_PERCENT = 85;
 const MAX_AI_FOCUS_TAGS = 4;
 
 function isAiProvider(value: unknown): value is AiProvider {
@@ -142,6 +143,15 @@ function normalizeTaskTimeoutSecondsOnForm(value: unknown, timeoutCapSeconds: nu
   return clampInteger(value, DEFAULT_TASK_TIMEOUT_SECONDS, MIN_TASK_TIMEOUT_SECONDS, maxAllowed);
 }
 
+function normalizeReviewAutoSelectStrongFaceMinScorePercent(value: unknown): number {
+  return clampInteger(
+    value,
+    DEFAULT_REVIEW_AUTO_SELECT_STRONG_FACE_MIN_SCORE_PERCENT,
+    0,
+    100,
+  );
+}
+
 export default function Home() {
   const router = useRouter();
   const [url, setUrl] = useState("");
@@ -186,6 +196,10 @@ export default function Home() {
   const [transitionsEnabled, setTransitionsEnabled] = useState(false);
   const [timelineEditorEnabled, setTimelineEditorEnabled] = useState(true);
   const [processingProfile, setProcessingProfile] = useState<ProcessingProfile>("balanced");
+  const [autoSelectStrongFaceEnabled, setAutoSelectStrongFaceEnabled] = useState(false);
+  const [autoSelectStrongFaceMinScorePercent, setAutoSelectStrongFaceMinScorePercent] = useState(
+    DEFAULT_REVIEW_AUTO_SELECT_STRONG_FACE_MIN_SCORE_PERCENT,
+  );
   const [defaultFramingMode, setDefaultFramingMode] = useState<"auto" | "prefer_face" | "fixed_position">("auto");
   const [faceDetectionMode, setFaceDetectionMode] = useState<"balanced" | "more_faces">("balanced");
   const [fallbackCropPosition, setFallbackCropPosition] = useState<"center" | "left_center" | "right_center">("center");
@@ -675,6 +689,8 @@ export default function Home() {
         normalizedChunkDuration,
       );
       const normalizedTaskTimeoutSeconds = normalizeTaskTimeoutSecondsOnForm(taskTimeoutSeconds, taskTimeoutCapSeconds);
+      const normalizedReviewAutoSelectStrongFaceMinScorePercent =
+        normalizeReviewAutoSelectStrongFaceMinScorePercent(autoSelectStrongFaceMinScorePercent);
       let effectiveTranscriptionProvider: "local" | "assemblyai" = transcriptionProvider;
       if (
         transcriptionProvider === "assemblyai" &&
@@ -686,61 +702,69 @@ export default function Home() {
         setStatusMessage("Uploaded file exceeds AssemblyAI size limit. Switching to local Whisper.");
       }
 
+      const startRequestPayload: Record<string, unknown> = {
+        source: {
+          url: videoUrl,
+          title: null,
+        },
+        processing_profile: processingProfile,
+        review_before_render_enabled: reviewBeforeRenderEnabled,
+        timeline_editor_enabled: timelineEditorEnabled,
+        video_options: {
+          default_framing_mode: defaultFramingMode,
+          face_detection_mode: faceDetectionMode,
+          fallback_crop_position: fallbackCropPosition,
+        },
+        font_options: {
+          font_family: fontFamily,
+          font_size: fontSize,
+          font_color: fontColor,
+          highlight_color: highlightColor,
+          font_weight: fontWeight,
+          line_height: lineHeight,
+          letter_spacing: letterSpacing,
+          text_transform: textTransform,
+          text_align: textAlign,
+          stroke_color: strokeColor,
+          stroke_width: strokeWidth,
+          stroke_blur: strokeBlur,
+          shadow_color: shadowColor,
+          shadow_opacity: shadowOpacity,
+          shadow_blur: shadowBlur,
+          shadow_offset_x: shadowOffsetX,
+          shadow_offset_y: shadowOffsetY,
+          transitions_enabled: transitionsEnabled,
+        },
+        transcription_options: {
+          provider: effectiveTranscriptionProvider,
+          whisper_chunking_enabled: whisperChunkingEnabled,
+          whisper_chunk_duration_seconds: normalizedChunkDuration,
+          whisper_chunk_overlap_seconds: normalizedChunkOverlap,
+          task_timeout_seconds: normalizedTaskTimeoutSeconds,
+          whisper_model_size: whisperModelSize,
+          whisper_device: whisperDevice,
+          whisper_gpu_index: whisperGpuIndex,
+        },
+        ai_options: {
+          provider: aiProvider,
+          model: aiModel.trim() || DEFAULT_AI_MODELS[aiProvider],
+          focus_tags: aiFocusTags,
+        },
+      };
+
+      if (reviewBeforeRenderEnabled && autoSelectStrongFaceEnabled) {
+        startRequestPayload.review_options = {
+          auto_select_strong_face_min_score_percent: normalizedReviewAutoSelectStrongFaceMinScorePercent,
+        };
+      }
+
       const startResponse = await fetch(`${apiUrl}/tasks/`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
           'user_id': session.user.id,
         },
-        body: JSON.stringify({
-          source: {
-            url: videoUrl,
-            title: null
-          },
-          processing_profile: processingProfile,
-          review_before_render_enabled: reviewBeforeRenderEnabled,
-          timeline_editor_enabled: timelineEditorEnabled,
-          video_options: {
-            default_framing_mode: defaultFramingMode,
-            face_detection_mode: faceDetectionMode,
-            fallback_crop_position: fallbackCropPosition,
-          },
-          font_options: {
-            font_family: fontFamily,
-            font_size: fontSize,
-            font_color: fontColor,
-            highlight_color: highlightColor,
-            font_weight: fontWeight,
-            line_height: lineHeight,
-            letter_spacing: letterSpacing,
-            text_transform: textTransform,
-            text_align: textAlign,
-            stroke_color: strokeColor,
-            stroke_width: strokeWidth,
-            stroke_blur: strokeBlur,
-            shadow_color: shadowColor,
-            shadow_opacity: shadowOpacity,
-            shadow_blur: shadowBlur,
-            shadow_offset_x: shadowOffsetX,
-            shadow_offset_y: shadowOffsetY,
-            transitions_enabled: transitionsEnabled,
-          },
-          transcription_options: {
-            provider: effectiveTranscriptionProvider,
-            whisper_chunking_enabled: whisperChunkingEnabled,
-            whisper_chunk_duration_seconds: normalizedChunkDuration,
-            whisper_chunk_overlap_seconds: normalizedChunkOverlap,
-            task_timeout_seconds: normalizedTaskTimeoutSeconds,
-            whisper_model_size: whisperModelSize,
-            whisper_device: whisperDevice,
-            whisper_gpu_index: whisperGpuIndex,
-          },
-          ai_options: {
-            provider: aiProvider,
-            model: aiModel.trim() || DEFAULT_AI_MODELS[aiProvider],
-            focus_tags: aiFocusTags,
-          }
-        }),
+        body: JSON.stringify(startRequestPayload),
       });
 
       if (!startResponse.ok) {
@@ -1777,6 +1801,71 @@ export default function Home() {
                         ))}
                       </svg>
                     </div>
+                  </div>
+
+                  <div className="space-y-3 rounded-md border border-gray-200 bg-white p-3">
+                    <div className="flex items-start justify-between gap-4">
+                      <div>
+                        <p className="text-sm font-medium text-black">Draft auto-selection</p>
+                        <p className="text-xs text-gray-600">
+                          In review mode, start only strong-face clips above the threshold as selected. Other drafts still appear for manual review.
+                        </p>
+                        {!reviewBeforeRenderEnabled ? (
+                          <p className="mt-1 text-xs text-amber-700">
+                            The current processing profile skips review, so this rule will not apply unless review is enabled for the task.
+                          </p>
+                        ) : null}
+                      </div>
+                      <input
+                        type="checkbox"
+                        checked={autoSelectStrongFaceEnabled}
+                        onChange={(event) => setAutoSelectStrongFaceEnabled(event.target.checked)}
+                        disabled={isLoading}
+                        className="mt-1 h-4 w-4"
+                      />
+                    </div>
+
+                    {autoSelectStrongFaceEnabled ? (
+                      <div className="space-y-3 rounded-md border border-gray-100 bg-gray-50 p-3">
+                        <div className="flex items-center justify-between gap-3">
+                          <label className="text-sm font-medium text-black">
+                            Minimum review score: {normalizeReviewAutoSelectStrongFaceMinScorePercent(autoSelectStrongFaceMinScorePercent)}%
+                          </label>
+                          <Input
+                            type="number"
+                            min={0}
+                            max={100}
+                            step={1}
+                            value={autoSelectStrongFaceMinScorePercent}
+                            onChange={(event) => {
+                              const nextValue = Number(event.target.value);
+                              setAutoSelectStrongFaceMinScorePercent(
+                                normalizeReviewAutoSelectStrongFaceMinScorePercent(
+                                  Number.isFinite(nextValue) ? nextValue : 0,
+                                ),
+                              );
+                            }}
+                            disabled={isLoading}
+                            className="h-8 w-24"
+                          />
+                        </div>
+                        <div className="px-2 pt-5">
+                          <Slider
+                            value={[normalizeReviewAutoSelectStrongFaceMinScorePercent(autoSelectStrongFaceMinScorePercent)]}
+                            onValueChange={(value) => {
+                              setAutoSelectStrongFaceMinScorePercent(
+                                normalizeReviewAutoSelectStrongFaceMinScorePercent(value[0]),
+                              );
+                            }}
+                            min={0}
+                            max={100}
+                            step={1}
+                            disabled={isLoading}
+                            className="w-full"
+                          />
+                        </div>
+                      </div>
+                    ) : null}
                   </div>
 
                   <div className="flex items-start justify-between gap-4 rounded-md border border-gray-200 bg-white p-3">
