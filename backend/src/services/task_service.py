@@ -89,6 +89,20 @@ FAILURE_HINTS = {
     "storage": "Check disk space or output permissions and retry.",
     "system": "Inspect worker logs and runtime diagnostics, then retry from the latest checkpoint.",
 }
+CORRUPT_AUDIO_FAILURE_MARKERS = (
+    "aac decode failure",
+    "source audio stream is corrupted",
+    "partially unreadable",
+    "ffmpeg audio extraction failed",
+    "invalid data found when processing input",
+    "error submitting packet to decoder",
+    "decode_pce",
+    "channel element",
+    "reserved bit set",
+    "prediction is not allowed in aac-lc",
+    "invalid band type",
+    "decoding error",
+)
 _TIMESTAMP_SECONDS_RE = re.compile(r"^\d+(?:\.\d+)?$")
 YOUTUBE_COOKIE_MAX_BYTES = 1024 * 1024
 YOUTUBE_COOKIE_DOMAIN_MARKERS = ("youtube.com", ".youtube.com", "google.com", ".google.com")
@@ -288,6 +302,7 @@ class TaskService:
         source_type: str,
         user_id: Optional[str],
         progress_callback: Optional[callable] = None,
+        source_options: Optional[Dict[str, Any]] = None,
     ) -> Path:
         async with self._resolved_youtube_cookie_file(user_id) as cookie_file_path:
             return await self.video_service.resolve_video_path(
@@ -295,6 +310,7 @@ class TaskService:
                 source_type=source_type,
                 progress_callback=progress_callback,
                 cookie_file_path=cookie_file_path,
+                force_redownload=bool((source_options or {}).get("force_redownload")),
             )
 
     async def get_user_youtube_cookie_status(self, user_id: str) -> Dict[str, Any]:
@@ -1035,7 +1051,9 @@ class TaskService:
     def _classify_failure(cls, error: Exception) -> Tuple[str, str]:
         message = str(error or "").strip()
         lowered = message.lower()
-        if "download" in lowered or "youtube" in lowered or "source url" in lowered:
+        if any(marker in lowered for marker in CORRUPT_AUDIO_FAILURE_MARKERS):
+            code = "transcription"
+        elif "download" in lowered or "youtube" in lowered or "source url" in lowered:
             code = "download"
         elif "transcrib" in lowered or "assemblyai" in lowered or "whisper" in lowered:
             code = "transcription"
@@ -1059,6 +1077,11 @@ class TaskService:
             return (
                 code,
                 "YouTube requested sign-in verification. Upload a YouTube cookies.txt file in Settings > Transcription, then retry from download.",
+            )
+        if code == "transcription" and any(marker in lowered for marker in CORRUPT_AUDIO_FAILURE_MARKERS):
+            return (
+                code,
+                "The video downloaded, but its audio stream appears damaged. Retry once, and if it keeps failing upload the source video directly instead of the YouTube link.",
             )
         return code, FAILURE_HINTS[code]
 
@@ -1917,6 +1940,7 @@ class TaskService:
         task_id: str,
         url: str,
         source_type: str,
+        source_options: Optional[Dict[str, Any]],
         transcription_provider: str,
         ai_provider: str,
         ai_model: Optional[str],
@@ -1955,6 +1979,7 @@ class TaskService:
         analysis_result = await self.video_service.process_video_analysis(
             url=url,
             source_type=source_type,
+            source_options=source_options,
             transcription_provider=transcription_provider,
             assembly_api_key=assembly_api_key,
             ai_provider=selected_ai_provider,
@@ -2086,6 +2111,7 @@ class TaskService:
         task_id: str,
         url: str,
         source_type: str,
+        source_options: Optional[Dict[str, Any]],
         font_family: str,
         font_size: int,
         font_color: str,
@@ -2129,6 +2155,7 @@ class TaskService:
         result = await self.video_service.process_video_complete(
             url=url,
             source_type=source_type,
+            source_options=source_options,
             font_family=font_family,
             font_size=font_size,
             font_color=font_color,
@@ -2208,6 +2235,7 @@ class TaskService:
         task_id: str,
         url: str,
         source_type: str,
+        user_id: Optional[str],
         font_family: str,
         font_size: int,
         font_color: str,
@@ -2364,6 +2392,7 @@ class TaskService:
         task_id: str,
         url: str,
         source_type: str,
+        source_options: Optional[Dict[str, Any]] = None,
         font_family: str = "TikTokSans-Regular",
         font_size: int = 24,
         font_color: str = "#FFFFFF",
@@ -2517,6 +2546,7 @@ class TaskService:
                     task_id=task_id,
                     url=url,
                     source_type=source_type,
+                    user_id=user_id,
                     font_family=font_family,
                     font_size=font_size,
                     font_color=font_color,
@@ -2539,6 +2569,7 @@ class TaskService:
                     task_id=task_id,
                     url=url,
                     source_type=source_type,
+                    source_options=source_options,
                     transcription_provider=transcription_provider,
                     ai_provider=ai_provider,
                     ai_model=ai_model,
@@ -2567,6 +2598,7 @@ class TaskService:
                 task_id=task_id,
                 url=url,
                 source_type=source_type,
+                source_options=source_options,
                 font_family=font_family,
                 font_size=font_size,
                 font_color=font_color,

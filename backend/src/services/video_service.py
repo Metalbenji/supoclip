@@ -64,6 +64,7 @@ class VideoService:
         url: str,
         progress_callback: Optional[callable] = None,
         cookie_file_path: Optional[str] = None,
+        force_redownload: bool = False,
     ) -> Optional[Path]:
         """
         Download a YouTube video asynchronously.
@@ -93,7 +94,14 @@ class VideoService:
                 loop,
             )
 
-        video_path = await run_in_thread(download_youtube_video, url, 3, on_download_progress, cookie_file_path)
+        video_path = await run_in_thread(
+            download_youtube_video,
+            url,
+            3,
+            on_download_progress,
+            cookie_file_path,
+            force_redownload,
+        )
 
         if not video_path:
             logger.error(f"Failed to download video: {url}")
@@ -520,6 +528,7 @@ class VideoService:
         source_type: str,
         progress_callback: Optional[callable] = None,
         cookie_file_path: Optional[str] = None,
+        force_redownload: bool = False,
     ) -> Path:
         """Resolve a source URL to a local video path."""
         if progress_callback:
@@ -534,6 +543,7 @@ class VideoService:
                 url,
                 progress_callback=progress_callback,
                 cookie_file_path=cookie_file_path,
+                force_redownload=force_redownload,
             )
             if not video_path:
                 raise Exception("Failed to download video")
@@ -1029,6 +1039,7 @@ class VideoService:
     async def process_video_analysis(
         url: str,
         source_type: str,
+        source_options: Optional[Dict[str, Any]] = None,
         transcription_provider: str = "local",
         assembly_api_key: Optional[str] = None,
         ai_provider: str = "openai",
@@ -1058,6 +1069,7 @@ class VideoService:
             url=url,
             source_type=source_type,
             progress_callback=progress_callback,
+            force_redownload=bool((source_options or {}).get("force_redownload")),
         )
         await ensure_not_cancelled()
 
@@ -1320,6 +1332,7 @@ class VideoService:
     async def process_video_complete(
         url: str,
         source_type: str,
+        source_options: Optional[Dict[str, Any]] = None,
         font_family: str = "TikTokSans-Regular",
         font_size: int = 24,
         font_color: str = "#FFFFFF",
@@ -1352,6 +1365,7 @@ class VideoService:
             analysis_result = await VideoService.process_video_analysis(
                 url=url,
                 source_type=source_type,
+                source_options=source_options,
                 transcription_provider=transcription_provider,
                 assembly_api_key=assembly_api_key,
                 ai_provider=ai_provider,

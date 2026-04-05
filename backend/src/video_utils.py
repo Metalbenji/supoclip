@@ -68,6 +68,17 @@ FRAMING_SCORE_BONUS_MEDIUM = 0.03
 FRAMING_MULTI_FACE_PENALTY_MAX = 0.02
 _ffmpeg_encoder_cache: Optional[set[str]] = None
 _ffmpeg_encoder_lock = threading.Lock()
+_FFMPEG_CORRUPT_AUDIO_MARKERS = (
+    "invalid data found when processing input",
+    "error submitting packet to decoder",
+    "channel element",
+    "decode_pce",
+    "reserved bit set",
+    "prediction is not allowed in aac-lc",
+    "number of bands",
+    "invalid band type",
+    "decoding error",
+)
 
 
 def _normalize_face_detection_mode(value: Any) -> str:
@@ -459,6 +470,13 @@ def _emit_transcription_progress(
         logger.warning(f"Failed to emit transcription progress payload: {exc}")
 
 
+def _stderr_indicates_corrupt_audio(stderr_output: str) -> bool:
+    normalized = (stderr_output or "").strip().lower()
+    if not normalized:
+        return False
+    return any(marker in normalized for marker in _FFMPEG_CORRUPT_AUDIO_MARKERS)
+
+
 def _extract_audio_chunk_for_whisper(
     video_path: Path,
     output_path: Path,
@@ -466,29 +484,118 @@ def _extract_audio_chunk_for_whisper(
     end_seconds: float,
 ) -> None:
     duration_seconds = max(end_seconds - start_seconds, 0.05)
-    cmd = [
-        "ffmpeg",
-        "-hide_banner",
-        "-loglevel",
-        "error",
-        "-nostdin",
-        "-y",
-        "-ss",
-        f"{start_seconds:.3f}",
-        "-i",
-        str(video_path),
-        "-t",
-        f"{duration_seconds:.3f}",
-        "-vn",
-        "-ac",
-        "1",
-        "-ar",
-        "16000",
-        "-c:a",
-        "pcm_s16le",
-        str(output_path),
+    command_attempts = [
+        (
+            "default",
+            [
+                "ffmpeg",
+                "-hide_banner",
+                "-loglevel",
+                "error",
+                "-nostdin",
+                "-y",
+                "-ss",
+                f"{start_seconds:.3f}",
+                "-i",
+                str(video_path),
+                "-t",
+                f"{duration_seconds:.3f}",
+                "-map",
+                "0:a:0?",
+                "-vn",
+                "-ac",
+                "1",
+                "-ar",
+                "16000",
+                "-c:a",
+                "pcm_s16le",
+                str(output_path),
+            ],
+        ),
+        (
+            "corrupt-audio-recovery",
+            [
+                "ffmpeg",
+                "-hide_banner",
+                "-loglevel",
+                "error",
+                "-nostdin",
+                "-y",
+                "-fflags",
+                "+discardcorrupt+genpts",
+                "-err_detect",
+                "ignore_err",
+                "-ss",
+                f"{start_seconds:.3f}",
+                "-i",
+                str(video_path),
+                "-t",
+                f"{duration_seconds:.3f}",
+                "-map",
+                "0:a:0?",
+                "-vn",
+                "-af",
+                "aresample=async=1:first_pts=0:min_hard_comp=0.100",
+                "-ac",
+                "1",
+                "-ar",
+                "16000",
+                "-c:a",
+                "pcm_s16le",
+                str(output_path),
+            ],
+        ),
     ]
-    subprocess.run(cmd, check=True)
+    last_stderr = ""
+
+    for attempt_name, cmd in command_attempts:
+        try:
+            result = subprocess.run(
+                cmd,
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+            if not output_path.is_file() or output_path.stat().st_size <= 0:
+                raise RuntimeError("ffmpeg produced no audio output")
+            if attempt_name != "default":
+                logger.warning(
+                    "Recovered audio extraction for %s using tolerant ffmpeg settings",
+                    video_path.name,
+                )
+            if result.stderr and _stderr_indicates_corrupt_audio(result.stderr):
+                logger.warning(
+                    "ffmpeg reported recoverable audio corruption while extracting %s: %s",
+                    video_path.name,
+                    result.stderr.strip(),
+                )
+            return
+        except subprocess.CalledProcessError as exc:
+            stderr_output = (exc.stderr or exc.stdout or "").strip()
+            last_stderr = stderr_output
+            output_path.unlink(missing_ok=True)
+            logger.warning(
+                "ffmpeg audio extraction attempt '%s' failed for %s: %s",
+                attempt_name,
+                video_path.name,
+                stderr_output or str(exc),
+            )
+            if not _stderr_indicates_corrupt_audio(stderr_output):
+                raise RuntimeError(
+                    f"ffmpeg audio extraction failed while preparing transcription for {video_path.name}"
+                ) from exc
+        except Exception:
+            output_path.unlink(missing_ok=True)
+            raise
+
+    if _stderr_indicates_corrupt_audio(last_stderr):
+        raise RuntimeError(
+            "Source audio stream is corrupted or partially unreadable (AAC decode failure)."
+        )
+
+    raise RuntimeError(
+        f"ffmpeg audio extraction failed while preparing transcription for {video_path.name}"
+    )
 
 
 def _run_whisper_transcription(model: Any, media_path: Union[Path, str], use_fp16: bool) -> Dict[str, Any]:

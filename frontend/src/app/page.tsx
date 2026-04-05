@@ -173,6 +173,7 @@ export default function Home() {
   const [statusMessage, setStatusMessage] = useState("");
   const [currentStep, setCurrentStep] = useState("");
   const [sourceType, setSourceType] = useState<"youtube" | "upload">("youtube");
+  const [forceYoutubeRedownload, setForceYoutubeRedownload] = useState(false);
   const [fileName, setFileName] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [sourceTitle, setSourceTitle] = useState<string | null>(null);
@@ -724,6 +725,9 @@ export default function Home() {
           url: videoUrl,
           title: null,
         },
+        source_options: {
+          force_redownload: sourceType === "youtube" && forceYoutubeRedownload,
+        },
         processing_profile: processingProfile,
         review_before_render_enabled: reviewBeforeRenderEnabled,
         timeline_editor_enabled: timelineEditorEnabled,
@@ -1182,6 +1186,8 @@ export default function Home() {
                   if (fileInputRef.current) {
                     fileInputRef.current.value = "";
                   }
+                } else {
+                  setForceYoutubeRedownload(false);
                 }
               }} disabled={isLoading}>
                 <SelectTrigger className="w-full">
@@ -1220,6 +1226,21 @@ export default function Home() {
                   disabled={isLoading}
                   className="h-11"
                 />
+                <label className="flex items-start gap-3 rounded-md border border-gray-200 bg-white px-3 py-2">
+                  <input
+                    type="checkbox"
+                    checked={forceYoutubeRedownload}
+                    onChange={(event) => setForceYoutubeRedownload(event.target.checked)}
+                    disabled={isLoading}
+                    className="mt-1 h-4 w-4"
+                  />
+                  <span className="space-y-0.5">
+                    <span className="block text-sm font-medium text-black">Force fresh YouTube download</span>
+                    <span className="block text-xs text-gray-600">
+                      Delete the locally cached copy and transcript for this YouTube video before downloading it again.
+                    </span>
+                  </span>
+                </label>
               </div>
             ) : (
               <div key="source-upload" className="space-y-2">

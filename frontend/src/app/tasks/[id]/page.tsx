@@ -531,6 +531,7 @@ export default function TaskPage() {
   const hasOverlapConflicts = overlapConflicts.length > 0;
   const retryableStages = task?.retryable_from_stages || [];
   const isDownloadFailure = task?.failure_code === "download";
+  const isTranscriptionFailure = task?.failure_code === "transcription";
   const technicalErrorDetails = useMemo(() => {
     const rawMessage = typeof task?.progress_message === "string" ? task.progress_message.trim() : "";
     const hint = typeof task?.failure_hint === "string" ? task.failure_hint.trim() : "";
@@ -2380,11 +2381,19 @@ export default function TaskPage() {
             <CardContent className="p-8 text-center">
               <div className="text-red-600 mb-4">
                 <AlertCircle className="w-12 h-12 mx-auto mb-2" />
-                <h2 className="text-xl font-semibold">{isDownloadFailure ? "Video Download Failed" : "Processing Failed"}</h2>
+                <h2 className="text-xl font-semibold">
+                  {isDownloadFailure
+                    ? "Video Download Failed"
+                    : isTranscriptionFailure
+                      ? "Transcription Failed"
+                      : "Processing Failed"}
+                </h2>
               </div>
               <p className="text-gray-600 mb-2">
                 {isDownloadFailure
                   ? "We couldn't access the source video. YouTube likely asked for sign-in verification."
+                  : isTranscriptionFailure
+                    ? "We downloaded the video, but couldn't prepare a clean audio track for transcription."
                   : "There was an error processing your video."}
               </p>
               {task.failure_code ? (

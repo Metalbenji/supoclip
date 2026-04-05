@@ -6,7 +6,7 @@ Optimized for high-quality downloads and better error handling.
 import re
 from urllib.parse import urlparse, parse_qs
 import yt_dlp
-from typing import Optional, Dict, Any, Callable
+from typing import Optional, Dict, Any, Callable, List
 from pathlib import Path
 import logging
 import time
@@ -20,6 +20,14 @@ YOUTUBE_AUTH_ERROR_MARKERS = (
     "use --cookies-from-browser or --cookies",
     "login required",
     "confirm you're not a bot",
+)
+YOUTUBE_CACHED_VIDEO_SUFFIXES = (".mp4", ".mkv", ".webm")
+YOUTUBE_CACHED_ARTIFACT_SUFFIXES = (
+    ".mp4",
+    ".mkv",
+    ".webm",
+    ".transcript.txt",
+    ".transcript_cache.json",
 )
 
 
@@ -55,6 +63,17 @@ def _apply_ytdlp_auth_options(options: Dict[str, Any], cookie_file_path: Optiona
     else:
         logger.warning("YTDLP_COOKIES_FILE is set but file does not exist: %s", cookie_file)
     return options
+
+
+def _purge_cached_youtube_artifacts(temp_dir: Path, video_id: str) -> List[str]:
+    removed_files: List[str] = []
+    for suffix in YOUTUBE_CACHED_ARTIFACT_SUFFIXES:
+        artifact_path = temp_dir / f"{video_id}{suffix}"
+        if not artifact_path.exists() or not artifact_path.is_file():
+            continue
+        artifact_path.unlink(missing_ok=True)
+        removed_files.append(artifact_path.name)
+    return removed_files
 
 class YouTubeDownloader:
     """Enhanced YouTube downloader with optimized settings."""
@@ -235,6 +254,7 @@ def download_youtube_video(
     max_retries: int = 3,
     progress_callback: Optional[Callable[[int, str], None]] = None,
     cookie_file_path: Optional[str] = None,
+    force_redownload: bool = False,
 ) -> Optional[Path]:
     """
     Download YouTube video with optimized settings and retry logic.
@@ -249,9 +269,22 @@ def download_youtube_video(
 
     downloader = YouTubeDownloader()
 
+    if force_redownload:
+        removed_files = _purge_cached_youtube_artifacts(downloader.temp_dir, video_id)
+        if removed_files:
+            logger.info(
+                "Force redownload enabled for %s; cleared cached artifacts: %s",
+                video_id,
+                ", ".join(removed_files),
+            )
+            if progress_callback:
+                progress_callback(0, "Cleared cached YouTube download. Downloading a fresh copy...")
+        else:
+            logger.info("Force redownload enabled for %s; no cached artifacts found", video_id)
+
     # Fast path: reuse an already-downloaded local file.
     for file_path in downloader.temp_dir.glob(f"{video_id}.*"):
-        if file_path.is_file() and file_path.suffix.lower() in [".mp4", ".mkv", ".webm"]:
+        if file_path.is_file() and file_path.suffix.lower() in YOUTUBE_CACHED_VIDEO_SUFFIXES:
             file_size_mb = file_path.stat().st_size // 1024 // 1024
             logger.info(f"Using cached download: {file_path.name} ({file_size_mb}MB)")
             if progress_callback:
@@ -315,7 +348,7 @@ def download_youtube_video(
                 # Find the downloaded file
                 logger.info(f"Searching for downloaded file: {video_id}.*")
                 for file_path in downloader.temp_dir.glob(f"{video_id}.*"):
-                    if file_path.is_file() and file_path.suffix.lower() in ['.mp4', '.mkv', '.webm']:
+                    if file_path.is_file() and file_path.suffix.lower() in YOUTUBE_CACHED_VIDEO_SUFFIXES:
                         file_size = file_path.stat().st_size
                         logger.info(f"Download successful: {file_path.name} ({file_size // 1024 // 1024}MB)")
                         return file_path

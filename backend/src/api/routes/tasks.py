@@ -362,6 +362,22 @@ def _resolve_transcription_runtime_options(
     return options
 
 
+def _resolve_source_options(source_options: object) -> Dict[str, Any]:
+    if source_options is None:
+        return {}
+    if not isinstance(source_options, dict):
+        raise HTTPException(status_code=400, detail="source_options must be an object")
+
+    options: Dict[str, Any] = {}
+    if "force_redownload" in source_options:
+        options["force_redownload"] = _coerce_bool(
+            source_options.get("force_redownload"),
+            default=False,
+        )
+
+    return options
+
+
 def _default_ai_provider() -> str:
     llm_value = (config.llm or "").strip()
     if ":" in llm_value:
@@ -1390,6 +1406,7 @@ async def create_task(request: Request, db: AsyncSession = Depends(get_db)):
     video_options = data.get("video_options", {})
     if not isinstance(video_options, dict):
         video_options = {}
+    source_options = _resolve_source_options(data.get("source_options"))
     review_options = _resolve_review_options(data.get("review_options"))
     ai_options = data.get("ai_options", {})
     if not isinstance(ai_options, dict):
@@ -1485,6 +1502,8 @@ async def create_task(request: Request, db: AsyncSession = Depends(get_db)):
 
         # Get source type for worker
         source_type = task_service.video_service.determine_source_type(raw_source["url"])
+        if source_type != "youtube":
+            source_options = {}
 
         queue_name = (
             config.arq_assembly_queue_name
@@ -1514,6 +1533,7 @@ async def create_task(request: Request, db: AsyncSession = Depends(get_db)):
             "ai_model": ai_model,
             "ai_routing_mode": resolved_zai_routing_mode,
             "processing_profile": processing_profile,
+            "source_options": source_options,
             "review_options": review_options,
             "video_preferences_override": {
                 "default_framing_mode": video_options.get("default_framing_mode"),
@@ -1561,6 +1581,7 @@ async def create_task(request: Request, db: AsyncSession = Depends(get_db)):
                 subtitle_style,
                 resolved_zai_routing_mode,
                 transcription_runtime_options,
+                source_options,
                 queue_name=queue_name,
             )
         except Exception as enqueue_error:
@@ -2340,6 +2361,7 @@ async def finalize_task(task_id: str, request: Request, db: AsyncSession = Depen
             subtitle_style,
             None,
             {},
+            existing_runtime_info.get("source_options") or {},
             queue_name=queue_name,
             render_from_drafts=True,
         )
@@ -2413,6 +2435,7 @@ async def retry_task(task_id: str, request: Request, db: AsyncSession = Depends(
             subtitle_style,
             task_snapshot.get("runtime_info", {}).get("ai_routing_mode"),
             task_snapshot.get("runtime_info", {}).get("transcription_options") or {},
+            task_snapshot.get("runtime_info", {}).get("source_options") or {},
             queue_name=queue_name,
             render_from_drafts=bool(retry_result.get("render_from_drafts")),
         )

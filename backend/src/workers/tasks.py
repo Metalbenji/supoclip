@@ -98,6 +98,7 @@ async def process_video_task(
     subtitle_style: Optional[Dict[str, Any]] = None,
     ai_routing_mode: Optional[str] = None,
     transcription_options: Optional[Dict[str, Any]] = None,
+    source_options: Optional[Dict[str, Any]] = None,
     render_from_drafts: bool = False,
 ) -> Dict[str, Any]:
     """
@@ -119,6 +120,7 @@ async def process_video_task(
         subtitle_style: Extra subtitle style controls for rendering
         ai_routing_mode: Optional z.ai key routing mode ("auto", "subscription", "metered")
         transcription_options: Optional local transcription overrides and task timeout
+        source_options: Optional source download/runtime overrides
         render_from_drafts: If true, render using reviewed draft clips
 
     Returns:
@@ -164,6 +166,7 @@ async def process_video_task(
                 task_id=task_id,
                 url=url,
                 source_type=source_type,
+                source_options=source_options,
                 font_family=font_family,
                 font_size=font_size,
                 font_color=font_color,
