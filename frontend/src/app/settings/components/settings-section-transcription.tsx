@@ -1,5 +1,15 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, type ChangeEvent } from "react";
 import { Cloud, Cpu } from "lucide-react";
+import {
+  AlertDialog,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+  AlertDialogTrigger,
+} from "@/components/ui/alert-dialog";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -36,10 +46,18 @@ interface SettingsSectionTranscriptionProps {
   assemblyApiKey: string;
   hasSavedAssemblyKey: boolean;
   hasAssemblyEnvFallback: boolean;
+  isSavingYoutubeCookies: boolean;
+  hasSavedYoutubeCookies: boolean;
+  hasYoutubeCookieEnvFallback: boolean;
+  youtubeCookiesFilename: string | null;
+  youtubeCookiesUpdatedAt: string | null;
+  youtubeCookieSource: "saved" | "env" | "none";
   assemblyMaxDurationSeconds: number;
   assemblyMaxLocalUploadSizeBytes: number;
   assemblyKeyStatus: string | null;
   assemblyKeyError: string | null;
+  youtubeCookieStatus: string | null;
+  youtubeCookieError: string | null;
   onTranscriptionProviderChange: (provider: TranscriptionProvider) => void;
   onWhisperChunkingEnabledChange: (enabled: boolean) => void;
   onWhisperChunkDurationSecondsChange: (seconds: number) => void;
@@ -52,6 +70,8 @@ interface SettingsSectionTranscriptionProps {
   onAssemblyApiKeyChange: (value: string) => void;
   onSaveAssemblyKey: () => void;
   onDeleteAssemblyKey: () => void;
+  onYoutubeCookiesUpload: (event: ChangeEvent<HTMLInputElement>) => void;
+  onDeleteYoutubeCookies: () => void;
 }
 
 export function SettingsSectionTranscription({
@@ -72,10 +92,18 @@ export function SettingsSectionTranscription({
   assemblyApiKey,
   hasSavedAssemblyKey,
   hasAssemblyEnvFallback,
+  isSavingYoutubeCookies,
+  hasSavedYoutubeCookies,
+  hasYoutubeCookieEnvFallback,
+  youtubeCookiesFilename,
+  youtubeCookiesUpdatedAt,
+  youtubeCookieSource,
   assemblyMaxDurationSeconds,
   assemblyMaxLocalUploadSizeBytes,
   assemblyKeyStatus,
   assemblyKeyError,
+  youtubeCookieStatus,
+  youtubeCookieError,
   onTranscriptionProviderChange,
   onWhisperChunkingEnabledChange,
   onWhisperChunkDurationSecondsChange,
@@ -88,6 +116,8 @@ export function SettingsSectionTranscription({
   onAssemblyApiKeyChange,
   onSaveAssemblyKey,
   onDeleteAssemblyKey,
+  onYoutubeCookiesUpload,
+  onDeleteYoutubeCookies,
 }: SettingsSectionTranscriptionProps) {
   const [taskTimeoutInput, setTaskTimeoutInput] = useState(String(taskTimeoutSeconds));
   const [chunkDurationInput, setChunkDurationInput] = useState(String(whisperChunkDurationSeconds));
@@ -163,6 +193,23 @@ export function SettingsSectionTranscription({
       return "unknown";
     }
     return `${(seconds / 3600).toFixed(1)}h`;
+  };
+
+  const formatSavedAt = (value: string | null): string | null => {
+    if (!value) {
+      return null;
+    }
+    const parsed = new Date(value);
+    if (Number.isNaN(parsed.getTime())) {
+      return null;
+    }
+    return new Intl.DateTimeFormat("en-US", {
+      month: "short",
+      day: "numeric",
+      year: "numeric",
+      hour: "2-digit",
+      minute: "2-digit",
+    }).format(parsed);
   };
 
   const detectedGpuDevices = Array.isArray(localWhisperRuntime?.gpu_devices) ? localWhisperRuntime.gpu_devices : [];
@@ -528,6 +575,83 @@ export function SettingsSectionTranscription({
             {assemblyKeyError && <p className="text-xs text-red-600">{assemblyKeyError}</p>}
           </div>
         )}
+
+        <div className="space-y-2 rounded border border-gray-100 bg-gray-50 p-3">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <label htmlFor="youtube-cookies-file" className="text-xs font-medium text-black">
+              YouTube Cookies.txt
+            </label>
+            <AlertDialog>
+              <AlertDialogTrigger asChild>
+                <Button type="button" variant="ghost" size="sm" className="h-auto px-2 py-1 text-xs">
+                  How to export cookies.txt
+                </Button>
+              </AlertDialogTrigger>
+              <AlertDialogContent>
+                <AlertDialogHeader>
+                  <AlertDialogTitle>Export YouTube cookies.txt</AlertDialogTitle>
+                  <AlertDialogDescription>
+                    Use a browser session where the target video already opens successfully.
+                  </AlertDialogDescription>
+                </AlertDialogHeader>
+                <div className="space-y-3 text-sm text-slate-700">
+                  <ol className="list-decimal space-y-2 pl-5">
+                    <li>Open YouTube in the same browser profile you normally use, sign in, and confirm the video plays there.</li>
+                    <li>Use a browser cookie export tool or extension that saves cookies in Netscape `cookies.txt` format.</li>
+                    <li>Export the cookies without editing the file. The result should stay a plain `.txt` file and include `youtube.com` or `google.com` rows.</li>
+                    <li>Upload that file here and retry the failed task from the `download` stage.</li>
+                  </ol>
+                  <div className="rounded border border-amber-200 bg-amber-50 p-3 text-xs text-amber-900">
+                    Re-export the file if YouTube signs you out, the browser session changes, or the upload still fails
+                    with sign-in verification.
+                  </div>
+                </div>
+                <AlertDialogFooter>
+                  <AlertDialogCancel>Close</AlertDialogCancel>
+                </AlertDialogFooter>
+              </AlertDialogContent>
+            </AlertDialog>
+          </div>
+          <Input
+            id="youtube-cookies-file"
+            type="file"
+            accept=".txt,text/plain"
+            onChange={onYoutubeCookiesUpload}
+            disabled={isSaving || isSavingAssemblyKey || isSavingYoutubeCookies}
+          />
+          <div className="flex flex-wrap items-center gap-2">
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              disabled={isSaving || isSavingAssemblyKey || isSavingYoutubeCookies || !hasSavedYoutubeCookies}
+              onClick={onDeleteYoutubeCookies}
+            >
+              Remove Saved Cookies
+            </Button>
+            <span className="text-xs text-gray-500">
+              {hasSavedYoutubeCookies
+                ? `Saved${youtubeCookiesFilename ? `: ${youtubeCookiesFilename}` : ""}`
+                : hasYoutubeCookieEnvFallback
+                  ? "No saved cookies; shared server fallback available"
+                  : "No YouTube cookies configured"}
+            </span>
+          </div>
+          {youtubeCookiesUpdatedAt ? (
+            <p className="text-xs text-gray-500">
+              Last updated: {formatSavedAt(youtubeCookiesUpdatedAt) || youtubeCookiesUpdatedAt}
+            </p>
+          ) : null}
+          <p className="text-xs text-gray-500">
+            Use a Netscape-format YouTube `cookies.txt` export when YouTube blocks downloads with sign-in verification.
+            Saved user cookies take precedence over the shared server fallback.
+          </p>
+          <p className="text-xs text-gray-500">
+            Effective source: {youtubeCookieSource === "saved" ? "saved user cookies" : youtubeCookieSource === "env" ? "shared server fallback" : "none"}
+          </p>
+          {youtubeCookieStatus ? <p className="text-xs text-green-700">{youtubeCookieStatus}</p> : null}
+          {youtubeCookieError ? <p className="text-xs text-red-700">{youtubeCookieError}</p> : null}
+        </div>
       </div>
     </div>
   );

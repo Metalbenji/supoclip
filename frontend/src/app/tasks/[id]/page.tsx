@@ -25,7 +25,7 @@ import Link from "next/link";
 import DynamicVideoPlayer from "@/components/dynamic-video-player";
 import DraftTimelineEditor, { type TimelineZoomLevel } from "@/components/draft-timeline-editor";
 import { formatAiFocusTag } from "@/lib/ai-focus-tags";
-import { formatSourceTypeLabel, formatTaskRuntime, isHttpUrl } from "@/lib/task-metadata";
+import { formatSourceTypeLabel, getTaskRuntimeSummary, isHttpUrl } from "@/lib/task-metadata";
 
 interface Clip {
   id: string;
@@ -530,6 +530,21 @@ export default function TaskPage() {
   }, [overlapConflicts]);
   const hasOverlapConflicts = overlapConflicts.length > 0;
   const retryableStages = task?.retryable_from_stages || [];
+  const isDownloadFailure = task?.failure_code === "download";
+  const technicalErrorDetails = useMemo(() => {
+    const rawMessage = typeof task?.progress_message === "string" ? task.progress_message.trim() : "";
+    const hint = typeof task?.failure_hint === "string" ? task.failure_hint.trim() : "";
+    if (!rawMessage || rawMessage === hint) {
+      return null;
+    }
+    if (task?.failure_code === "download") {
+      return rawMessage;
+    }
+    if (rawMessage.length > 240 || rawMessage.includes("/")) {
+      return null;
+    }
+    return rawMessage;
+  }, [task?.failure_code, task?.failure_hint, task?.progress_message]);
 
   const extractTaskApiErrorMessage = useCallback((payload: unknown, fallback: string): string => {
     if (
@@ -624,7 +639,7 @@ export default function TaskPage() {
 
   useEffect(() => {
     setNowMs(Date.now());
-    if (!task?.status || (task.status !== "queued" && task.status !== "processing")) {
+    if (!task?.status || (task.status !== "queued" && task.status !== "processing" && task.status !== "awaiting_review")) {
       return;
     }
     const intervalId = window.setInterval(() => setNowMs(Date.now()), 1000);
@@ -1591,10 +1606,29 @@ export default function TaskPage() {
                   <Clock className="w-4 h-4" />
                   {new Date(task.created_at).toLocaleDateString()}
                 </span>
-                <span className="flex items-center gap-1">
-                  <Timer className="w-4 h-4" />
-                  {formatTaskRuntime(task.created_at, task.updated_at, task.status, nowMs)}
-                </span>
+                {(() => {
+                  const runtimeSummary = getTaskRuntimeSummary(
+                    task.created_at,
+                    task.updated_at,
+                    task.status,
+                    task.runtime_info,
+                    nowMs,
+                  );
+                  return (
+                    <>
+                      <span className="flex items-center gap-1">
+                        <Timer className="w-4 h-4" />
+                        Process {runtimeSummary.processing}
+                      </span>
+                      {runtimeSummary.reviewWait ? (
+                        <span className="flex items-center gap-1">
+                          <Clock className="w-4 h-4" />
+                          Review wait {runtimeSummary.reviewWait}
+                        </span>
+                      ) : null}
+                    </>
+                  );
+                })()}
                 {task.status === "completed" ? (
                   <span>
                     {clips.length} {clips.length === 1 ? "clip" : "clips"} generated
@@ -2346,14 +2380,33 @@ export default function TaskPage() {
             <CardContent className="p-8 text-center">
               <div className="text-red-600 mb-4">
                 <AlertCircle className="w-12 h-12 mx-auto mb-2" />
-                <h2 className="text-xl font-semibold">Processing Failed</h2>
+                <h2 className="text-xl font-semibold">{isDownloadFailure ? "Video Download Failed" : "Processing Failed"}</h2>
               </div>
-              <p className="text-gray-600 mb-2">There was an error processing your video.</p>
+              <p className="text-gray-600 mb-2">
+                {isDownloadFailure
+                  ? "We couldn't access the source video. YouTube likely asked for sign-in verification."
+                  : "There was an error processing your video."}
+              </p>
               {task.failure_code ? (
                 <p className="mb-2 text-sm font-medium text-red-700">Failure code: {task.failure_code}</p>
               ) : null}
               {task.failure_hint ? (
                 <p className="mx-auto mb-4 max-w-2xl text-sm text-slate-600 dark:text-slate-300">{task.failure_hint}</p>
+              ) : null}
+              {isDownloadFailure ? (
+                <div className="mb-4 flex justify-center">
+                  <Link href="/settings?section=transcription">
+                    <Button variant="outline">Open Transcription Settings</Button>
+                  </Link>
+                </div>
+              ) : null}
+              {technicalErrorDetails ? (
+                <details className="mx-auto mb-4 max-w-2xl rounded border border-slate-200 bg-slate-50 p-3 text-left dark:border-slate-700 dark:bg-slate-900/50">
+                  <summary className="cursor-pointer text-sm font-medium text-slate-800 dark:text-slate-200">
+                    Technical details
+                  </summary>
+                  <p className="mt-2 text-sm text-slate-600 dark:text-slate-300">{technicalErrorDetails}</p>
+                </details>
               ) : null}
               {retryableStages.length > 0 ? (
                 <div className="mb-4 flex flex-wrap justify-center gap-2">

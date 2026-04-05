@@ -9,7 +9,7 @@ import { Alert, AlertDescription } from "@/components/ui/alert";
 import { useSession } from "@/lib/auth-client";
 import { ArrowLeft, Clock, Timer, PlayCircle, AlertCircle, CheckCircle, Loader2, Trash2 } from "lucide-react";
 import Link from "next/link";
-import { formatSourceTypeLabel, formatTaskRuntime, isHttpUrl } from "@/lib/task-metadata";
+import { formatSourceTypeLabel, getTaskRuntimeSummary, isHttpUrl } from "@/lib/task-metadata";
 
 interface Task {
   id: string;
@@ -23,6 +23,7 @@ interface Task {
   clips_count: number;
   created_at: string;
   updated_at: string;
+  runtime_info?: Record<string, unknown>;
 }
 
 export default function ListPage() {
@@ -71,7 +72,9 @@ export default function ListPage() {
 
   useEffect(() => {
     setNowMs(Date.now());
-    const hasRunningTask = tasks.some((task) => task.status === "queued" || task.status === "processing");
+    const hasRunningTask = tasks.some(
+      (task) => task.status === "queued" || task.status === "processing" || task.status === "awaiting_review",
+    );
     if (!hasRunningTask) {
       return;
     }
@@ -351,10 +354,29 @@ export default function ListPage() {
                           <Clock className="w-4 h-4" />
                           {formatDate(task.created_at)}
                         </span>
-                        <span className="flex items-center gap-1">
-                          <Timer className="w-4 h-4" />
-                          {formatTaskRuntime(task.created_at, task.updated_at, task.status, nowMs)}
-                        </span>
+                        {(() => {
+                          const runtimeSummary = getTaskRuntimeSummary(
+                            task.created_at,
+                            task.updated_at,
+                            task.status,
+                            task.runtime_info,
+                            nowMs,
+                          );
+                          return (
+                            <>
+                              <span className="flex items-center gap-1">
+                                <Timer className="w-4 h-4" />
+                                Process {runtimeSummary.processing}
+                              </span>
+                              {runtimeSummary.reviewWait ? (
+                                <span className="flex items-center gap-1">
+                                  <Clock className="w-4 h-4" />
+                                  Review wait {runtimeSummary.reviewWait}
+                                </span>
+                              ) : null}
+                            </>
+                          );
+                        })()}
                         <span>
                           {task.clips_count} {task.clips_count === 1 ? "clip" : "clips"}
                         </span>

@@ -60,7 +60,11 @@ class VideoService:
         return any(marker in normalized for marker in retry_markers)
 
     @staticmethod
-    async def download_video(url: str, progress_callback: Optional[callable] = None) -> Optional[Path]:
+    async def download_video(
+        url: str,
+        progress_callback: Optional[callable] = None,
+        cookie_file_path: Optional[str] = None,
+    ) -> Optional[Path]:
         """
         Download a YouTube video asynchronously.
         Runs the sync download_youtube_video in a thread pool.
@@ -89,7 +93,7 @@ class VideoService:
                 loop,
             )
 
-        video_path = await run_in_thread(download_youtube_video, url, 3, on_download_progress)
+        video_path = await run_in_thread(download_youtube_video, url, 3, on_download_progress, cookie_file_path)
 
         if not video_path:
             logger.error(f"Failed to download video: {url}")
@@ -99,13 +103,13 @@ class VideoService:
         return video_path
 
     @staticmethod
-    async def get_video_title(url: str) -> str:
+    async def get_video_title(url: str, cookie_file_path: Optional[str] = None) -> str:
         """
         Get video title asynchronously.
         Returns a default title if retrieval fails.
         """
         try:
-            title = await run_in_thread(get_youtube_video_title, url)
+            title = await run_in_thread(get_youtube_video_title, url, cookie_file_path)
             return title or "YouTube Video"
         except Exception as e:
             logger.warning(f"Failed to get video title: {e}")
@@ -515,6 +519,7 @@ class VideoService:
         url: str,
         source_type: str,
         progress_callback: Optional[callable] = None,
+        cookie_file_path: Optional[str] = None,
     ) -> Path:
         """Resolve a source URL to a local video path."""
         if progress_callback:
@@ -525,7 +530,11 @@ class VideoService:
             )
 
         if source_type == "youtube":
-            video_path = await VideoService.download_video(url, progress_callback=progress_callback)
+            video_path = await VideoService.download_video(
+                url,
+                progress_callback=progress_callback,
+                cookie_file_path=cookie_file_path,
+            )
             if not video_path:
                 raise Exception("Failed to download video")
             return video_path

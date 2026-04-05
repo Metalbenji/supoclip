@@ -56,6 +56,7 @@ This is the single source of truth for MrglSnips runtime environment variables.
 | `SECRET_ENCRYPTION_KEY` | No | - | backend | Optional encryption secret for user-stored API keys (recommended for production). |
 | `WHISPER_CACHE_HOST_DIR` | No | `./backend/.cache/whisper` | docker-compose | Host bind-mount location for Whisper model cache (`/root/.cache/whisper` in containers). |
 | `TEMP_DIR` | No | `temp` (local) / `/app/uploads` (Docker) | backend, worker | Working directory for uploaded/downloaded files and clip output paths. |
+| `YTDLP_COOKIES_FILE` | No | unset | backend, worker | Optional Netscape-format cookies file used by `yt-dlp` for YouTube videos that trigger bot-check/login requirements. In Docker compose, place the file under `backend/.secrets/` and point this var at `/app/.secrets/<file>.txt`. |
 | `DATABASE_URL` | Yes | compose-provided value | backend, worker | Postgres connection string. |
 | `REDIS_HOST` | Yes (Docker) | `localhost` | backend, worker | Redis host. |
 | `REDIS_PORT` | No | `6379` | backend, worker | Redis port. |
@@ -167,3 +168,12 @@ When adding/changing a variable:
 2. Update root env template (`.env.sample` in this repo; `.env.example` if present) and `backend/.env.example`.
 3. Update this file.
 4. Update references in `QUICKSTART.md` and `CLAUDE.md` if user-visible.
+
+## YouTube Download Authentication
+
+- Some YouTube videos now require signed-in cookies even for metadata access.
+- When that happens, export a YouTube cookies file in Netscape format and set `YTDLP_COOKIES_FILE`.
+- Docker compose mounts `backend/.secrets` into backend/worker containers at `/app/.secrets` (read-only), so a typical Docker value is:
+  - `YTDLP_COOKIES_FILE=/app/.secrets/youtube.cookies.txt`
+- Local non-Docker backend runs can point directly to a local path, for example:
+  - `YTDLP_COOKIES_FILE=./.secrets/youtube.cookies.txt`

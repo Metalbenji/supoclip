@@ -92,6 +92,30 @@ async def init_db():
         await conn.execute(
             text(
                 """
+                ALTER TABLE users
+                ADD COLUMN IF NOT EXISTS youtube_cookies_encrypted TEXT
+                """
+            )
+        )
+        await conn.execute(
+            text(
+                """
+                ALTER TABLE users
+                ADD COLUMN IF NOT EXISTS youtube_cookies_filename VARCHAR(255)
+                """
+            )
+        )
+        await conn.execute(
+            text(
+                """
+                ALTER TABLE users
+                ADD COLUMN IF NOT EXISTS youtube_cookies_updated_at TIMESTAMPTZ
+                """
+            )
+        )
+        await conn.execute(
+            text(
+                """
                 ALTER TABLE tasks
                 ADD COLUMN IF NOT EXISTS ai_provider VARCHAR(20) NOT NULL DEFAULT 'openai'
                 """

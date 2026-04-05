@@ -15,6 +15,46 @@ from .config import Config
 
 logger = logging.getLogger(__name__)
 config = Config()
+YOUTUBE_AUTH_ERROR_MARKERS = (
+    "sign in to confirm you're not a bot",
+    "use --cookies-from-browser or --cookies",
+    "login required",
+    "confirm you're not a bot",
+)
+
+
+class YouTubeDownloadError(RuntimeError):
+    """Raised when yt-dlp cannot access or download a YouTube video."""
+
+
+def _build_ytdlp_cookie_hint() -> str:
+    return (
+        "YouTube requested sign-in verification. Upload a valid YouTube cookies.txt file for this account or use a "
+        "configured shared server fallback."
+    )
+
+
+def _normalize_ytdlp_error_message(error: Exception | str) -> str:
+    raw_message = str(error or "").strip()
+    if not raw_message:
+        return "yt-dlp failed to access the video."
+    normalized = raw_message.lower()
+    if any(marker in normalized for marker in YOUTUBE_AUTH_ERROR_MARKERS):
+        return _build_ytdlp_cookie_hint()
+    return raw_message
+
+
+def _apply_ytdlp_auth_options(options: Dict[str, Any], cookie_file_path: Optional[str] = None) -> Dict[str, Any]:
+    cookie_file = (cookie_file_path or "").strip() or (config.ytdlp_cookies_file or "").strip()
+    if not cookie_file:
+        return options
+
+    cookie_path = Path(cookie_file)
+    if cookie_path.is_file():
+        options["cookiefile"] = str(cookie_path)
+    else:
+        logger.warning("YTDLP_COOKIES_FILE is set but file does not exist: %s", cookie_file)
+    return options
 
 class YouTubeDownloader:
     """Enhanced YouTube downloader with optimized settings."""
@@ -23,11 +63,11 @@ class YouTubeDownloader:
         self.temp_dir = Path(config.temp_dir)
         self.temp_dir.mkdir(parents=True, exist_ok=True)
 
-    def get_optimal_download_options(self, video_id: str) -> Dict[str, Any]:
+    def get_optimal_download_options(self, video_id: str, cookie_file_path: Optional[str] = None) -> Dict[str, Any]:
         """Get optimal yt-dlp options for high-quality downloads with enhanced YouTube bypass."""
         output_path = self.temp_dir / f"{video_id}.%(ext)s"
 
-        return {
+        return _apply_ytdlp_auth_options({
             'outtmpl': str(output_path),
             # Prefer 1080p mp4 + m4a first, then gracefully fall back to lower resolutions.
             # Order is important: first match wins.
@@ -78,7 +118,7 @@ class YouTubeDownloader:
             'nocheckcertificate': True,
             'prefer_insecure': False,
             'age_limit': None,
-        }
+        }, cookie_file_path=cookie_file_path)
 
 def get_youtube_video_id(url: str) -> Optional[str]:
     """
@@ -127,7 +167,7 @@ def validate_youtube_url(url: str) -> bool:
     video_id = get_youtube_video_id(url)
     return video_id is not None
 
-def get_youtube_video_info(url: str) -> Optional[Dict[str, Any]]:
+def get_youtube_video_info(url: str, cookie_file_path: Optional[str] = None) -> Optional[Dict[str, Any]]:
     """
     Get comprehensive video information without downloading.
     Returns title, duration, description, and other metadata.
@@ -138,7 +178,7 @@ def get_youtube_video_info(url: str) -> Optional[Dict[str, Any]]:
         return None
 
     try:
-        ydl_opts = {
+        ydl_opts = _apply_ytdlp_auth_options({
             'quiet': True,
             'no_warnings': True,
             'extractaudio': False,
@@ -157,7 +197,7 @@ def get_youtube_video_info(url: str) -> Optional[Dict[str, Any]]:
                 }
             },
             'nocheckcertificate': True,
-        }
+        }, cookie_file_path=cookie_file_path)
 
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(url, download=False)
@@ -179,21 +219,22 @@ def get_youtube_video_info(url: str) -> Optional[Dict[str, Any]]:
             }
 
     except Exception as e:
-        logger.error(f"Error extracting video info: {e}")
+        logger.error("Error extracting video info: %s", _normalize_ytdlp_error_message(e))
         return None
 
-def get_youtube_video_title(url: str) -> Optional[str]:
+def get_youtube_video_title(url: str, cookie_file_path: Optional[str] = None) -> Optional[str]:
     """
     Get the title of a YouTube video from a URL.
     Enhanced with better error handling and validation.
     """
-    video_info = get_youtube_video_info(url)
+    video_info = get_youtube_video_info(url, cookie_file_path=cookie_file_path)
     return video_info.get('title') if video_info else None
 
 def download_youtube_video(
     url: str,
     max_retries: int = 3,
-    progress_callback: Optional[Callable[[int, str], None]] = None
+    progress_callback: Optional[Callable[[int, str], None]] = None,
+    cookie_file_path: Optional[str] = None,
 ) -> Optional[Path]:
     """
     Download YouTube video with optimized settings and retry logic.
@@ -218,10 +259,11 @@ def download_youtube_video(
             return file_path
 
     # Get video info first to validate and get metadata
-    video_info = get_youtube_video_info(url)
+    video_info = get_youtube_video_info(url, cookie_file_path=cookie_file_path)
     if not video_info:
-        logger.error(f"Could not retrieve video information for: {url}")
-        return None
+        message = f"Could not retrieve video information. {_build_ytdlp_cookie_hint()}"
+        logger.error("%s URL=%s", message, url)
+        raise YouTubeDownloadError(message)
 
     logger.info(f"Video: '{video_info.get('title')}' ({video_info.get('duration')}s)")
 
@@ -231,11 +273,12 @@ def download_youtube_video(
         logger.warning(f"Video duration ({duration}s) exceeds recommended limit")
 
     # Retry download with exponential backoff
+    last_error_message: Optional[str] = None
     for attempt in range(max_retries):
         try:
             logger.info(f"Download attempt {attempt + 1}/{max_retries}")
 
-            ydl_opts = downloader.get_optimal_download_options(video_id)
+            ydl_opts = downloader.get_optimal_download_options(video_id, cookie_file_path=cookie_file_path)
             last_progress = -1
 
             def progress_hook(progress_data: Dict[str, Any]) -> None:
@@ -280,7 +323,8 @@ def download_youtube_video(
                 logger.warning(f"No video file found after download attempt {attempt + 1}")
 
         except yt_dlp.utils.DownloadError as e:
-            logger.warning(f"Download attempt {attempt + 1} failed: {e}")
+            last_error_message = _normalize_ytdlp_error_message(e)
+            logger.warning("Download attempt %s failed: %s", attempt + 1, last_error_message)
             if attempt < max_retries - 1:
                 wait_time = 2 ** attempt  # Exponential backoff: 1, 2, 4 seconds
                 logger.info(f"Retrying in {wait_time} seconds...")
@@ -289,7 +333,8 @@ def download_youtube_video(
                 logger.error(f"All download attempts failed for: {url}")
 
         except Exception as e:
-            logger.error(f"Unexpected error during download attempt {attempt + 1}: {e}")
+            last_error_message = _normalize_ytdlp_error_message(e)
+            logger.error("Unexpected error during download attempt %s: %s", attempt + 1, last_error_message)
             if attempt < max_retries - 1:
                 wait_time = 2 ** attempt
                 logger.info(f"Retrying in {wait_time} seconds...")
@@ -297,19 +342,26 @@ def download_youtube_video(
             else:
                 logger.error(f"All download attempts failed for: {url}")
 
-    return None
+    if last_error_message:
+        raise YouTubeDownloadError(last_error_message)
+    raise YouTubeDownloadError("Failed to download video from YouTube.")
 
-def get_video_duration(url: str) -> Optional[int]:
+def get_video_duration(url: str, cookie_file_path: Optional[str] = None) -> Optional[int]:
     """Get video duration in seconds without downloading."""
-    video_info = get_youtube_video_info(url)
+    video_info = get_youtube_video_info(url, cookie_file_path=cookie_file_path)
     return video_info.get('duration') if video_info else None
 
-def is_video_suitable_for_processing(url: str, min_duration: int = 60, max_duration: int = 7200) -> bool:
+def is_video_suitable_for_processing(
+    url: str,
+    min_duration: int = 60,
+    max_duration: int = 7200,
+    cookie_file_path: Optional[str] = None,
+) -> bool:
     """
     Check if video is suitable for processing based on duration and other factors.
     Default limits: 1 minute to 2 hours.
     """
-    video_info = get_youtube_video_info(url)
+    video_info = get_youtube_video_info(url, cookie_file_path=cookie_file_path)
     if not video_info:
         return False
 

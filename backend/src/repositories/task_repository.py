@@ -486,6 +486,31 @@ class TaskRepository:
         return row.assembly_api_key_encrypted
 
     @staticmethod
+    async def get_user_youtube_cookies(db: AsyncSession, user_id: str) -> Optional[Dict[str, Any]]:
+        """Get encrypted YouTube cookies metadata for a user."""
+        result = await db.execute(
+            text(
+                """
+                SELECT
+                    youtube_cookies_encrypted,
+                    youtube_cookies_filename,
+                    youtube_cookies_updated_at
+                FROM users
+                WHERE id = :user_id
+                """
+            ),
+            {"user_id": user_id},
+        )
+        row = result.fetchone()
+        if not row or not getattr(row, "youtube_cookies_encrypted", None):
+            return None
+        return {
+            "encrypted_value": row.youtube_cookies_encrypted,
+            "filename": getattr(row, "youtube_cookies_filename", None),
+            "updated_at": getattr(row, "youtube_cookies_updated_at", None),
+        }
+
+    @staticmethod
     async def get_user_encrypted_ai_key(
         db: AsyncSession,
         user_id: str,
@@ -527,6 +552,35 @@ class TaskRepository:
         await db.commit()
 
     @staticmethod
+    async def set_user_youtube_cookies(
+        db: AsyncSession,
+        user_id: str,
+        encrypted_value: str,
+        filename: str,
+    ) -> None:
+        """Store encrypted YouTube cookies for a user."""
+        result = await db.execute(
+            text(
+                """
+                UPDATE users
+                SET youtube_cookies_encrypted = :encrypted_value,
+                    youtube_cookies_filename = :filename,
+                    youtube_cookies_updated_at = NOW(),
+                    "updatedAt" = NOW()
+                WHERE id = :user_id
+                """
+            ),
+            {
+                "user_id": user_id,
+                "encrypted_value": encrypted_value,
+                "filename": filename,
+            },
+        )
+        if (result.rowcount or 0) == 0:
+            raise ValueError(f"User {user_id} not found")
+        await db.commit()
+
+    @staticmethod
     async def clear_user_encrypted_assembly_key(db: AsyncSession, user_id: str) -> None:
         """Clear stored encrypted AssemblyAI key for a user."""
         result = await db.execute(
@@ -534,6 +588,26 @@ class TaskRepository:
                 """
                 UPDATE users
                 SET assembly_api_key_encrypted = NULL,
+                    "updatedAt" = NOW()
+                WHERE id = :user_id
+                """
+            ),
+            {"user_id": user_id},
+        )
+        if (result.rowcount or 0) == 0:
+            raise ValueError(f"User {user_id} not found")
+        await db.commit()
+
+    @staticmethod
+    async def clear_user_youtube_cookies(db: AsyncSession, user_id: str) -> None:
+        """Clear stored YouTube cookies for a user."""
+        result = await db.execute(
+            text(
+                """
+                UPDATE users
+                SET youtube_cookies_encrypted = NULL,
+                    youtube_cookies_filename = NULL,
+                    youtube_cookies_updated_at = NULL,
                     "updatedAt" = NOW()
                 WHERE id = :user_id
                 """

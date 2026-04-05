@@ -17,7 +17,7 @@ import { useSession } from "@/lib/auth-client";
 import Link from "next/link";
 import Image from "next/image";
 import { ArrowRight, Youtube, CheckCircle, AlertCircle, Loader2, Palette, Type, Paintbrush, Clock, Timer } from "lucide-react";
-import { formatSourceTypeLabel, formatTaskRuntime, isHttpUrl } from "@/lib/task-metadata";
+import { formatSourceTypeLabel, getTaskRuntimeSummary, isHttpUrl } from "@/lib/task-metadata";
 import { AI_FOCUS_TAG_OPTIONS, formatAiFocusTag, type AiFocusTag } from "@/lib/ai-focus-tags";
 import {
   describeLocalWhisperModel,
@@ -57,6 +57,7 @@ interface LatestTask {
   clips_count: number;
   created_at: string;
   updated_at: string;
+  runtime_info?: Record<string, unknown>;
 }
 
 const AI_PROVIDERS = ["openai", "google", "anthropic", "zai", "ollama"] as const;
@@ -529,7 +530,7 @@ export default function Home() {
 
   useEffect(() => {
     setNowMs(Date.now());
-    if (!latestTask?.status || (latestTask.status !== "queued" && latestTask.status !== "processing")) {
+    if (!latestTask?.status || (latestTask.status !== "queued" && latestTask.status !== "processing" && latestTask.status !== "awaiting_review")) {
       return;
     }
     const intervalId = window.setInterval(() => setNowMs(Date.now()), 1000);
@@ -1084,10 +1085,29 @@ export default function Home() {
                           <Clock className="w-4 h-4" />
                           {new Date(latestTask.created_at).toLocaleDateString()}
                         </span>
-                        <span className="flex items-center gap-1">
-                          <Timer className="w-4 h-4" />
-                          {formatTaskRuntime(latestTask.created_at, latestTask.updated_at, latestTask.status, nowMs)}
-                        </span>
+                        {(() => {
+                          const runtimeSummary = getTaskRuntimeSummary(
+                            latestTask.created_at,
+                            latestTask.updated_at,
+                            latestTask.status,
+                            latestTask.runtime_info,
+                            nowMs,
+                          );
+                          return (
+                            <>
+                              <span className="flex items-center gap-1">
+                                <Timer className="w-4 h-4" />
+                                Process {runtimeSummary.processing}
+                              </span>
+                              {runtimeSummary.reviewWait ? (
+                                <span className="flex items-center gap-1">
+                                  <Clock className="w-4 h-4" />
+                                  Review wait {runtimeSummary.reviewWait}
+                                </span>
+                              ) : null}
+                            </>
+                          );
+                        })()}
                         <span>
                           {latestTask.clips_count} {latestTask.clips_count === 1 ? "clip" : "clips"}
                         </span>

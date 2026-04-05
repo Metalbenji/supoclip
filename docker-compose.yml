@@ -56,6 +56,7 @@ services:
       - ./backend/clips:/app/clips
       - ./backend/fonts:/app/fonts
       - ./backend/transitions:/app/transitions
+      - ./backend/.secrets:/app/.secrets:ro
       - ${WHISPER_CACHE_HOST_DIR:-./backend/.cache/whisper}:/root/.cache/whisper
     environment:
       - PYTHONPATH=/app
@@ -88,6 +89,7 @@ services:
       - ARQ_QUEUE_NAME_LOCAL_GPU=${ARQ_QUEUE_NAME_LOCAL_GPU:-arq:queue:local-gpu}
       - ARQ_QUEUE_NAME_ASSEMBLY=${ARQ_QUEUE_NAME_ASSEMBLY:-arq:queue:assembly}
       - SECRET_ENCRYPTION_KEY=${SECRET_ENCRYPTION_KEY:-}
+      - YTDLP_COOKIES_FILE=${YTDLP_COOKIES_FILE:-}
       - NVIDIA_VISIBLE_DEVICES=all
       - NVIDIA_DRIVER_CAPABILITIES=compute,utility,video
     restart: unless-stopped
@@ -125,6 +127,7 @@ services:
       - ./backend/clips:/app/clips
       - ./backend/fonts:/app/fonts
       - ./backend/transitions:/app/transitions
+      - ./backend/.secrets:/app/.secrets:ro
       - ${WHISPER_CACHE_HOST_DIR:-./backend/.cache/whisper}:/root/.cache/whisper
     environment:
       - PYTHONPATH=/app
@@ -156,6 +159,7 @@ services:
       - ARQ_QUEUE_NAME_LOCAL=${ARQ_QUEUE_NAME_LOCAL:-arq:queue:local}
       - ARQ_QUEUE_NAME_LOCAL_GPU=${ARQ_QUEUE_NAME_LOCAL_GPU:-arq:queue:local-gpu}
       - ARQ_QUEUE_NAME_ASSEMBLY=${ARQ_QUEUE_NAME_ASSEMBLY:-arq:queue:assembly}
+      - YTDLP_COOKIES_FILE=${YTDLP_COOKIES_FILE:-}
       - NVIDIA_VISIBLE_DEVICES=all
       - NVIDIA_DRIVER_CAPABILITIES=compute,utility,video
     restart: unless-stopped
@@ -182,6 +186,7 @@ services:
       - ./backend/clips:/app/clips
       - ./backend/fonts:/app/fonts
       - ./backend/transitions:/app/transitions
+      - ./backend/.secrets:/app/.secrets:ro
       - ${WHISPER_CACHE_HOST_DIR:-./backend/.cache/whisper}:/root/.cache/whisper
     environment:
       - PYTHONPATH=/app
@@ -213,6 +218,7 @@ services:
       - ARQ_QUEUE_NAME_LOCAL=${ARQ_QUEUE_NAME_LOCAL:-arq:queue:local}
       - ARQ_QUEUE_NAME_LOCAL_GPU=${ARQ_QUEUE_NAME_LOCAL_GPU:-arq:queue:local-gpu}
       - ARQ_QUEUE_NAME_ASSEMBLY=${ARQ_QUEUE_NAME_ASSEMBLY:-arq:queue:assembly}
+      - YTDLP_COOKIES_FILE=${YTDLP_COOKIES_FILE:-}
       - NVIDIA_VISIBLE_DEVICES=all
       - NVIDIA_DRIVER_CAPABILITIES=compute,utility,video
     restart: unless-stopped
@@ -248,6 +254,7 @@ services:
       - ./backend/clips:/app/clips
       - ./backend/fonts:/app/fonts
       - ./backend/transitions:/app/transitions
+      - ./backend/.secrets:/app/.secrets:ro
       - ${WHISPER_CACHE_HOST_DIR:-./backend/.cache/whisper}:/root/.cache/whisper
     environment:
       - PYTHONPATH=/app
@@ -279,6 +286,7 @@ services:
       - ARQ_QUEUE_NAME_LOCAL=${ARQ_QUEUE_NAME_LOCAL:-arq:queue:local}
       - ARQ_QUEUE_NAME_LOCAL_GPU=${ARQ_QUEUE_NAME_LOCAL_GPU:-arq:queue:local-gpu}
       - ARQ_QUEUE_NAME_ASSEMBLY=${ARQ_QUEUE_NAME_ASSEMBLY:-arq:queue:assembly}
+      - YTDLP_COOKIES_FILE=${YTDLP_COOKIES_FILE:-}
       - NVIDIA_VISIBLE_DEVICES=all
       - NVIDIA_DRIVER_CAPABILITIES=compute,utility,video
     restart: unless-stopped
@@ -305,6 +313,7 @@ services:
       - ./backend/clips:/app/clips
       - ./backend/fonts:/app/fonts
       - ./backend/transitions:/app/transitions
+      - ./backend/.secrets:/app/.secrets:ro
       - ${WHISPER_CACHE_HOST_DIR:-./backend/.cache/whisper}:/root/.cache/whisper
     environment:
       - PYTHONPATH=/app
@@ -336,6 +345,7 @@ services:
       - ARQ_QUEUE_NAME_LOCAL=${ARQ_QUEUE_NAME_LOCAL:-arq:queue:local}
       - ARQ_QUEUE_NAME_LOCAL_GPU=${ARQ_QUEUE_NAME_LOCAL_GPU:-arq:queue:local-gpu}
       - ARQ_QUEUE_NAME_ASSEMBLY=${ARQ_QUEUE_NAME_ASSEMBLY:-arq:queue:assembly}
+      - YTDLP_COOKIES_FILE=${YTDLP_COOKIES_FILE:-}
       - NVIDIA_VISIBLE_DEVICES=all
       - NVIDIA_DRIVER_CAPABILITIES=compute,utility,video
     restart: unless-stopped

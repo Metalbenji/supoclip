@@ -1,7 +1,7 @@
 """
 Task API routes using refactored architecture.
 """
-from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi import APIRouter, Depends, File, HTTPException, Query, Request, UploadFile
 from fastapi.responses import FileResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 from sse_starlette.sse import EventSourceResponse
@@ -10,6 +10,7 @@ import json
 import logging
 import mimetypes
 import re
+import time
 from uuid import UUID
 
 from ...database import get_db
@@ -554,6 +555,11 @@ async def get_transcription_settings(request: Request, db: AsyncSession = Depend
             "gpu_worker_enabled": bool(config.enable_gpu_worker),
             "has_assembly_key": bool(settings.get("has_assembly_key")),
             "has_env_fallback": bool((config.assembly_ai_api_key or "").strip()),
+            "has_youtube_cookies": bool(settings.get("has_youtube_cookies")),
+            "youtube_cookies_updated_at": settings.get("youtube_cookies_updated_at"),
+            "youtube_cookies_filename": settings.get("youtube_cookies_filename"),
+            "youtube_cookie_source": str(settings.get("youtube_cookie_source") or "none"),
+            "has_youtube_cookie_env_fallback": bool(settings.get("has_youtube_cookie_env_fallback")),
             "assemblyai_max_duration_seconds": ASSEMBLYAI_MAX_DURATION_SECONDS,
             "assemblyai_max_local_upload_size_bytes": ASSEMBLYAI_MAX_LOCAL_UPLOAD_SIZE_BYTES,
             "assemblyai_max_remote_file_size_bytes": ASSEMBLYAI_MAX_REMOTE_FILE_SIZE_BYTES,
@@ -620,6 +626,56 @@ async def delete_assembly_key(request: Request, db: AsyncSession = Depends(get_d
     except Exception as e:
         logger.error(f"Error deleting AssemblyAI key: {e}")
         raise HTTPException(status_code=500, detail=f"Error deleting key: {str(e)}")
+
+
+@router.put("/transcription-settings/youtube-cookies")
+async def save_youtube_cookies(
+    request: Request,
+    youtube_cookies: UploadFile = File(...),
+    db: AsyncSession = Depends(get_db),
+):
+    """Save user YouTube cookies.txt file (encrypted at rest)."""
+    user_id = _require_user_id(request)
+    if not youtube_cookies or not youtube_cookies.filename:
+        raise HTTPException(status_code=400, detail="youtube_cookies file is required")
+
+    try:
+        payload = await youtube_cookies.read()
+        task_service = TaskService(db)
+        status = await task_service.save_user_youtube_cookies_from_upload(
+            user_id,
+            filename=str(youtube_cookies.filename),
+            payload=payload,
+        )
+        return {
+            "message": "YouTube cookies saved",
+            **status,
+        }
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        logger.error(f"Error saving YouTube cookies: {e}")
+        raise HTTPException(status_code=500, detail=f"Error saving YouTube cookies: {str(e)}")
+    finally:
+        await youtube_cookies.close()
+
+
+@router.delete("/transcription-settings/youtube-cookies")
+async def delete_youtube_cookies(request: Request, db: AsyncSession = Depends(get_db)):
+    """Delete user YouTube cookies.txt file."""
+    user_id = _require_user_id(request)
+    try:
+        task_service = TaskService(db)
+        status = await task_service.clear_user_youtube_cookies(user_id)
+        return {
+            "message": "YouTube cookies removed",
+            **status,
+        }
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except Exception as e:
+        logger.error(f"Error deleting YouTube cookies: {e}")
+        raise HTTPException(status_code=500, detail=f"Error deleting YouTube cookies: {str(e)}")
 
 
 @router.get("/ai-settings")
@@ -1799,9 +1855,10 @@ async def get_task_source_video(task_id: str, request: Request, db: AsyncSession
         raise HTTPException(status_code=400, detail="Task source is missing")
 
     try:
-        source_video_path = await task_service.video_service.resolve_video_path(
+        source_video_path = await task_service.resolve_video_path_for_user(
             url=source_url,
             source_type=source_type,
+            user_id=user_id,
         )
     except Exception as e:
         logger.error(f"Error resolving source video for task {task_id}: {e}")
@@ -1849,9 +1906,10 @@ async def get_task_waveform(
         raise HTTPException(status_code=400, detail="end_seconds must be greater than start_seconds")
 
     try:
-        source_video_path = await task_service.video_service.resolve_video_path(
+        source_video_path = await task_service.resolve_video_path_for_user(
             url=source_url,
             source_type=source_type,
+            user_id=user_id,
         )
         waveform = await task_service.video_service.get_waveform_data(
             source_video_path,
@@ -2243,6 +2301,17 @@ async def finalize_task(task_id: str, request: Request, db: AsyncSession = Depen
     subtitle_style_seed.setdefault("font_size", task.get("font_size"))
     subtitle_style_seed.setdefault("font_color", task.get("font_color"))
     subtitle_style = normalize_subtitle_style(subtitle_style_seed)
+    existing_runtime_info = task.get("runtime_info") if isinstance(task.get("runtime_info"), dict) else {}
+    review_wait_closed_at_ms = int(time.time() * 1000)
+    queued_runtime_info = TaskService._merge_runtime_info(
+        existing_runtime_info,
+        {
+            "review_completed_at_ms": (
+                TaskService._coerce_runtime_time_ms(existing_runtime_info.get("review_completed_at_ms"))
+                or review_wait_closed_at_ms
+            ),
+        },
+    )
 
     await task_service.task_repo.update_task_status(
         db,
@@ -2250,6 +2319,7 @@ async def finalize_task(task_id: str, request: Request, db: AsyncSession = Depen
         "queued",
         progress=0,
         progress_message="Queued rendering from approved draft clips...",
+        runtime_info=queued_runtime_info,
     )
 
     try:
@@ -2281,6 +2351,7 @@ async def finalize_task(task_id: str, request: Request, db: AsyncSession = Depen
             "awaiting_review",
             progress=100,
             progress_message="Failed to queue finalize job. Please try again.",
+            runtime_info=existing_runtime_info,
         )
         raise HTTPException(status_code=503, detail="Failed to queue finalize job")
 

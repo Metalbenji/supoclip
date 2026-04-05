@@ -1,4 +1,26 @@
 const ACTIVE_TASK_STATUSES = new Set(["processing", "queued"]);
+const REVIEW_PENDING_STATUSES = new Set(["awaiting_review"]);
+
+type TaskRuntimeInfo = Record<string, unknown> | null | undefined;
+
+function coerceFiniteNumber(value: unknown): number | null {
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    return null;
+  }
+  return value;
+}
+
+function formatElapsedDuration(totalSeconds: number): string {
+  let remainingSeconds = Math.max(0, Math.floor(totalSeconds));
+  const hours = Math.floor(remainingSeconds / 3600);
+  remainingSeconds %= 3600;
+  const minutes = Math.floor(remainingSeconds / 60);
+  const seconds = remainingSeconds % 60;
+
+  if (hours > 0) return `${hours}h ${minutes}m ${seconds}s`;
+  if (minutes > 0) return `${minutes}m ${seconds}s`;
+  return `${seconds}s`;
+}
 
 export function isHttpUrl(value: string | null | undefined): boolean {
   if (!value) return false;
@@ -16,6 +38,68 @@ export function formatSourceTypeLabel(sourceType?: string | null): string {
   return sourceType.charAt(0).toUpperCase() + sourceType.slice(1);
 }
 
+function getActiveProcessingSeconds(
+  runtimeInfo: TaskRuntimeInfo,
+  status: string | null | undefined,
+  nowMs: number,
+): number | null {
+  if (!runtimeInfo || typeof runtimeInfo !== "object") {
+    return null;
+  }
+  const storedSeconds = coerceFiniteNumber(runtimeInfo.active_processing_seconds) ?? 0;
+  const startedAtMs = coerceFiniteNumber(runtimeInfo.processing_window_started_at_ms);
+  if (startedAtMs === null) {
+    return storedSeconds;
+  }
+  if (!ACTIVE_TASK_STATUSES.has(status || "")) {
+    return storedSeconds;
+  }
+  return storedSeconds + Math.max(0, (nowMs - startedAtMs) / 1000);
+}
+
+function getReviewWaitSeconds(
+  runtimeInfo: TaskRuntimeInfo,
+  status: string | null | undefined,
+  nowMs: number,
+): number | null {
+  if (!runtimeInfo || typeof runtimeInfo !== "object") {
+    return null;
+  }
+  const startedAtMs = coerceFiniteNumber(runtimeInfo.review_started_at_ms);
+  if (startedAtMs === null) {
+    return null;
+  }
+  const completedAtMs = coerceFiniteNumber(runtimeInfo.review_completed_at_ms);
+  const endedAtMs = completedAtMs ?? (REVIEW_PENDING_STATUSES.has(status || "") ? nowMs : null);
+  if (endedAtMs === null) {
+    return null;
+  }
+  return Math.max(0, (endedAtMs - startedAtMs) / 1000);
+}
+
+export function getTaskRuntimeSummary(
+  createdAt: string | null | undefined,
+  updatedAt: string | null | undefined,
+  status: string | null | undefined,
+  runtimeInfo: TaskRuntimeInfo,
+  nowMs: number = Date.now(),
+): { processing: string; reviewWait: string | null } {
+  const activeProcessingSeconds = getActiveProcessingSeconds(runtimeInfo, status, nowMs);
+  const reviewWaitSeconds = getReviewWaitSeconds(runtimeInfo, status, nowMs);
+
+  if (activeProcessingSeconds !== null) {
+    return {
+      processing: formatElapsedDuration(activeProcessingSeconds),
+      reviewWait: reviewWaitSeconds !== null ? formatElapsedDuration(reviewWaitSeconds) : null,
+    };
+  }
+
+  return {
+    processing: formatTaskRuntime(createdAt, updatedAt, status, nowMs),
+    reviewWait: null,
+  };
+}
+
 export function formatTaskRuntime(
   createdAt: string | null | undefined,
   updatedAt: string | null | undefined,
@@ -30,13 +114,5 @@ export function formatTaskRuntime(
   const ended = shouldUseNow ? new Date(nowMs) : new Date(updatedAt);
   if (Number.isNaN(ended.getTime())) return "n/a";
 
-  let totalSeconds = Math.max(0, Math.floor((ended.getTime() - started.getTime()) / 1000));
-  const hours = Math.floor(totalSeconds / 3600);
-  totalSeconds %= 3600;
-  const minutes = Math.floor(totalSeconds / 60);
-  const seconds = totalSeconds % 60;
-
-  if (hours > 0) return `${hours}h ${minutes}m ${seconds}s`;
-  if (minutes > 0) return `${minutes}m ${seconds}s`;
-  return `${seconds}s`;
+  return formatElapsedDuration((ended.getTime() - started.getTime()) / 1000);
 }

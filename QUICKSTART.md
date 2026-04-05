@@ -66,6 +66,12 @@ LLM=openai:gpt-5-mini
 # Optional (default local transcription)
 TRANSCRIPTION_PROVIDER=local
 
+# Optional yt-dlp cookies file for YouTube videos that trigger sign-in/bot-check.
+# Export a Netscape cookies.txt file from your browser to:
+#   backend/.secrets/youtube.cookies.txt
+# Then point Docker containers at the mounted path:
+# YTDLP_COOKIES_FILE=/app/.secrets/youtube.cookies.txt
+
 # Optional (face-aware crop model; auto-downloads if missing)
 # MEDIAPIPE_FACE_MODEL_PATH=./backend/models/blaze_face_short_range.tflite
 # MEDIAPIPE_FACE_MODEL_AUTO_DOWNLOAD=true
@@ -176,6 +182,7 @@ Local URL/port mapping reference: `docs/local-host-mappings.md`
 | `DOCKER_GPU_REQUEST_WORKER_ASSEMBLY` | `all` | Docker GPU request for optional `worker-assembly` profile |
 | `SECRET_ENCRYPTION_KEY` | - | Encryption secret for user-stored API keys (recommended in production) |
 | `WHISPER_CACHE_HOST_DIR` | `./backend/.cache/whisper` | Host path for Whisper model cache (prevents re-downloads after rebuilds) |
+| `YTDLP_COOKIES_FILE` | - | Optional Netscape cookies file used by yt-dlp for YouTube videos that require sign-in verification. In Docker, place the file under `backend/.secrets/` and use `/app/.secrets/<file>.txt`. |
 | `BETTER_AUTH_SECRET` | dev secret | Auth secret (change in production!) |
 | `GOOGLE_API_KEY` | - | For Google Gemini models |
 | `ANTHROPIC_API_KEY` | - | For Claude models |
@@ -191,6 +198,12 @@ AssemblyAI limits enforced by backend:
 - max audio duration: 10 hours
 - max local file upload to AssemblyAI: ~2.2 GiB
 - when exceeded, task transcription automatically switches to local Whisper
+
+YouTube bot-check workaround:
+- if a YouTube URL fails with a `Sign in to confirm you're not a bot` error, export a YouTube cookies file in Netscape format
+- save it as `backend/.secrets/youtube.cookies.txt`
+- set `YTDLP_COOKIES_FILE=/app/.secrets/youtube.cookies.txt`
+- restart `backend` and every active worker container
 
 ## Supported AI Models
 

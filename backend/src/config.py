@@ -50,6 +50,12 @@ class Config:
         self.clip_diversity_buckets = max(1, int(os.getenv("CLIP_DIVERSITY_BUCKETS", "4")))
 
         self.temp_dir = os.getenv("TEMP_DIR", "temp")
+        raw_ytdlp_cookies_file = os.getenv("YTDLP_COOKIES_FILE")
+        self.ytdlp_cookies_file = (
+            raw_ytdlp_cookies_file.strip()
+            if isinstance(raw_ytdlp_cookies_file, str) and raw_ytdlp_cookies_file.strip()
+            else None
+        )
 
         # Redis configuration
         self.redis_host = os.getenv("REDIS_HOST", "localhost")

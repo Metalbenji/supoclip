@@ -109,6 +109,14 @@ function SettingsPageContent() {
   const [isSavingAssemblyKey, setIsSavingAssemblyKey] = useState(false);
   const [assemblyKeyStatus, setAssemblyKeyStatus] = useState<string | null>(null);
   const [assemblyKeyError, setAssemblyKeyError] = useState<string | null>(null);
+  const [isSavingYoutubeCookies, setIsSavingYoutubeCookies] = useState(false);
+  const [hasSavedYoutubeCookies, setHasSavedYoutubeCookies] = useState(false);
+  const [hasYoutubeCookieEnvFallback, setHasYoutubeCookieEnvFallback] = useState(false);
+  const [youtubeCookiesFilename, setYoutubeCookiesFilename] = useState<string | null>(null);
+  const [youtubeCookiesUpdatedAt, setYoutubeCookiesUpdatedAt] = useState<string | null>(null);
+  const [youtubeCookieSource, setYoutubeCookieSource] = useState<"saved" | "env" | "none">("none");
+  const [youtubeCookieStatus, setYoutubeCookieStatus] = useState<string | null>(null);
+  const [youtubeCookieError, setYoutubeCookieError] = useState<string | null>(null);
 
   const [aiApiKeys, setAiApiKeys] = useState<Record<AiProvider, string>>({
     openai: "",
@@ -249,6 +257,76 @@ function SettingsPageContent() {
       console.error("Failed to load fonts:", loadError);
     }
   }, [apiUrl]);
+
+  const loadTranscriptionSettings = useCallback(async () => {
+    if (!session?.user?.id) {
+      return;
+    }
+    try {
+      const response = await fetch(`${apiUrl}/tasks/transcription-settings`, {
+        headers: {
+          user_id: session.user.id,
+        },
+      });
+      if (!response.ok) {
+        return;
+      }
+
+      const data = await response.json();
+      setHasSavedAssemblyKey(Boolean(data.has_assembly_key));
+      setHasAssemblyEnvFallback(Boolean(data.has_env_fallback));
+      setHasSavedYoutubeCookies(Boolean(data.has_youtube_cookies));
+      setHasYoutubeCookieEnvFallback(Boolean(data.has_youtube_cookie_env_fallback));
+      setYoutubeCookiesFilename(typeof data.youtube_cookies_filename === "string" ? data.youtube_cookies_filename : null);
+      setYoutubeCookiesUpdatedAt(typeof data.youtube_cookies_updated_at === "string" ? data.youtube_cookies_updated_at : null);
+      setYoutubeCookieSource(
+        data.youtube_cookie_source === "saved" || data.youtube_cookie_source === "env" ? data.youtube_cookie_source : "none",
+      );
+      setGpuWorkerEnabled(Boolean(data.gpu_worker_enabled));
+      if (data.local_whisper_runtime && typeof data.local_whisper_runtime === "object") {
+        setLocalWhisperRuntime(data.local_whisper_runtime as LocalWhisperRuntimeInfo);
+      }
+      if (Array.isArray(data.local_whisper_models)) {
+        const parsedModels = data.local_whisper_models.filter((entry: unknown): entry is LocalWhisperModelOption => {
+          if (!entry || typeof entry !== "object") {
+            return false;
+          }
+          const candidate = entry as Partial<LocalWhisperModelOption>;
+          return (
+            typeof candidate.value === "string" &&
+            typeof candidate.label === "string" &&
+            typeof candidate.speed_hint === "string" &&
+            typeof candidate.quality_hint === "string"
+          );
+        });
+        setLocalWhisperModels(parsedModels.length > 0 ? parsedModels : FALLBACK_LOCAL_WHISPER_MODELS);
+      }
+      if (typeof data.assemblyai_max_duration_seconds === "number" && Number.isFinite(data.assemblyai_max_duration_seconds)) {
+        setAssemblyMaxDurationSeconds(Math.max(1, Math.round(data.assemblyai_max_duration_seconds)));
+      }
+      if (
+        typeof data.assemblyai_max_local_upload_size_bytes === "number" &&
+        Number.isFinite(data.assemblyai_max_local_upload_size_bytes)
+      ) {
+        setAssemblyMaxLocalUploadSizeBytes(Math.max(1, Math.round(data.assemblyai_max_local_upload_size_bytes)));
+      }
+      const cap =
+        typeof data.worker_timeout_cap_seconds === "number" && Number.isFinite(data.worker_timeout_cap_seconds)
+          ? Math.max(300, Math.round(data.worker_timeout_cap_seconds))
+          : MAX_TASK_TIMEOUT_SECONDS;
+      setWorkerTimeoutCapSeconds(cap);
+      setPreferencesDraft((prev) => ({
+        ...prev,
+        taskTimeoutSeconds: Math.min(prev.taskTimeoutSeconds, cap),
+      }));
+      setLastSavedSnapshot((prev) => ({
+        ...prev,
+        taskTimeoutSeconds: Math.min(prev.taskTimeoutSeconds, cap),
+      }));
+    } catch (loadError) {
+      console.error("Failed to load transcription settings:", loadError);
+    }
+  }, [apiUrl, session?.user?.id]);
 
   const fetchAiModels = useCallback(
     async (
@@ -685,6 +763,79 @@ function SettingsPageContent() {
       setIsSavingAssemblyKey(false);
     }
   }, [apiUrl, session?.user?.id]);
+
+  const handleYoutubeCookiesUpload = useCallback(
+    async (event: ChangeEvent<HTMLInputElement>): Promise<void> => {
+      const file = event.target.files?.[0];
+      if (!file) {
+        return;
+      }
+
+      setYoutubeCookieError(null);
+      setYoutubeCookieStatus(null);
+
+      if (!file.name.toLowerCase().endsWith(".txt")) {
+        setYoutubeCookieError("Only Netscape .txt cookie exports are supported.");
+        event.target.value = "";
+        return;
+      }
+
+      setIsSavingYoutubeCookies(true);
+      try {
+        const formData = new FormData();
+        formData.append("youtube_cookies", file);
+
+        const response = await fetch(`${apiUrl}/tasks/transcription-settings/youtube-cookies`, {
+          method: "PUT",
+          headers: {
+            user_id: session?.user?.id || "",
+          },
+          body: formData,
+        });
+
+        const responseData = await response.json().catch(() => ({} as { detail?: string; message?: string }));
+        if (!response.ok) {
+          throw new Error(responseData?.detail || "Failed to save YouTube cookies");
+        }
+
+        await loadTranscriptionSettings();
+        setYoutubeCookieStatus(responseData?.message || "YouTube cookies saved.");
+      } catch (uploadError) {
+        setYoutubeCookieError(uploadError instanceof Error ? uploadError.message : "Failed to save YouTube cookies.");
+      } finally {
+        setIsSavingYoutubeCookies(false);
+        event.target.value = "";
+      }
+    },
+    [apiUrl, loadTranscriptionSettings, session?.user?.id],
+  );
+
+  const deleteYoutubeCookies = useCallback(async (): Promise<void> => {
+    setIsSavingYoutubeCookies(true);
+    setYoutubeCookieError(null);
+    setYoutubeCookieStatus(null);
+
+    try {
+      const response = await fetch(`${apiUrl}/tasks/transcription-settings/youtube-cookies`, {
+        method: "DELETE",
+        headers: {
+          user_id: session?.user?.id || "",
+        },
+      });
+
+      const responseData = await response.json().catch(() => ({} as { detail?: string; message?: string }));
+      if (!response.ok) {
+        throw new Error(responseData?.detail || "Failed to remove YouTube cookies");
+      }
+
+      await loadTranscriptionSettings();
+      setYoutubeCookieStatus(responseData?.message || "YouTube cookies removed.");
+    } catch (deleteError) {
+      setYoutubeCookieError(deleteError instanceof Error ? deleteError.message : "Failed to remove YouTube cookies.");
+    } finally {
+      setIsSavingYoutubeCookies(false);
+    }
+  }, [apiUrl, loadTranscriptionSettings, session?.user?.id]);
 
   const saveAiProviderKey = useCallback(
     async (provider: AiProvider, key: string): Promise<boolean> => {
@@ -1304,68 +1455,8 @@ function SettingsPageContent() {
       return;
     }
 
-    const loadTranscriptionSettings = async () => {
-      try {
-        const response = await fetch(`${apiUrl}/tasks/transcription-settings`, {
-          headers: {
-            user_id: session.user.id,
-          },
-        });
-        if (!response.ok) {
-          return;
-        }
-
-        const data = await response.json();
-        setHasSavedAssemblyKey(Boolean(data.has_assembly_key));
-        setHasAssemblyEnvFallback(Boolean(data.has_env_fallback));
-        setGpuWorkerEnabled(Boolean(data.gpu_worker_enabled));
-        if (data.local_whisper_runtime && typeof data.local_whisper_runtime === "object") {
-          setLocalWhisperRuntime(data.local_whisper_runtime as LocalWhisperRuntimeInfo);
-        }
-        if (Array.isArray(data.local_whisper_models)) {
-          const parsedModels = data.local_whisper_models.filter((entry: unknown): entry is LocalWhisperModelOption => {
-            if (!entry || typeof entry !== "object") {
-              return false;
-            }
-            const candidate = entry as Partial<LocalWhisperModelOption>;
-            return (
-              typeof candidate.value === "string" &&
-              typeof candidate.label === "string" &&
-              typeof candidate.speed_hint === "string" &&
-              typeof candidate.quality_hint === "string"
-            );
-          });
-          setLocalWhisperModels(parsedModels.length > 0 ? parsedModels : FALLBACK_LOCAL_WHISPER_MODELS);
-        }
-        if (typeof data.assemblyai_max_duration_seconds === "number" && Number.isFinite(data.assemblyai_max_duration_seconds)) {
-          setAssemblyMaxDurationSeconds(Math.max(1, Math.round(data.assemblyai_max_duration_seconds)));
-        }
-        if (
-          typeof data.assemblyai_max_local_upload_size_bytes === "number" &&
-          Number.isFinite(data.assemblyai_max_local_upload_size_bytes)
-        ) {
-          setAssemblyMaxLocalUploadSizeBytes(Math.max(1, Math.round(data.assemblyai_max_local_upload_size_bytes)));
-        }
-        const cap =
-          typeof data.worker_timeout_cap_seconds === "number" && Number.isFinite(data.worker_timeout_cap_seconds)
-            ? Math.max(300, Math.round(data.worker_timeout_cap_seconds))
-            : MAX_TASK_TIMEOUT_SECONDS;
-        setWorkerTimeoutCapSeconds(cap);
-        setPreferencesDraft((prev) => ({
-          ...prev,
-          taskTimeoutSeconds: Math.min(prev.taskTimeoutSeconds, cap),
-        }));
-        setLastSavedSnapshot((prev) => ({
-          ...prev,
-          taskTimeoutSeconds: Math.min(prev.taskTimeoutSeconds, cap),
-        }));
-      } catch (loadError) {
-        console.error("Failed to load transcription settings:", loadError);
-      }
-    };
-
     void loadTranscriptionSettings();
-  }, [apiUrl, session?.user?.id]);
+  }, [loadTranscriptionSettings, session?.user?.id]);
 
   useEffect(() => {
     if (!session?.user?.id) {
@@ -1694,16 +1785,26 @@ function SettingsPageContent() {
                 assemblyApiKey={assemblyApiKey}
                 hasSavedAssemblyKey={hasSavedAssemblyKey}
                 hasAssemblyEnvFallback={hasAssemblyEnvFallback}
+                isSavingYoutubeCookies={isSavingYoutubeCookies}
+                hasSavedYoutubeCookies={hasSavedYoutubeCookies}
+                hasYoutubeCookieEnvFallback={hasYoutubeCookieEnvFallback}
+                youtubeCookiesFilename={youtubeCookiesFilename}
+                youtubeCookiesUpdatedAt={youtubeCookiesUpdatedAt}
+                youtubeCookieSource={youtubeCookieSource}
                 assemblyMaxDurationSeconds={assemblyMaxDurationSeconds}
                 assemblyMaxLocalUploadSizeBytes={assemblyMaxLocalUploadSizeBytes}
                 assemblyKeyStatus={assemblyKeyStatus}
                 assemblyKeyError={assemblyKeyError}
+                youtubeCookieStatus={youtubeCookieStatus}
+                youtubeCookieError={youtubeCookieError}
                 onTranscriptionProviderChange={(provider) => {
                   if (isTranscriptionProvider(provider)) {
                     setPreferencesDraft((prev) => ({ ...prev, transcriptionProvider: provider }));
                   }
                   setAssemblyKeyStatus(null);
                   setAssemblyKeyError(null);
+                  setYoutubeCookieStatus(null);
+                  setYoutubeCookieError(null);
                 }}
                 onWhisperChunkingEnabledChange={(enabled) => {
                   setPreferencesDraft((prev) => ({ ...prev, whisperChunkingEnabled: enabled }));
@@ -1769,6 +1870,10 @@ function SettingsPageContent() {
                 }}
                 onDeleteAssemblyKey={() => {
                   void deleteAssemblyKey();
+                }}
+                onYoutubeCookiesUpload={handleYoutubeCookiesUpload}
+                onDeleteYoutubeCookies={() => {
+                  void deleteYoutubeCookies();
                 }}
               />
             ) : (

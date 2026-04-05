@@ -79,6 +79,10 @@ Backend compatibility behavior:
   - `WHISPER_CHUNK_OVERLAP_SECONDS`
 - transcription provider var: `TRANSCRIPTION_PROVIDER` (`local` default, `assemblyai` optional)
   - if AssemblyAI limits are exceeded (10h duration or local upload >2.2 GiB), backend falls back to local Whisper
+- optional yt-dlp auth var for YouTube bot-check/login-gated videos:
+  - `YTDLP_COOKIES_FILE`
+  - local backend example: `./.secrets/youtube.cookies.txt`
+  - Docker compose example: `/app/.secrets/youtube.cookies.txt`
 - worker timeout var: `WORKER_JOB_TIMEOUT_SECONDS` (increase for multi-hour jobs)
 - MediaPipe Tasks face model vars:
   - `MEDIAPIPE_FACE_MODEL_PATH`
@@ -93,6 +97,7 @@ Backend is started by `docker-compose.yml` with:
 - worker: `src.workers.tasks.WorkerSettings`
 - optional `worker-assembly` profile for the dedicated AssemblyAI queue
 - optional `worker-gpu` now installs the CUDA compiler toolchain (`ptxas`) so Triton Whisper kernels can JIT instead of falling back
+- `backend/.secrets` mounted read-only into containers at `/app/.secrets` for optional yt-dlp cookies files
 
 ## API Docs
 

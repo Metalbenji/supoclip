@@ -3,14 +3,16 @@ Task service - orchestrates task creation and processing workflow.
 """
 from __future__ import annotations
 
+from contextlib import asynccontextmanager
 from sqlalchemy.ext.asyncio import AsyncSession
-from typing import Dict, Any, Optional, Callable, Awaitable, List, Tuple
+from typing import Dict, Any, Optional, Callable, Awaitable, List, Tuple, AsyncIterator
 import logging
 import asyncio
 import re
 import time
 import json
 import shutil
+import tempfile
 from datetime import datetime
 from pathlib import Path
 
@@ -88,6 +90,8 @@ FAILURE_HINTS = {
     "system": "Inspect worker logs and runtime diagnostics, then retry from the latest checkpoint.",
 }
 _TIMESTAMP_SECONDS_RE = re.compile(r"^\d+(?:\.\d+)?$")
+YOUTUBE_COOKIE_MAX_BYTES = 1024 * 1024
+YOUTUBE_COOKIE_DOMAIN_MARKERS = ("youtube.com", ".youtube.com", "google.com", ".google.com")
 DEFAULT_OLLAMA_VIABILITY_ATTEMPTS = 2
 MIN_OLLAMA_VIABILITY_ATTEMPTS = 1
 MAX_OLLAMA_VIABILITY_ATTEMPTS = 3
@@ -191,6 +195,135 @@ class TaskService:
         self.video_service = VideoService()
         self.secret_service = SecretService()
 
+    @staticmethod
+    def _has_env_youtube_cookie_fallback() -> bool:
+        configured = (config.ytdlp_cookies_file or "").strip()
+        return bool(configured and Path(configured).is_file())
+
+    @staticmethod
+    def _sanitize_youtube_cookie_filename(filename: str) -> str:
+        candidate = Path(filename or "").name.strip()
+        if not candidate:
+            raise ValueError("No cookies file provided")
+        if Path(candidate).suffix.lower() != ".txt":
+            raise ValueError("Only .txt cookies files are supported")
+        sanitized_stem = re.sub(r"[^A-Za-z0-9._-]+", "-", Path(candidate).stem).strip("-_.")
+        if not sanitized_stem:
+            raise ValueError("Invalid cookies filename")
+        return f"{sanitized_stem}.txt"
+
+    @classmethod
+    def validate_youtube_cookies_upload(cls, filename: str, payload: bytes) -> Tuple[str, str]:
+        sanitized_filename = cls._sanitize_youtube_cookie_filename(filename)
+        if not payload:
+            raise ValueError("Uploaded cookies file is empty")
+        if len(payload) > YOUTUBE_COOKIE_MAX_BYTES:
+            raise ValueError("Cookies file too large (max 1MB)")
+
+        decoded_text: Optional[str] = None
+        for encoding in ("utf-8-sig", "utf-8", "latin-1"):
+            try:
+                decoded_text = payload.decode(encoding)
+                break
+            except UnicodeDecodeError:
+                continue
+        if decoded_text is None:
+            raise ValueError("Cookies file must be a plain text Netscape export")
+
+        normalized_text = decoded_text.replace("\r\n", "\n").replace("\r", "\n").strip()
+        if not normalized_text:
+            raise ValueError("Uploaded cookies file is empty")
+
+        cookie_rows = [
+            line for line in normalized_text.split("\n")
+            if line.strip() and not line.lstrip().startswith("#")
+        ]
+        if not cookie_rows or not any(line.count("\t") >= 6 for line in cookie_rows):
+            raise ValueError("Invalid Netscape cookies.txt format")
+
+        lowered_rows = "\n".join(cookie_rows).lower()
+        if not any(marker in lowered_rows for marker in YOUTUBE_COOKIE_DOMAIN_MARKERS):
+            raise ValueError("Cookies file does not appear to contain YouTube or Google cookies")
+
+        return sanitized_filename, normalized_text
+
+    @asynccontextmanager
+    async def _resolved_youtube_cookie_file(self, user_id: Optional[str]) -> AsyncIterator[Optional[str]]:
+        temp_path: Optional[Path] = None
+        try:
+            if user_id:
+                stored_record = await self.task_repo.get_user_youtube_cookies(self.db, user_id)
+                encrypted_value = str(stored_record.get("encrypted_value") or "").strip() if stored_record else ""
+                if encrypted_value:
+                    decrypted_text = self.secret_service.decrypt(encrypted_value)
+                    with tempfile.NamedTemporaryFile(
+                        mode="w",
+                        encoding="utf-8",
+                        suffix=".txt",
+                        prefix="supoclip-ytdlp-",
+                        delete=False,
+                    ) as temp_file:
+                        temp_file.write(decrypted_text)
+                        temp_path = Path(temp_file.name)
+                    yield str(temp_path)
+                    return
+
+            fallback_path = (config.ytdlp_cookies_file or "").strip()
+            if fallback_path and Path(fallback_path).is_file():
+                yield fallback_path
+            else:
+                yield None
+        finally:
+            if temp_path is not None:
+                temp_path.unlink(missing_ok=True)
+
+    async def get_video_title_for_user(self, url: str, user_id: Optional[str]) -> str:
+        async with self._resolved_youtube_cookie_file(user_id) as cookie_file_path:
+            return await self.video_service.get_video_title(url, cookie_file_path=cookie_file_path)
+
+    async def resolve_video_path_for_user(
+        self,
+        *,
+        url: str,
+        source_type: str,
+        user_id: Optional[str],
+        progress_callback: Optional[callable] = None,
+    ) -> Path:
+        async with self._resolved_youtube_cookie_file(user_id) as cookie_file_path:
+            return await self.video_service.resolve_video_path(
+                url=url,
+                source_type=source_type,
+                progress_callback=progress_callback,
+                cookie_file_path=cookie_file_path,
+            )
+
+    async def get_user_youtube_cookie_status(self, user_id: str) -> Dict[str, Any]:
+        if not await self.task_repo.user_exists(self.db, user_id):
+            raise ValueError(f"User {user_id} not found")
+        stored_record = await self.task_repo.get_user_youtube_cookies(self.db, user_id)
+        has_saved = bool(stored_record)
+        has_env_fallback = self._has_env_youtube_cookie_fallback()
+        return {
+            "has_youtube_cookies": has_saved,
+            "youtube_cookies_updated_at": stored_record.get("updated_at") if stored_record else None,
+            "youtube_cookies_filename": stored_record.get("filename") if stored_record else None,
+            "youtube_cookie_source": "saved" if has_saved else ("env" if has_env_fallback else "none"),
+            "has_youtube_cookie_env_fallback": has_env_fallback,
+        }
+
+    async def save_user_youtube_cookies(self, user_id: str, filename: str, cookies_text: str) -> Dict[str, Any]:
+        if not await self.task_repo.user_exists(self.db, user_id):
+            raise ValueError(f"User {user_id} not found")
+        encrypted_value = self.secret_service.encrypt(cookies_text)
+        await self.task_repo.set_user_youtube_cookies(self.db, user_id, encrypted_value, filename)
+        return await self.get_user_youtube_cookie_status(user_id)
+
+    async def clear_user_youtube_cookies(self, user_id: str) -> Dict[str, Any]:
+        if not await self.task_repo.user_exists(self.db, user_id):
+            raise ValueError(f"User {user_id} not found")
+        await self.task_repo.clear_user_youtube_cookies(self.db, user_id)
+        return await self.get_user_youtube_cookie_status(user_id)
+
     async def create_task_with_source(
         self,
         user_id: str,
@@ -221,7 +354,7 @@ class TaskService:
 
         if not title:
             if source_type == "youtube":
-                title = await self.video_service.get_video_title(url)
+                title = await self.get_video_title_for_user(url, user_id=user_id)
             else:
                 title = "Uploaded Video"
 
@@ -796,6 +929,86 @@ class TaskService:
         return merged
 
     @staticmethod
+    def _runtime_time_ms() -> int:
+        return int(time.time() * 1000)
+
+    @staticmethod
+    def _coerce_runtime_time_ms(value: Any) -> Optional[int]:
+        if isinstance(value, bool):
+            return None
+        if isinstance(value, (int, float)):
+            coerced = int(value)
+            return coerced if coerced >= 0 else None
+        return None
+
+    @staticmethod
+    def _coerce_runtime_seconds(value: Any) -> float:
+        if isinstance(value, bool):
+            return 0.0
+        if isinstance(value, (int, float)):
+            return max(0.0, float(value))
+        return 0.0
+
+    @classmethod
+    def _open_processing_runtime_window(
+        cls,
+        runtime_info: Optional[Dict[str, Any]],
+        *,
+        started_at_ms: int,
+        render_from_drafts: bool,
+    ) -> Dict[str, Any]:
+        existing = dict(runtime_info or {})
+        update: Dict[str, Any] = {
+            "active_processing_seconds": cls._coerce_runtime_seconds(existing.get("active_processing_seconds")),
+        }
+        if cls._coerce_runtime_time_ms(existing.get("processing_window_started_at_ms")) is None:
+            update["processing_window_started_at_ms"] = started_at_ms
+
+        if render_from_drafts:
+            if cls._coerce_runtime_time_ms(existing.get("review_started_at_ms")) is not None:
+                update["review_completed_at_ms"] = (
+                    cls._coerce_runtime_time_ms(existing.get("review_completed_at_ms")) or started_at_ms
+                )
+            if cls._coerce_runtime_time_ms(existing.get("render_started_at_ms")) is None:
+                update["render_started_at_ms"] = started_at_ms
+        else:
+            if cls._coerce_runtime_time_ms(existing.get("analysis_started_at_ms")) is None:
+                update["analysis_started_at_ms"] = started_at_ms
+        return update
+
+    @classmethod
+    def _close_processing_runtime_window(
+        cls,
+        runtime_info: Optional[Dict[str, Any]],
+        *,
+        ended_at_ms: int,
+        final_status: str,
+        render_from_drafts: bool,
+    ) -> Dict[str, Any]:
+        existing = dict(runtime_info or {})
+        started_at_ms = cls._coerce_runtime_time_ms(existing.get("processing_window_started_at_ms"))
+        total_active_seconds = cls._coerce_runtime_seconds(existing.get("active_processing_seconds"))
+        if started_at_ms is not None:
+            total_active_seconds += max(0.0, (ended_at_ms - started_at_ms) / 1000.0)
+
+        update: Dict[str, Any] = {
+            "active_processing_seconds": round(total_active_seconds, 3),
+            "processing_window_started_at_ms": None,
+        }
+
+        if final_status == "awaiting_review":
+            update["analysis_completed_at_ms"] = ended_at_ms
+            update["review_started_at_ms"] = ended_at_ms
+            update["review_completed_at_ms"] = None
+        elif final_status == "completed":
+            if render_from_drafts:
+                update["render_completed_at_ms"] = ended_at_ms
+            else:
+                update["analysis_completed_at_ms"] = ended_at_ms
+
+        return update
+
+    @staticmethod
     def _compute_retryable_stages(
         checkpoint: str,
         *,
@@ -836,6 +1049,17 @@ class TaskService:
             code = "storage"
         else:
             code = "system"
+        if code == "download" and (
+            "not a bot" in lowered
+            or "sign-in verification" in lowered
+            or "cookies.txt" in lowered
+            or "upload a valid youtube cookies" in lowered
+            or "shared server fallback" in lowered
+        ):
+            return (
+                code,
+                "YouTube requested sign-in verification. Upload a YouTube cookies.txt file in Settings > Transcription, then retry from download.",
+            )
         return code, FAILURE_HINTS[code]
 
     def _build_draft_selection_rationale(self, draft: Dict[str, Any]) -> Dict[str, Any]:
@@ -1013,7 +1237,11 @@ class TaskService:
             return
 
         try:
-            video_path = await self.video_service.resolve_video_path(url=source_url, source_type=source_type)
+            video_path = await self.resolve_video_path_for_user(
+                url=source_url,
+                source_type=source_type,
+                user_id=str(task.get("user_id") or ""),
+            )
         except Exception as error:
             logger.warning("Failed to resolve source video for task %s draft preview refresh: %s", task_id, error)
             return
@@ -1036,7 +1264,11 @@ class TaskService:
         if preview_path.exists() and not force_regenerate:
             return preview_path
 
-        video_path = await self.video_service.resolve_video_path(url=source_url, source_type=source_type)
+        video_path = await self.resolve_video_path_for_user(
+            url=source_url,
+            source_type=source_type,
+            user_id=str(task.get("user_id") or ""),
+        )
         await asyncio.to_thread(
             self._generate_preview_strip,
             video_path=video_path,
@@ -2001,7 +2233,11 @@ class TaskService:
         )
 
         await update_progress(15, "Preparing source media...")
-        video_path = await self.video_service.resolve_video_path(url=url, source_type=source_type)
+        video_path = await self.resolve_video_path_for_user(
+            url=url,
+            source_type=source_type,
+            user_id=user_id,
+        )
 
         rendered_segments: List[Dict[str, Any]] = []
         total_selected = len(selected_drafts)
@@ -2155,13 +2391,18 @@ class TaskService:
             review_before_render_enabled = bool((task_record or {}).get("review_before_render_enabled", True))
             has_drafts = bool(render_from_drafts)
             has_generated_clips = False
+            processing_started_at_ms = self._runtime_time_ms()
             current_runtime_info = self._merge_runtime_info(
                 (task_record or {}).get("runtime_info") if isinstance((task_record or {}).get("runtime_info"), dict) else {},
                 {
                     "runtime_scope": "task",
                     "render_from_drafts": bool(render_from_drafts),
-                    "processing_started_at": datetime.utcnow().isoformat(),
                     "current_stage": "setup",
+                    **self._open_processing_runtime_window(
+                        (task_record or {}).get("runtime_info") if isinstance((task_record or {}).get("runtime_info"), dict) else {},
+                        started_at_ms=processing_started_at_ms,
+                        render_from_drafts=bool(render_from_drafts),
+                    ),
                 },
             )
             current_checkpoint = "started"
@@ -2200,6 +2441,14 @@ class TaskService:
                         inferred_checkpoint = current_checkpoint
 
                 current_checkpoint = self._normalize_stage_checkpoint(inferred_checkpoint)
+                runtime_timing_update: Dict[str, Any] = {}
+                if status in {"awaiting_review", "completed", "error"}:
+                    runtime_timing_update = self._close_processing_runtime_window(
+                        current_runtime_info,
+                        ended_at_ms=self._runtime_time_ms(),
+                        final_status=status,
+                        render_from_drafts=bool(render_from_drafts),
+                    )
                 current_runtime_info = self._merge_runtime_info(
                     current_runtime_info,
                     {
@@ -2208,6 +2457,7 @@ class TaskService:
                         "current_stage": stage_name,
                         "latest_stage_metadata": normalized_metadata,
                         "stage_label": normalized_metadata.get("stage_label"),
+                        **runtime_timing_update,
                     },
                 )
                 await self.task_repo.update_task_status(
@@ -2349,12 +2599,23 @@ class TaskService:
         except Exception as e:
             logger.error(f"Error processing task {task_id}: {e}")
             failure_code, failure_hint = self._classify_failure(e)
+            failure_runtime_info = current_runtime_info if "current_runtime_info" in locals() else None
+            if isinstance(failure_runtime_info, dict):
+                failure_runtime_info = self._merge_runtime_info(
+                    failure_runtime_info,
+                    self._close_processing_runtime_window(
+                        failure_runtime_info,
+                        ended_at_ms=self._runtime_time_ms(),
+                        final_status="error",
+                        render_from_drafts=bool(render_from_drafts),
+                    ),
+                )
             await self.task_repo.update_task_status(
                 self.db,
                 task_id,
                 "error",
                 progress_message=str(e),
-                runtime_info=current_runtime_info if "current_runtime_info" in locals() else None,
+                runtime_info=failure_runtime_info,
                 failure_code=failure_code,
                 failure_hint=failure_hint,
                 stage_checkpoint="failed",
@@ -2597,7 +2858,11 @@ class TaskService:
             user_id,
             task_video_overrides=task_video_overrides,
         )
-        source_video_path = await self.video_service.resolve_video_path(url=source_url, source_type=source_type)
+        source_video_path = await self.resolve_video_path_for_user(
+            url=source_url,
+            source_type=source_type,
+            user_id=user_id,
+        )
         transcript_text = self._extract_text_from_transcript_cache(
             source_video_path,
             start_seconds,
@@ -2695,8 +2960,10 @@ class TaskService:
         if not await self.task_repo.user_exists(self.db, user_id):
             raise ValueError(f"User {user_id} not found")
         encrypted_key = await self.task_repo.get_user_encrypted_assembly_key(self.db, user_id)
+        youtube_cookie_status = await self.get_user_youtube_cookie_status(user_id)
         return {
             "has_assembly_key": bool(encrypted_key),
+            **youtube_cookie_status,
         }
 
     async def save_user_assembly_key(self, user_id: str, assembly_api_key: str) -> None:
@@ -2709,6 +2976,16 @@ class TaskService:
         if not await self.task_repo.user_exists(self.db, user_id):
             raise ValueError(f"User {user_id} not found")
         await self.task_repo.clear_user_encrypted_assembly_key(self.db, user_id)
+
+    async def save_user_youtube_cookies_from_upload(
+        self,
+        user_id: str,
+        *,
+        filename: str,
+        payload: bytes,
+    ) -> Dict[str, Any]:
+        sanitized_filename, cookies_text = self.validate_youtube_cookies_upload(filename, payload)
+        return await self.save_user_youtube_cookies(user_id, sanitized_filename, cookies_text)
 
     async def get_user_ai_settings(self, user_id: str) -> Dict[str, Any]:
         if not await self.task_repo.user_exists(self.db, user_id):

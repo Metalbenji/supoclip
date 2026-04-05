@@ -181,6 +181,7 @@ uvicorn src.main:app --reload --host 0.0.0.0 --port 8000
 - `OLLAMA_BASE_URL` - Ollama server URL when using `ollama:*` models
 - `DATABASE_URL` - PostgreSQL connection string
 - `TEMP_DIR` - Directory for temporary files (defaults to /tmp)
+- `YTDLP_COOKIES_FILE` - Optional Netscape cookies.txt file for YouTube videos that trigger sign-in/bot-check; Docker compose mounts `backend/.secrets` to `/app/.secrets`
 - `WHISPER_CACHE_HOST_DIR` - Docker host path for Whisper cache mount (default `./backend/.cache/whisper`)
 - `WORKER_MAX_JOBS` - Max concurrent jobs for primary worker
 - `WORKER_JOB_TIMEOUT_SECONDS` - Timeout per worker task (seconds)
