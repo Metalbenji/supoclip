@@ -173,6 +173,30 @@ async def init_db():
             text(
                 """
                 ALTER TABLE tasks
+                ADD COLUMN IF NOT EXISTS workflow_source VARCHAR(16) NOT NULL DEFAULT 'built_in'
+                """
+            )
+        )
+        await conn.execute(
+            text(
+                """
+                ALTER TABLE tasks
+                ADD COLUMN IF NOT EXISTS saved_workflow_id VARCHAR(36)
+                """
+            )
+        )
+        await conn.execute(
+            text(
+                """
+                ALTER TABLE tasks
+                ADD COLUMN IF NOT EXISTS workflow_name_snapshot VARCHAR(120)
+                """
+            )
+        )
+        await conn.execute(
+            text(
+                """
+                ALTER TABLE tasks
                 ADD COLUMN IF NOT EXISTS runtime_info_json JSONB
                 """
             )
@@ -296,6 +320,38 @@ async def init_db():
             text(
                 """
                 ALTER TABLE users
+                ADD COLUMN IF NOT EXISTS default_workflow_source VARCHAR(16) NOT NULL DEFAULT 'built_in'
+                """
+            )
+        )
+        await conn.execute(
+            text(
+                """
+                ALTER TABLE users
+                ADD COLUMN IF NOT EXISTS default_saved_workflow_id VARCHAR(36)
+                """
+            )
+        )
+        await conn.execute(
+            text(
+                """
+                ALTER TABLE users
+                ADD COLUMN IF NOT EXISTS default_review_auto_select_strong_face_enabled BOOLEAN NOT NULL DEFAULT false
+                """
+            )
+        )
+        await conn.execute(
+            text(
+                """
+                ALTER TABLE users
+                ADD COLUMN IF NOT EXISTS default_review_auto_select_strong_face_min_score_percent INTEGER NOT NULL DEFAULT 85
+                """
+            )
+        )
+        await conn.execute(
+            text(
+                """
+                ALTER TABLE users
                 ADD COLUMN IF NOT EXISTS default_framing_mode VARCHAR(32) NOT NULL DEFAULT 'auto'
                 """
             )
@@ -321,6 +377,14 @@ async def init_db():
                 """
                 ALTER TABLE users
                 ADD COLUMN IF NOT EXISTS default_face_anchor_profile VARCHAR(24) NOT NULL DEFAULT 'auto'
+                """
+            )
+        )
+        await conn.execute(
+            text(
+                """
+                ALTER TABLE users
+                ADD COLUMN IF NOT EXISTS default_output_aspect_ratio VARCHAR(12) NOT NULL DEFAULT '9:16'
                 """
             )
         )
@@ -433,6 +497,25 @@ async def init_db():
                     IF EXISTS (
                         SELECT 1
                         FROM pg_constraint
+                        WHERE conname = 'check_users_default_output_aspect_ratio'
+                    ) THEN
+                        ALTER TABLE users DROP CONSTRAINT check_users_default_output_aspect_ratio;
+                    END IF;
+                    ALTER TABLE users
+                    ADD CONSTRAINT check_users_default_output_aspect_ratio
+                    CHECK (default_output_aspect_ratio IN ('auto', '1:1', '21:9', '16:9', '9:16', '4:3', '4:5', '5:4', '3:4', '3:2', '2:3'));
+                END $$;
+                """
+            )
+        )
+        await conn.execute(
+            text(
+                """
+                DO $$
+                BEGIN
+                    IF EXISTS (
+                        SELECT 1
+                        FROM pg_constraint
                         WHERE conname = 'check_users_default_face_anchor_profile'
                     ) THEN
                         ALTER TABLE users DROP CONSTRAINT check_users_default_face_anchor_profile;
@@ -458,7 +541,7 @@ async def init_db():
                     END IF;
                     ALTER TABLE users
                     ADD CONSTRAINT check_users_default_processing_profile
-                    CHECK (default_processing_profile IN ('fast_draft', 'balanced', 'best_quality', 'stream_layout'));
+                    CHECK (default_processing_profile IN ('fast_draft', 'balanced', 'best_quality', 'stream_layout', 'custom'));
                 END $$;
                 """
             )
@@ -477,7 +560,28 @@ async def init_db():
                     END IF;
                     ALTER TABLE tasks
                     ADD CONSTRAINT check_tasks_processing_profile
-                    CHECK (processing_profile IN ('fast_draft', 'balanced', 'best_quality', 'stream_layout'));
+                    CHECK (processing_profile IN ('fast_draft', 'balanced', 'best_quality', 'stream_layout', 'custom'));
+                END $$;
+                """
+            )
+        )
+        await conn.execute(
+            text(
+                """
+                DO $$
+                BEGIN
+                    IF EXISTS (
+                        SELECT 1
+                        FROM pg_constraint
+                        WHERE conname = 'check_users_default_review_auto_select_strong_face_min_score_percent'
+                    ) THEN
+                        ALTER TABLE users DROP CONSTRAINT check_users_default_review_auto_select_strong_face_min_score_percent;
+                    END IF;
+                    ALTER TABLE users
+                    ADD CONSTRAINT check_users_default_review_auto_select_strong_face_min_score_percent
+                    CHECK (
+                        default_review_auto_select_strong_face_min_score_percent BETWEEN 0 AND 100
+                    );
                 END $$;
                 """
             )
@@ -908,6 +1012,70 @@ async def init_db():
         await conn.execute(
             text(
                 """
+                CREATE TABLE IF NOT EXISTS saved_workflows (
+                    id VARCHAR(36) PRIMARY KEY,
+                    user_id VARCHAR(36) NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                    name VARCHAR(120) NOT NULL,
+                    review_before_render_enabled BOOLEAN NOT NULL DEFAULT true,
+                    timeline_editor_enabled BOOLEAN NOT NULL DEFAULT true,
+                    transitions_enabled BOOLEAN NOT NULL DEFAULT false,
+                    transcription_provider VARCHAR(20) NOT NULL DEFAULT 'local',
+                    whisper_model_size VARCHAR(20) NOT NULL DEFAULT 'medium',
+                    default_framing_mode VARCHAR(32) NOT NULL DEFAULT 'auto',
+                    face_detection_mode VARCHAR(20) NOT NULL DEFAULT 'balanced',
+                    fallback_crop_position VARCHAR(20) NOT NULL DEFAULT 'center',
+                    face_anchor_profile VARCHAR(24) NOT NULL DEFAULT 'auto',
+                    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+                )
+                """
+            )
+        )
+        await conn.execute(text("""CREATE INDEX IF NOT EXISTS idx_saved_workflows_user_id ON saved_workflows(user_id)"""))
+        await conn.execute(
+            text(
+                """CREATE UNIQUE INDEX IF NOT EXISTS idx_saved_workflows_user_name_lower ON saved_workflows(user_id, LOWER(name))"""
+            )
+        )
+        await conn.execute(
+            text(
+                """
+                DO $$
+                BEGIN
+                    IF NOT EXISTS (
+                        SELECT 1
+                        FROM pg_constraint
+                        WHERE conname = 'users_default_saved_workflow_id_fkey'
+                    ) THEN
+                        ALTER TABLE users
+                        ADD CONSTRAINT users_default_saved_workflow_id_fkey
+                        FOREIGN KEY (default_saved_workflow_id) REFERENCES saved_workflows(id) ON DELETE SET NULL;
+                    END IF;
+                END $$;
+                """
+            )
+        )
+        await conn.execute(
+            text(
+                """
+                DO $$
+                BEGIN
+                    IF NOT EXISTS (
+                        SELECT 1
+                        FROM pg_constraint
+                        WHERE conname = 'tasks_saved_workflow_id_fkey'
+                    ) THEN
+                        ALTER TABLE tasks
+                        ADD CONSTRAINT tasks_saved_workflow_id_fkey
+                        FOREIGN KEY (saved_workflow_id) REFERENCES saved_workflows(id) ON DELETE SET NULL;
+                    END IF;
+                END $$;
+                """
+            )
+        )
+        await conn.execute(
+            text(
+                """
                 DO $$
                 BEGIN
                     IF EXISTS (
@@ -932,6 +1100,25 @@ async def init_db():
                     IF EXISTS (
                         SELECT 1
                         FROM pg_constraint
+                        WHERE conname = 'check_users_default_workflow_source'
+                    ) THEN
+                        ALTER TABLE users DROP CONSTRAINT check_users_default_workflow_source;
+                    END IF;
+                    ALTER TABLE users
+                    ADD CONSTRAINT check_users_default_workflow_source
+                    CHECK (default_workflow_source IN ('built_in', 'saved', 'custom'));
+                END $$;
+                """
+            )
+        )
+        await conn.execute(
+            text(
+                """
+                DO $$
+                BEGIN
+                    IF EXISTS (
+                        SELECT 1
+                        FROM pg_constraint
                         WHERE conname = 'check_users_default_ollama_timeout_seconds'
                     ) THEN
                         ALTER TABLE users DROP CONSTRAINT check_users_default_ollama_timeout_seconds;
@@ -941,6 +1128,141 @@ async def init_db():
                     CHECK (
                         default_ollama_timeout_seconds IS NULL
                         OR default_ollama_timeout_seconds BETWEEN 1 AND 600
+                    );
+                END $$;
+                """
+            )
+        )
+        await conn.execute(
+            text(
+                """
+                DO $$
+                BEGIN
+                    IF EXISTS (
+                        SELECT 1
+                        FROM pg_constraint
+                        WHERE conname = 'check_tasks_workflow_source'
+                    ) THEN
+                        ALTER TABLE tasks DROP CONSTRAINT check_tasks_workflow_source;
+                    END IF;
+                    ALTER TABLE tasks
+                    ADD CONSTRAINT check_tasks_workflow_source
+                    CHECK (workflow_source IN ('built_in', 'saved', 'custom'));
+                END $$;
+                """
+            )
+        )
+        await conn.execute(
+            text(
+                """
+                DO $$
+                BEGIN
+                    IF EXISTS (
+                        SELECT 1
+                        FROM pg_constraint
+                        WHERE conname = 'check_saved_workflows_transcription_provider'
+                    ) THEN
+                        ALTER TABLE saved_workflows DROP CONSTRAINT check_saved_workflows_transcription_provider;
+                    END IF;
+                    ALTER TABLE saved_workflows
+                    ADD CONSTRAINT check_saved_workflows_transcription_provider
+                    CHECK (transcription_provider IN ('local', 'assemblyai'));
+                END $$;
+                """
+            )
+        )
+        await conn.execute(
+            text(
+                """
+                DO $$
+                BEGIN
+                    IF EXISTS (
+                        SELECT 1
+                        FROM pg_constraint
+                        WHERE conname = 'check_saved_workflows_whisper_model_size'
+                    ) THEN
+                        ALTER TABLE saved_workflows DROP CONSTRAINT check_saved_workflows_whisper_model_size;
+                    END IF;
+                    ALTER TABLE saved_workflows
+                    ADD CONSTRAINT check_saved_workflows_whisper_model_size
+                    CHECK (whisper_model_size IN ('tiny', 'base', 'small', 'medium', 'large', 'turbo'));
+                END $$;
+                """
+            )
+        )
+        await conn.execute(
+            text(
+                """
+                DO $$
+                BEGIN
+                    IF EXISTS (
+                        SELECT 1
+                        FROM pg_constraint
+                        WHERE conname = 'check_saved_workflows_default_framing_mode'
+                    ) THEN
+                        ALTER TABLE saved_workflows DROP CONSTRAINT check_saved_workflows_default_framing_mode;
+                    END IF;
+                    ALTER TABLE saved_workflows
+                    ADD CONSTRAINT check_saved_workflows_default_framing_mode
+                    CHECK (default_framing_mode IN ('auto', 'prefer_face', 'fixed_position'));
+                END $$;
+                """
+            )
+        )
+        await conn.execute(
+            text(
+                """
+                DO $$
+                BEGIN
+                    IF EXISTS (
+                        SELECT 1
+                        FROM pg_constraint
+                        WHERE conname = 'check_saved_workflows_face_detection_mode'
+                    ) THEN
+                        ALTER TABLE saved_workflows DROP CONSTRAINT check_saved_workflows_face_detection_mode;
+                    END IF;
+                    ALTER TABLE saved_workflows
+                    ADD CONSTRAINT check_saved_workflows_face_detection_mode
+                    CHECK (face_detection_mode IN ('balanced', 'more_faces'));
+                END $$;
+                """
+            )
+        )
+        await conn.execute(
+            text(
+                """
+                DO $$
+                BEGIN
+                    IF EXISTS (
+                        SELECT 1
+                        FROM pg_constraint
+                        WHERE conname = 'check_saved_workflows_fallback_crop_position'
+                    ) THEN
+                        ALTER TABLE saved_workflows DROP CONSTRAINT check_saved_workflows_fallback_crop_position;
+                    END IF;
+                    ALTER TABLE saved_workflows
+                    ADD CONSTRAINT check_saved_workflows_fallback_crop_position
+                    CHECK (fallback_crop_position IN ('center', 'left_center', 'right_center'));
+                END $$;
+                """
+            )
+        )
+        await conn.execute(
+            text(
+                """
+                DO $$
+                BEGIN
+                    IF EXISTS (
+                        SELECT 1
+                        FROM pg_constraint
+                        WHERE conname = 'check_saved_workflows_face_anchor_profile'
+                    ) THEN
+                        ALTER TABLE saved_workflows DROP CONSTRAINT check_saved_workflows_face_anchor_profile;
+                    END IF;
+                    ALTER TABLE saved_workflows
+                    ADD CONSTRAINT check_saved_workflows_face_anchor_profile
+                    CHECK (
+                        face_anchor_profile IN ('auto', 'left_only', 'left_or_center', 'center_only', 'right_or_center', 'right_only')
                     );
                 END $$;
                 """

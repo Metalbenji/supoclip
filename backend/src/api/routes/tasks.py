@@ -60,7 +60,9 @@ MAX_TASK_TIMEOUT_SECONDS = 86400
 MIN_REVIEW_AUTO_SELECT_MIN_SCORE_PERCENT = 0
 MAX_REVIEW_AUTO_SELECT_MIN_SCORE_PERCENT = 100
 SUPPORTED_FRAMING_MODE_OVERRIDES = {"auto", "prefer_face", "fixed_position"}
-SUPPORTED_PROCESSING_PROFILES = {"fast_draft", "balanced", "best_quality", "stream_layout"}
+SUPPORTED_OUTPUT_ASPECT_RATIOS = {"auto", "1:1", "21:9", "16:9", "9:16", "4:3", "4:5", "5:4", "3:4", "3:2", "2:3"}
+SUPPORTED_PROCESSING_PROFILES = {"fast_draft", "balanced", "best_quality", "stream_layout", "custom"}
+SUPPORTED_WORKFLOW_SOURCES = {"built_in", "saved", "custom"}
 DRAFT_UPDATE_FIELDS = {"id", "start_time", "end_time", "edited_text", "is_selected", "framing_mode_override"}
 DRAFT_CREATE_FIELDS = {"start_time", "end_time", "edited_text", "is_selected", "framing_mode_override"}
 SUBTITLE_STYLE_FIELDS = set(DEFAULT_SUBTITLE_STYLE.keys())
@@ -124,6 +126,24 @@ def _resolve_processing_profile(raw: object) -> str:
     normalized = raw.strip().lower()
     if normalized not in SUPPORTED_PROCESSING_PROFILES:
         return "balanced"
+    return normalized
+
+
+def _resolve_output_aspect_ratio(raw: object) -> str:
+    if not isinstance(raw, str):
+        return "9:16"
+    normalized = raw.strip().lower()
+    if normalized not in SUPPORTED_OUTPUT_ASPECT_RATIOS:
+        return "9:16"
+    return normalized
+
+
+def _resolve_workflow_source(raw: object) -> str:
+    if not isinstance(raw, str):
+        return "built_in"
+    normalized = raw.strip().lower()
+    if normalized not in SUPPORTED_WORKFLOW_SOURCES:
+        return "built_in"
     return normalized
 
 
@@ -1406,12 +1426,29 @@ async def create_task(request: Request, db: AsyncSession = Depends(get_db)):
     video_options = data.get("video_options", {})
     if not isinstance(video_options, dict):
         video_options = {}
+    output_aspect_ratio = _resolve_output_aspect_ratio(video_options.get("output_aspect_ratio"))
     source_options = _resolve_source_options(data.get("source_options"))
+    has_review_options_override = "review_options" in data
     review_options = _resolve_review_options(data.get("review_options"))
     ai_options = data.get("ai_options", {})
     if not isinstance(ai_options, dict):
         ai_options = {}
     processing_profile = _resolve_processing_profile(data.get("processing_profile"))
+    workflow_source = _resolve_workflow_source(data.get("workflow_source"))
+    saved_workflow_id_raw = data.get("saved_workflow_id")
+    if saved_workflow_id_raw is None:
+        saved_workflow_id = None
+    elif isinstance(saved_workflow_id_raw, str):
+        saved_workflow_id = saved_workflow_id_raw.strip() or None
+    else:
+        raise HTTPException(status_code=400, detail="saved_workflow_id must be a string or null")
+    workflow_name_snapshot_raw = data.get("workflow_name_snapshot")
+    if workflow_name_snapshot_raw is None:
+        workflow_name_snapshot = None
+    elif isinstance(workflow_name_snapshot_raw, str):
+        workflow_name_snapshot = workflow_name_snapshot_raw.strip() or None
+    else:
+        raise HTTPException(status_code=400, detail="workflow_name_snapshot must be a string or null")
     ai_provider = _resolve_ai_provider(ai_options.get("provider", _default_ai_provider()))
     ai_routing_mode = (
         _resolve_zai_routing_mode(ai_options.get("routing_mode"))
@@ -1450,6 +1487,18 @@ async def create_task(request: Request, db: AsyncSession = Depends(get_db)):
             db,
             user_id,
         )
+    if not has_review_options_override:
+        task_service_for_defaults = TaskService(db)
+        user_video_preferences = await task_service_for_defaults.task_repo.get_user_default_video_preferences(db, user_id)
+        if (
+            review_before_render_enabled
+            and bool(user_video_preferences.get("default_review_auto_select_strong_face_enabled"))
+        ):
+            review_options = {
+                "auto_select_strong_face_min_score_percent": int(
+                    user_video_preferences.get("default_review_auto_select_strong_face_min_score_percent") or 85
+                ),
+            }
 
     if not raw_source or not raw_source.get("url"):
         raise HTTPException(status_code=400, detail="Source URL is required")
@@ -1533,6 +1582,10 @@ async def create_task(request: Request, db: AsyncSession = Depends(get_db)):
             "ai_model": ai_model,
             "ai_routing_mode": resolved_zai_routing_mode,
             "processing_profile": processing_profile,
+            "workflow_source": workflow_source,
+            "saved_workflow_id": saved_workflow_id,
+            "workflow_name_snapshot": workflow_name_snapshot,
+            "output_aspect_ratio": output_aspect_ratio,
             "source_options": source_options,
             "review_options": review_options,
             "video_preferences_override": {
@@ -1540,6 +1593,7 @@ async def create_task(request: Request, db: AsyncSession = Depends(get_db)):
                 "face_detection_mode": video_options.get("face_detection_mode"),
                 "fallback_crop_position": video_options.get("fallback_crop_position"),
                 "face_anchor_profile": video_options.get("face_anchor_profile"),
+                "output_aspect_ratio": output_aspect_ratio,
             },
             "latest_stage_metadata": {},
         }
@@ -1560,6 +1614,9 @@ async def create_task(request: Request, db: AsyncSession = Depends(get_db)):
             review_before_render_enabled=review_before_render_enabled,
             timeline_editor_enabled=timeline_editor_enabled,
             processing_profile=processing_profile,
+            workflow_source=workflow_source,
+            saved_workflow_id=saved_workflow_id,
+            workflow_name_snapshot=workflow_name_snapshot,
             runtime_info_json=runtime_info,
         )
 
@@ -1610,6 +1667,10 @@ async def create_task(request: Request, db: AsyncSession = Depends(get_db)):
             "review_before_render_enabled": review_before_render_enabled,
             "timeline_editor_enabled": timeline_editor_enabled,
             "processing_profile": processing_profile,
+            "workflow_source": workflow_source,
+            "saved_workflow_id": saved_workflow_id,
+            "workflow_name_snapshot": workflow_name_snapshot,
+            "output_aspect_ratio": output_aspect_ratio,
             "message": "Task created and queued for processing"
         }
 

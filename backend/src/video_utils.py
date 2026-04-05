@@ -55,6 +55,19 @@ _mediapipe_detector_tls = threading.local()
 SUPPORTED_FRAMING_MODE_OVERRIDES = ("auto", "prefer_face", "fixed_position")
 SUPPORTED_FACE_DETECTION_MODES = ("balanced", "more_faces")
 SUPPORTED_FALLBACK_CROP_POSITIONS = ("center", "left_center", "right_center")
+SUPPORTED_OUTPUT_ASPECT_RATIOS = ("auto", "1:1", "21:9", "16:9", "9:16", "4:3", "4:5", "5:4", "3:4", "3:2", "2:3")
+OUTPUT_ASPECT_RATIO_VALUES: Dict[str, float] = {
+    "1:1": 1.0,
+    "21:9": 21 / 9,
+    "16:9": 16 / 9,
+    "9:16": 9 / 16,
+    "4:3": 4 / 3,
+    "4:5": 4 / 5,
+    "5:4": 5 / 4,
+    "3:4": 3 / 4,
+    "3:2": 3 / 2,
+    "2:3": 2 / 3,
+}
 SUPPORTED_FACE_ANCHOR_PROFILES = (
     "auto",
     "left_only",
@@ -102,6 +115,36 @@ def _normalize_face_anchor_profile(value: Any) -> str:
     if normalized not in SUPPORTED_FACE_ANCHOR_PROFILES:
         return "auto"
     return normalized
+
+
+def _normalize_output_aspect_ratio(value: Any) -> str:
+    normalized = str(value or "9:16").strip().lower()
+    if normalized not in SUPPORTED_OUTPUT_ASPECT_RATIOS:
+        return "9:16"
+    return normalized
+
+
+def _resolve_target_aspect_ratio(
+    original_width: int,
+    original_height: int,
+    *,
+    output_aspect_ratio: str = "9:16",
+    target_ratio: Optional[float] = None,
+) -> float:
+    if target_ratio is not None:
+        try:
+            resolved = float(target_ratio)
+            if resolved > 0:
+                return resolved
+        except (TypeError, ValueError):
+            pass
+
+    normalized_ratio = _normalize_output_aspect_ratio(output_aspect_ratio)
+    if normalized_ratio == "auto":
+        safe_height = max(1, int(original_height or 1))
+        safe_width = max(1, int(original_width or 1))
+        return safe_width / safe_height
+    return float(OUTPUT_ASPECT_RATIO_VALUES.get(normalized_ratio) or (9 / 16))
 
 
 def _list_available_ffmpeg_encoders() -> set[str]:
@@ -1235,14 +1278,26 @@ def round_to_even(value: int) -> int:
 def _get_target_crop_dimensions(
     original_width: int,
     original_height: int,
-    target_ratio: float = 9 / 16,
+    target_ratio: Optional[float] = None,
+    output_aspect_ratio: str = "9:16",
 ) -> Tuple[int, int]:
-    if original_width / original_height > target_ratio:
-        new_width = round_to_even(int(original_height * target_ratio))
+    resolved_target_ratio = _resolve_target_aspect_ratio(
+        original_width,
+        original_height,
+        output_aspect_ratio=output_aspect_ratio,
+        target_ratio=target_ratio,
+    )
+    original_ratio = original_width / max(1, original_height)
+
+    if abs(original_ratio - resolved_target_ratio) < 1e-4:
+        return round_to_even(original_width), round_to_even(original_height)
+
+    if original_ratio > resolved_target_ratio:
+        new_width = round_to_even(int(original_height * resolved_target_ratio))
         new_height = round_to_even(original_height)
     else:
         new_width = round_to_even(original_width)
-        new_height = round_to_even(int(original_width / target_ratio))
+        new_height = round_to_even(int(original_width / resolved_target_ratio))
     return new_width, new_height
 
 
@@ -2121,13 +2176,26 @@ def analyze_clip_framing(
     video_clip: VideoFileClip,
     start_time: float,
     end_time: float,
-    target_ratio: float = 9 / 16,
+    target_ratio: Optional[float] = None,
     face_detection_mode: str = "balanced",
     fallback_crop_position: str = "center",
     face_anchor_profile: str = "auto",
+    output_aspect_ratio: str = "9:16",
 ) -> Dict[str, Any]:
     original_width, original_height = video_clip.size
-    crop_width, crop_height = _get_target_crop_dimensions(original_width, original_height, target_ratio)
+    normalized_output_aspect_ratio = _normalize_output_aspect_ratio(output_aspect_ratio)
+    resolved_target_ratio = _resolve_target_aspect_ratio(
+        original_width,
+        original_height,
+        output_aspect_ratio=normalized_output_aspect_ratio,
+        target_ratio=target_ratio,
+    )
+    crop_width, crop_height = _get_target_crop_dimensions(
+        original_width,
+        original_height,
+        target_ratio=resolved_target_ratio,
+        output_aspect_ratio=normalized_output_aspect_ratio,
+    )
     normalized_face_detection_mode = _normalize_face_detection_mode(face_detection_mode)
     normalized_fallback_crop_position = _normalize_fallback_crop_position(fallback_crop_position)
     normalized_face_anchor_profile = _normalize_face_anchor_profile(face_anchor_profile)
@@ -2173,6 +2241,8 @@ def analyze_clip_framing(
         "face_detection_mode": str(summary.get("face_detection_mode") or normalized_face_detection_mode),
         "fallback_crop_position": str(summary.get("fallback_crop_position") or normalized_fallback_crop_position),
         "face_anchor_profile": str(summary.get("face_anchor_profile") or normalized_face_anchor_profile),
+        "output_aspect_ratio": normalized_output_aspect_ratio,
+        "target_aspect_ratio": float(resolved_target_ratio),
         "tracking_consistency_rate": float(summary.get("tracking_consistency_rate") or 0.0),
         "tracking_rejected_rate": float(summary.get("tracking_rejected_rate") or 0.0),
         "tracking_x_spread": float(summary.get("tracking_x_spread") or 0.0),
@@ -2198,6 +2268,7 @@ def analyze_single_segment_framing(
     face_detection_mode: str = "balanced",
     fallback_crop_position: str = "center",
     face_anchor_profile: str = "auto",
+    output_aspect_ratio: str = "9:16",
 ) -> Dict[str, Any]:
     start_seconds = parse_timestamp_to_seconds(start_time)
     end_seconds = parse_timestamp_to_seconds(end_time)
@@ -2211,6 +2282,7 @@ def analyze_single_segment_framing(
             face_detection_mode=face_detection_mode,
             fallback_crop_position=fallback_crop_position,
             face_anchor_profile=face_anchor_profile,
+            output_aspect_ratio=output_aspect_ratio,
         )
     metadata = dict(analysis.get("framing_metadata") or {})
     metadata["crop_width"] = int(analysis.get("crop_width") or 0)
@@ -2226,6 +2298,7 @@ def analyze_segment_framing_batch(
     face_detection_mode: str = "balanced",
     fallback_crop_position: str = "center",
     face_anchor_profile: str = "auto",
+    output_aspect_ratio: str = "9:16",
 ) -> List[Dict[str, Any]]:
     video_path = Path(video_path)
     results: List[Dict[str, Any]] = []
@@ -2249,6 +2322,10 @@ def analyze_segment_framing_batch(
                     face_anchor_profile=(
                         segment.get("face_anchor_profile")
                         or face_anchor_profile
+                    ),
+                    output_aspect_ratio=(
+                        segment.get("output_aspect_ratio")
+                        or output_aspect_ratio
                     ),
                 )
                 metadata = dict(analysis.get("framing_metadata") or {})
@@ -3026,10 +3103,11 @@ def create_optimized_clip(
     subtitle_word_timings: Optional[List[Dict[str, Any]]] = None,
     framing_mode_override: str = "auto",
     framing_metadata: Optional[Dict[str, Any]] = None,
+    output_aspect_ratio: str = "9:16",
     error_collector: Optional[List[str]] = None,
     render_details_sink: Optional[Dict[str, Any]] = None,
 ) -> bool:
-    """Create optimized 9:16 clip with word-timed subtitles."""
+    """Create an optimized clip with word-timed subtitles."""
     try:
         video_path = Path(video_path)
         output_path = Path(output_path)
@@ -3056,7 +3134,12 @@ def create_optimized_clip(
         if framing_mode not in SUPPORTED_FRAMING_MODE_OVERRIDES:
             framing_mode = "auto"
 
-        new_width, new_height = _get_target_crop_dimensions(video.w, video.h, 9 / 16)
+        normalized_output_aspect_ratio = _normalize_output_aspect_ratio(output_aspect_ratio)
+        new_width, new_height = _get_target_crop_dimensions(
+            video.w,
+            video.h,
+            output_aspect_ratio=normalized_output_aspect_ratio,
+        )
         effective_framing_metadata = dict(framing_metadata or {})
         fallback_crop_position = _normalize_fallback_crop_position(
             effective_framing_metadata.get("fallback_crop_position")
@@ -3111,10 +3194,10 @@ def create_optimized_clip(
                     video,
                     start_time,
                     end_time,
-                    target_ratio=9 / 16,
                     face_detection_mode=face_detection_mode,
                     fallback_crop_position=fallback_crop_position,
                     face_anchor_profile=face_anchor_profile,
+                    output_aspect_ratio=normalized_output_aspect_ratio,
                 )
                 effective_framing_metadata = dict(framing_analysis.get("framing_metadata") or effective_framing_metadata)
                 effective_framing_metadata["crop_width"] = int(framing_analysis.get("crop_width") or new_width)
@@ -3257,6 +3340,7 @@ def create_optimized_clip(
                     "encoder_profile": selected_encoder_profile,
                     "framing_analysis_source": framing_analysis_source,
                     "framing_metadata_reused": framing_analysis_source == "persisted_metadata",
+                    "output_aspect_ratio": normalized_output_aspect_ratio,
                 }
             )
         logger.info(f"Successfully created clip: {output_path}")
@@ -3276,6 +3360,7 @@ def create_clips_from_segments(
     font_size: int = 24,
     font_color: str = "#FFFFFF",
     subtitle_style: Optional[Dict[str, Any]] = None,
+    output_aspect_ratio: str = "9:16",
     diagnostics: Optional[Dict[str, Any]] = None,
     progress_callback: Optional[Callable[[Dict[str, Any]], None]] = None,
     filename_prefix: Optional[str] = None,
@@ -3393,6 +3478,7 @@ def create_clips_from_segments(
                     if isinstance(segment.get("framing_metadata"), dict)
                     else None
                 ),
+                output_aspect_ratio=str(segment.get("output_aspect_ratio") or output_aspect_ratio),
                 error_collector=clip_errors,
                 render_details_sink=render_details,
             )
@@ -3500,6 +3586,7 @@ def create_clips_from_segments(
                 "failed_segments": len(clip_failures),
                 "failure_samples": clip_failures[:3],
                 "parallel_workers": parallel_workers,
+                "output_aspect_ratio": _normalize_output_aspect_ratio(output_aspect_ratio),
                 "encoder_backend_counts": encoder_backend_counts,
                 "encoder_profile_counts": encoder_profile_counts,
                 "framing_analysis_source_counts": framing_analysis_source_counts,
@@ -3586,6 +3673,7 @@ def create_clips_with_transitions(
     font_size: int = 24,
     font_color: str = "#FFFFFF",
     subtitle_style: Optional[Dict[str, Any]] = None,
+    output_aspect_ratio: str = "9:16",
     diagnostics: Optional[Dict[str, Any]] = None,
     progress_callback: Optional[Callable[[Dict[str, Any]], None]] = None,
     filename_prefix: Optional[str] = None,
@@ -3606,6 +3694,7 @@ def create_clips_with_transitions(
         font_size,
         font_color,
         subtitle_style,
+        output_aspect_ratio,
         diagnostics=render_diagnostics,
         progress_callback=progress_callback,
         filename_prefix=filename_prefix,

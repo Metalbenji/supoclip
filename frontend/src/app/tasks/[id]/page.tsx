@@ -136,6 +136,9 @@ interface TaskDetails {
   review_before_render_enabled?: boolean;
   timeline_editor_enabled?: boolean;
   processing_profile?: string;
+  workflow_source?: string;
+  saved_workflow_id?: string | null;
+  workflow_name_snapshot?: string | null;
   runtime_info?: Record<string, unknown>;
   failure_code?: string | null;
   failure_hint?: string | null;
@@ -216,6 +219,19 @@ function formatFallbackCropPosition(value: unknown): string {
     return "right-center";
   }
   return "center";
+}
+
+function getTaskWorkflowLabel(task: TaskDetails): string | null {
+  if (typeof task.workflow_name_snapshot === "string" && task.workflow_name_snapshot.trim().length > 0) {
+    return task.workflow_name_snapshot.trim();
+  }
+  if (typeof task.processing_profile === "string" && task.processing_profile.trim().length > 0) {
+    return task.processing_profile.replace(/_/g, " ");
+  }
+  if (task.workflow_source === "custom") {
+    return "Custom";
+  }
+  return null;
 }
 
 function getFramingStrength(metadata?: DraftClip["framing_metadata_json"]): "strong" | "weak" | "none" {
@@ -508,6 +524,7 @@ export default function TaskPage() {
   const progressMessageRef = useRef(progressMessage);
   const sourceTypeRef = useRef<string | undefined>(task?.source_type);
   const apiUrl = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
+  const workflowLabel = useMemo(() => (task ? getTaskWorkflowLabel(task) : null), [task]);
   const taskId = Array.isArray(params.id) ? params.id[0] : params.id;
   const userId = session?.user?.id;
   const sortDraftClips = useCallback((drafts: DraftClip[]) => {
@@ -1668,9 +1685,9 @@ export default function TaskPage() {
             <CardContent className="space-y-3 p-4">
               <div className="flex items-center justify-between gap-3">
                 <h3 className="text-sm font-semibold text-slate-900 dark:text-slate-100">Task Diagnostics</h3>
-                {task.processing_profile ? (
+                {workflowLabel ? (
                   <Badge variant="outline" className="bg-white dark:bg-slate-950">
-                    Profile {task.processing_profile.replace(/_/g, " ")}
+                    Workflow {workflowLabel}
                   </Badge>
                 ) : null}
               </div>

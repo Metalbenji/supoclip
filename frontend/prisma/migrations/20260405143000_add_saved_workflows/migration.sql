@@ -1,0 +1,145 @@
+ALTER TABLE "users"
+ADD COLUMN IF NOT EXISTS "default_workflow_source" VARCHAR(16) DEFAULT 'built_in';
+
+ALTER TABLE "users"
+ADD COLUMN IF NOT EXISTS "default_saved_workflow_id" VARCHAR(36);
+
+ALTER TABLE "tasks"
+ADD COLUMN IF NOT EXISTS "processing_profile" VARCHAR(32) DEFAULT 'balanced';
+
+ALTER TABLE "tasks"
+ADD COLUMN IF NOT EXISTS "workflow_source" VARCHAR(16) DEFAULT 'built_in';
+
+ALTER TABLE "tasks"
+ADD COLUMN IF NOT EXISTS "saved_workflow_id" VARCHAR(36);
+
+ALTER TABLE "tasks"
+ADD COLUMN IF NOT EXISTS "workflow_name_snapshot" VARCHAR(120);
+
+CREATE TABLE IF NOT EXISTS "saved_workflows" (
+  "id" VARCHAR(36) NOT NULL,
+  "user_id" VARCHAR(36) NOT NULL,
+  "name" VARCHAR(120) NOT NULL,
+  "review_before_render_enabled" BOOLEAN NOT NULL DEFAULT true,
+  "timeline_editor_enabled" BOOLEAN NOT NULL DEFAULT true,
+  "transitions_enabled" BOOLEAN NOT NULL DEFAULT false,
+  "transcription_provider" VARCHAR(20) NOT NULL DEFAULT 'local',
+  "whisper_model_size" VARCHAR(20) NOT NULL DEFAULT 'medium',
+  "default_framing_mode" VARCHAR(32) NOT NULL DEFAULT 'auto',
+  "face_detection_mode" VARCHAR(20) NOT NULL DEFAULT 'balanced',
+  "fallback_crop_position" VARCHAR(20) NOT NULL DEFAULT 'center',
+  "face_anchor_profile" VARCHAR(24) NOT NULL DEFAULT 'auto',
+  "created_at" TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  "updated_at" TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  CONSTRAINT "saved_workflows_pkey" PRIMARY KEY ("id"),
+  CONSTRAINT "saved_workflows_user_id_fkey" FOREIGN KEY ("user_id") REFERENCES "users"("id") ON DELETE CASCADE ON UPDATE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS "saved_workflows_user_id_idx" ON "saved_workflows"("user_id");
+CREATE UNIQUE INDEX IF NOT EXISTS "saved_workflows_user_id_name_lower_key" ON "saved_workflows"("user_id", LOWER("name"));
+
+DO $$
+BEGIN
+  IF EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'check_users_default_workflow_source') THEN
+    ALTER TABLE "users" DROP CONSTRAINT check_users_default_workflow_source;
+  END IF;
+END $$;
+
+ALTER TABLE "users"
+ADD CONSTRAINT check_users_default_workflow_source
+CHECK ("default_workflow_source" IN ('built_in', 'saved', 'custom'));
+
+DO $$
+BEGIN
+  IF EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'check_tasks_workflow_source') THEN
+    ALTER TABLE "tasks" DROP CONSTRAINT check_tasks_workflow_source;
+  END IF;
+END $$;
+
+ALTER TABLE "tasks"
+ADD CONSTRAINT check_tasks_workflow_source
+CHECK ("workflow_source" IN ('built_in', 'saved', 'custom'));
+
+DO $$
+BEGIN
+  IF EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'check_saved_workflows_transcription_provider') THEN
+    ALTER TABLE "saved_workflows" DROP CONSTRAINT check_saved_workflows_transcription_provider;
+  END IF;
+END $$;
+
+ALTER TABLE "saved_workflows"
+ADD CONSTRAINT check_saved_workflows_transcription_provider
+CHECK ("transcription_provider" IN ('local', 'assemblyai'));
+
+DO $$
+BEGIN
+  IF EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'check_saved_workflows_whisper_model_size') THEN
+    ALTER TABLE "saved_workflows" DROP CONSTRAINT check_saved_workflows_whisper_model_size;
+  END IF;
+END $$;
+
+ALTER TABLE "saved_workflows"
+ADD CONSTRAINT check_saved_workflows_whisper_model_size
+CHECK ("whisper_model_size" IN ('tiny', 'base', 'small', 'medium', 'large', 'turbo'));
+
+DO $$
+BEGIN
+  IF EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'check_saved_workflows_default_framing_mode') THEN
+    ALTER TABLE "saved_workflows" DROP CONSTRAINT check_saved_workflows_default_framing_mode;
+  END IF;
+END $$;
+
+ALTER TABLE "saved_workflows"
+ADD CONSTRAINT check_saved_workflows_default_framing_mode
+CHECK ("default_framing_mode" IN ('auto', 'prefer_face', 'fixed_position'));
+
+DO $$
+BEGIN
+  IF EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'check_saved_workflows_face_detection_mode') THEN
+    ALTER TABLE "saved_workflows" DROP CONSTRAINT check_saved_workflows_face_detection_mode;
+  END IF;
+END $$;
+
+ALTER TABLE "saved_workflows"
+ADD CONSTRAINT check_saved_workflows_face_detection_mode
+CHECK ("face_detection_mode" IN ('balanced', 'more_faces'));
+
+DO $$
+BEGIN
+  IF EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'check_saved_workflows_fallback_crop_position') THEN
+    ALTER TABLE "saved_workflows" DROP CONSTRAINT check_saved_workflows_fallback_crop_position;
+  END IF;
+END $$;
+
+ALTER TABLE "saved_workflows"
+ADD CONSTRAINT check_saved_workflows_fallback_crop_position
+CHECK ("fallback_crop_position" IN ('center', 'left_center', 'right_center'));
+
+DO $$
+BEGIN
+  IF EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'check_saved_workflows_face_anchor_profile') THEN
+    ALTER TABLE "saved_workflows" DROP CONSTRAINT check_saved_workflows_face_anchor_profile;
+  END IF;
+END $$;
+
+ALTER TABLE "saved_workflows"
+ADD CONSTRAINT check_saved_workflows_face_anchor_profile
+CHECK ("face_anchor_profile" IN ('auto', 'left_only', 'left_or_center', 'center_only', 'right_or_center', 'right_only'));
+
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'users_default_saved_workflow_id_fkey') THEN
+    ALTER TABLE "users"
+    ADD CONSTRAINT users_default_saved_workflow_id_fkey
+    FOREIGN KEY ("default_saved_workflow_id") REFERENCES "saved_workflows"("id") ON DELETE SET NULL ON UPDATE CASCADE;
+  END IF;
+END $$;
+
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'tasks_saved_workflow_id_fkey') THEN
+    ALTER TABLE "tasks"
+    ADD CONSTRAINT tasks_saved_workflow_id_fkey
+    FOREIGN KEY ("saved_workflow_id") REFERENCES "saved_workflows"("id") ON DELETE SET NULL ON UPDATE CASCADE;
+  END IF;
+END $$;

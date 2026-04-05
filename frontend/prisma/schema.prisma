@@ -52,10 +52,15 @@ model User {
   default_review_before_render_enabled Boolean? @default(true)
   default_timeline_editor_enabled Boolean? @default(true)
   default_processing_profile String? @default("balanced") @db.VarChar(32)
+  default_workflow_source String? @default("built_in") @db.VarChar(16)
+  default_saved_workflow_id String? @db.VarChar(36)
+  default_review_auto_select_strong_face_enabled Boolean? @default(false)
+  default_review_auto_select_strong_face_min_score_percent Int? @default(85)
   default_framing_mode String? @default("auto") @db.VarChar(32)
   default_face_detection_mode String? @default("balanced") @db.VarChar(20)
   default_fallback_crop_position String? @default("center") @db.VarChar(20)
   default_face_anchor_profile String? @default("auto") @db.VarChar(24)
+  default_output_aspect_ratio String? @default("9:16") @db.VarChar(12)
   default_transcription_provider String? @default("local") @db.VarChar(20)
   default_whisper_chunking_enabled Boolean? @default(true)
   default_whisper_chunk_duration_seconds Int? @default(1200)
@@ -69,6 +74,7 @@ model User {
   default_zai_key_routing_mode String? @default("auto") @db.VarChar(20)
 
   // Relationships
+  savedWorkflows SavedWorkflow[]
   tasks         Task[]
   sessions      Session[]
   accounts      Account[]
@@ -90,6 +96,10 @@ model Task {
   font_size            Int?      @default(24)
   font_color           String?   @default("#FFFFFF") @db.VarChar(7)
   ai_focus_tags        Json?
+  processing_profile   String?   @default("balanced") @db.VarChar(32)
+  workflow_source      String?   @default("built_in") @db.VarChar(16)
+  saved_workflow_id    String?   @db.VarChar(36)
+  workflow_name_snapshot String? @db.VarChar(120)
 
   created_at           DateTime  @default(now()) @db.Timestamptz
   updated_at           DateTime  @default(now()) @updatedAt @db.Timestamptz
@@ -117,6 +127,28 @@ model Source {
 
   @@index([created_at])
   @@map("sources")
+}
+
+model SavedWorkflow {
+  id                             String   @id @default(uuid())
+  user_id                        String
+  name                           String   @db.VarChar(120)
+  review_before_render_enabled   Boolean  @default(true)
+  timeline_editor_enabled        Boolean  @default(true)
+  transitions_enabled            Boolean  @default(false)
+  transcription_provider         String   @default("local") @db.VarChar(20)
+  whisper_model_size             String   @default("medium") @db.VarChar(20)
+  default_framing_mode           String   @default("auto") @db.VarChar(32)
+  face_detection_mode            String   @default("balanced") @db.VarChar(20)
+  fallback_crop_position         String   @default("center") @db.VarChar(20)
+  face_anchor_profile            String   @default("auto") @db.VarChar(24)
+  created_at                     DateTime @default(now()) @db.Timestamptz
+  updated_at                     DateTime @default(now()) @updatedAt @db.Timestamptz
+
+  user User @relation(fields: [user_id], references: [id], onDelete: Cascade)
+
+  @@index([user_id])
+  @@map("saved_workflows")
 }
 
 // Better Auth Session management

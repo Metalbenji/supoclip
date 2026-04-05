@@ -40,6 +40,9 @@ class TaskRepository:
         review_before_render_enabled: bool = True,
         timeline_editor_enabled: bool = True,
         processing_profile: str = "balanced",
+        workflow_source: str = "built_in",
+        saved_workflow_id: Optional[str] = None,
+        workflow_name_snapshot: Optional[str] = None,
         runtime_info_json: Optional[Dict[str, Any]] = None,
         stage_checkpoint: str = "queued",
         retryable_from_stages: Optional[List[str]] = None,
@@ -60,6 +63,9 @@ class TaskRepository:
                     ai_provider,
                     ai_focus_tags,
                     processing_profile,
+                    workflow_source,
+                    saved_workflow_id,
+                    workflow_name_snapshot,
                     runtime_info_json,
                     stage_checkpoint,
                     retryable_from_stages,
@@ -81,6 +87,9 @@ class TaskRepository:
                     :ai_provider,
                     :ai_focus_tags,
                     :processing_profile,
+                    :workflow_source,
+                    :saved_workflow_id,
+                    :workflow_name_snapshot,
                     :runtime_info_json,
                     :stage_checkpoint,
                     :retryable_from_stages,
@@ -109,6 +118,9 @@ class TaskRepository:
                 "ai_provider": ai_provider,
                 "ai_focus_tags": ai_focus_tags or None,
                 "processing_profile": processing_profile,
+                "workflow_source": workflow_source,
+                "saved_workflow_id": saved_workflow_id,
+                "workflow_name_snapshot": workflow_name_snapshot,
                 "runtime_info_json": runtime_info_json or None,
                 "stage_checkpoint": stage_checkpoint,
                 "retryable_from_stages": retryable_from_stages or None,
@@ -158,6 +170,9 @@ class TaskRepository:
             "ai_provider": getattr(row, "ai_provider", "openai"),
             "ai_focus_tags": list(getattr(row, "ai_focus_tags", None) or []),
             "processing_profile": str(getattr(row, "processing_profile", "balanced") or "balanced"),
+            "workflow_source": str(getattr(row, "workflow_source", "built_in") or "built_in"),
+            "saved_workflow_id": getattr(row, "saved_workflow_id", None),
+            "workflow_name_snapshot": getattr(row, "workflow_name_snapshot", None),
             "runtime_info": getattr(row, "runtime_info_json", None) or {},
             "failure_code": getattr(row, "failure_code", None),
             "failure_hint": getattr(row, "failure_hint", None),
@@ -457,6 +472,9 @@ class TaskRepository:
                 "ai_provider": getattr(row, "ai_provider", "openai"),
                 "ai_focus_tags": list(getattr(row, "ai_focus_tags", None) or []),
                 "processing_profile": str(getattr(row, "processing_profile", "balanced") or "balanced"),
+                "workflow_source": str(getattr(row, "workflow_source", "built_in") or "built_in"),
+                "saved_workflow_id": getattr(row, "saved_workflow_id", None),
+                "workflow_name_snapshot": getattr(row, "workflow_name_snapshot", None),
                 "runtime_info": getattr(row, "runtime_info_json", None) or {},
                 "failure_code": getattr(row, "failure_code", None),
                 "failure_hint": getattr(row, "failure_hint", None),
@@ -1500,10 +1518,13 @@ class TaskRepository:
                     default_review_before_render_enabled,
                     default_timeline_editor_enabled,
                     default_processing_profile,
+                    default_review_auto_select_strong_face_enabled,
+                    default_review_auto_select_strong_face_min_score_percent,
                     default_framing_mode,
                     default_face_detection_mode,
                     default_fallback_crop_position,
-                    default_face_anchor_profile
+                    default_face_anchor_profile,
+                    default_output_aspect_ratio
                 FROM users
                 WHERE id = :user_id
                 """
@@ -1516,16 +1537,25 @@ class TaskRepository:
                 "review_before_render_enabled": True,
                 "timeline_editor_enabled": True,
                 "default_processing_profile": "balanced",
+                "default_review_auto_select_strong_face_enabled": False,
+                "default_review_auto_select_strong_face_min_score_percent": 85,
                 "default_framing_mode": "auto",
                 "default_face_detection_mode": "balanced",
                 "default_fallback_crop_position": "center",
                 "default_face_anchor_profile": "auto",
+                "default_output_aspect_ratio": "9:16",
             }
         return {
             "review_before_render_enabled": bool(getattr(row, "default_review_before_render_enabled", True)),
             "timeline_editor_enabled": bool(getattr(row, "default_timeline_editor_enabled", True)),
             "default_processing_profile": str(
                 getattr(row, "default_processing_profile", "balanced") or "balanced"
+            ),
+            "default_review_auto_select_strong_face_enabled": bool(
+                getattr(row, "default_review_auto_select_strong_face_enabled", False)
+            ),
+            "default_review_auto_select_strong_face_min_score_percent": int(
+                getattr(row, "default_review_auto_select_strong_face_min_score_percent", 85) or 85
             ),
             "default_framing_mode": str(getattr(row, "default_framing_mode", "auto") or "auto"),
             "default_face_detection_mode": str(
@@ -1536,6 +1566,9 @@ class TaskRepository:
             ),
             "default_face_anchor_profile": str(
                 getattr(row, "default_face_anchor_profile", "auto") or "auto"
+            ),
+            "default_output_aspect_ratio": str(
+                getattr(row, "default_output_aspect_ratio", "9:16") or "9:16"
             ),
         }
 

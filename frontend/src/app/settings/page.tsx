@@ -14,10 +14,19 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { useSession } from "@/lib/auth-client";
 import { SettingsSaveStatus } from "./components/settings-save-status";
 import { SettingsSectionAi } from "./components/settings-section-ai";
+import { SettingsSectionConnections } from "./components/settings-section-connections";
 import { SettingsSectionFont } from "./components/settings-section-font";
+import { SettingsSectionFraming } from "./components/settings-section-framing";
 import { SettingsSectionTranscription } from "./components/settings-section-transcription";
-import { SettingsSectionVideo } from "./components/settings-section-video";
+import { SettingsSectionWorkflow } from "./components/settings-section-workflow";
 import { SettingsSidebar } from "./components/settings-sidebar";
+import {
+  applyWorkflowSelection,
+  getWorkflowSelectionMetadata,
+  resolveWorkflowSelection,
+  type SavedWorkflow,
+  type WorkflowSelection,
+} from "@/lib/processing-profiles";
 import {
   FALLBACK_LOCAL_WHISPER_MODELS,
   resolveWhisperPresetValues,
@@ -42,6 +51,8 @@ import {
   arePreferencesEqual,
   DEFAULT_AI_MODELS,
   DEFAULT_OLLAMA_REQUEST_CONTROLS,
+  DEFAULT_REVIEW_AUTO_SELECT_STRONG_FACE_ENABLED,
+  DEFAULT_REVIEW_AUTO_SELECT_STRONG_FACE_MIN_SCORE_PERCENT,
   DEFAULT_USER_PREFERENCES,
   FALLBACK_AI_MODEL_OPTIONS,
   isAiProvider,
@@ -49,14 +60,17 @@ import {
   isFaceAnchorProfile,
   isFaceDetectionMode,
   isFallbackCropPosition,
-  isProcessingProfile,
+  isOutputAspectRatio,
+  isPersistedProcessingProfile,
   isSettingsSection,
   isTranscriptionProvider,
   isWhisperDevicePreference,
   isWhisperModelSize,
+  isWorkflowSource,
   isZaiRoutingMode,
   normalizeTaskTimeoutSeconds,
   normalizeFontSize,
+  normalizeReviewAutoSelectStrongFaceMinScorePercent,
   normalizeWhisperChunkDurationSeconds,
   normalizeWhisperChunkOverlapSeconds,
   SETTINGS_SECTION_META,
@@ -65,7 +79,6 @@ import {
   type AiProvider,
   type OllamaAuthMode,
   type OllamaProfileSummary,
-  type ProcessingProfile,
   type SettingsSection,
   type UserPreferences,
   type ZaiRoutingMode,
@@ -79,12 +92,22 @@ function getActiveSection(sectionValue: string | null): SettingsSection {
   if (sectionValue === "processing") {
     return "transcription";
   }
-  return isSettingsSection(sectionValue) ? sectionValue : "font";
+  if (sectionValue === "font") {
+    return "captions";
+  }
+  if (sectionValue === "video") {
+    return "workflow";
+  }
+  return isSettingsSection(sectionValue) ? sectionValue : "workflow";
 }
 
 function SettingsPageContent() {
   const [preferencesDraft, setPreferencesDraft] = useState<UserPreferences>(DEFAULT_USER_PREFERENCES);
   const [lastSavedSnapshot, setLastSavedSnapshot] = useState<UserPreferences>(DEFAULT_USER_PREFERENCES);
+  const [savedWorkflows, setSavedWorkflows] = useState<SavedWorkflow[]>([]);
+  const [isLoadingWorkflows, setIsLoadingWorkflows] = useState(true);
+  const [workflowStatus, setWorkflowStatus] = useState<string | null>(null);
+  const [workflowError, setWorkflowError] = useState<string | null>(null);
 
   const [availableFonts, setAvailableFonts] = useState<Array<{ name: string; display_name: string }>>([]);
   const [isUploadingFont, setIsUploadingFont] = useState(false);
@@ -200,7 +223,7 @@ function SettingsPageContent() {
     [preferencesDraft, lastSavedSnapshot],
   );
 
-  const hasAiKeyForSelectedProvider =
+  const hasAiConnectionForSelectedProvider =
     preferencesDraft.aiProvider === "zai"
       ? hasSavedAiKeys.zai ||
         hasSavedZaiProfileKeys.subscription ||
@@ -209,6 +232,27 @@ function SettingsPageContent() {
       : preferencesDraft.aiProvider === "ollama"
         ? Boolean(ollamaServerUrl.trim()) || hasEnvOllamaServer || ollamaProfiles.length > 0
       : hasSavedAiKeys[preferencesDraft.aiProvider] || hasEnvAiFallback[preferencesDraft.aiProvider];
+  const selectedWorkflow = useMemo<WorkflowSelection>(
+    () =>
+      resolveWorkflowSelection({
+        values: {
+          reviewBeforeRenderEnabled: preferencesDraft.reviewBeforeRenderEnabled,
+          timelineEditorEnabled: preferencesDraft.timelineEditorEnabled,
+          transitionsEnabled: preferencesDraft.transitionsEnabled,
+          transcriptionProvider: preferencesDraft.transcriptionProvider,
+          whisperModelSize: preferencesDraft.whisperModelSize,
+          defaultFramingMode: preferencesDraft.defaultFramingMode,
+          faceDetectionMode: preferencesDraft.faceDetectionMode,
+          fallbackCropPosition: preferencesDraft.fallbackCropPosition,
+          faceAnchorProfile: preferencesDraft.faceAnchorProfile,
+        },
+        savedWorkflows,
+        persistedSource: preferencesDraft.defaultWorkflowSource,
+        persistedBuiltInProfile: preferencesDraft.defaultProcessingProfile,
+        persistedSavedWorkflowId: preferencesDraft.defaultSavedWorkflowId,
+      }),
+    [preferencesDraft, savedWorkflows],
+  );
 
   const sectionNavItems = useMemo(
     () => SETTINGS_SECTIONS.map((section) => ({ id: section, ...SETTINGS_SECTION_META[section] })),
@@ -218,6 +262,169 @@ function SettingsPageContent() {
     () => ollamaProfiles.find((profile) => profile.profile_name === selectedOllamaProfile) || null,
     [ollamaProfiles, selectedOllamaProfile],
   );
+  const getWorkflowControlledValues = useCallback(
+    (prefs: UserPreferences = preferencesDraft) => ({
+      reviewBeforeRenderEnabled: prefs.reviewBeforeRenderEnabled,
+      timelineEditorEnabled: prefs.timelineEditorEnabled,
+      transitionsEnabled: prefs.transitionsEnabled,
+      transcriptionProvider: prefs.transcriptionProvider,
+      whisperModelSize: prefs.whisperModelSize,
+      defaultFramingMode: prefs.defaultFramingMode,
+      faceDetectionMode: prefs.faceDetectionMode,
+      fallbackCropPosition: prefs.fallbackCropPosition,
+      faceAnchorProfile: prefs.faceAnchorProfile,
+    }),
+    [preferencesDraft],
+  );
+
+  const loadSavedWorkflows = useCallback(async (): Promise<void> => {
+    try {
+      setIsLoadingWorkflows(true);
+      const response = await fetch("/api/workflows");
+      if (!response.ok) {
+        throw new Error("Failed to load workflows");
+      }
+      const data = (await response.json()) as { workflows?: SavedWorkflow[] };
+      setSavedWorkflows(Array.isArray(data.workflows) ? data.workflows : []);
+      setWorkflowError(null);
+    } catch (loadError) {
+      console.error("Failed to load workflows:", loadError);
+      setWorkflowError(loadError instanceof Error ? loadError.message : "Failed to load workflows");
+    } finally {
+      setIsLoadingWorkflows(false);
+    }
+  }, []);
+
+  const createSavedWorkflow = useCallback(
+    async (name: string): Promise<boolean> => {
+      setWorkflowError(null);
+      setWorkflowStatus(null);
+      try {
+        const response = await fetch("/api/workflows", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            name,
+            ...getWorkflowControlledValues(),
+          }),
+        });
+        const responseData = await response.json().catch(() => ({} as { error?: string; workflow?: SavedWorkflow }));
+        if (!response.ok || !responseData.workflow) {
+          throw new Error(responseData.error || "Failed to save workflow");
+        }
+        const createdWorkflow = responseData.workflow;
+        setSavedWorkflows((prev) => [createdWorkflow, ...prev.filter((workflow) => workflow.id !== createdWorkflow.id)]);
+        setPreferencesDraft((prev) => ({
+          ...prev,
+          defaultProcessingProfile: "custom",
+          defaultWorkflowSource: "saved",
+          defaultSavedWorkflowId: createdWorkflow.id,
+        }));
+        setWorkflowStatus(`Workflow saved: ${createdWorkflow.name}.`);
+        return true;
+      } catch (workflowSaveError) {
+        const message = workflowSaveError instanceof Error ? workflowSaveError.message : "Failed to save workflow";
+        setWorkflowError(message);
+        return false;
+      }
+    },
+    [getWorkflowControlledValues],
+  );
+
+  const updateSavedWorkflow = useCallback(
+    async (workflowId: string): Promise<boolean> => {
+      setWorkflowError(null);
+      setWorkflowStatus(null);
+      try {
+        const response = await fetch(`/api/workflows/${encodeURIComponent(workflowId)}`, {
+          method: "PATCH",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify(getWorkflowControlledValues()),
+        });
+        const responseData = await response.json().catch(() => ({} as { error?: string; workflow?: SavedWorkflow }));
+        if (!response.ok || !responseData.workflow) {
+          throw new Error(responseData.error || "Failed to update workflow");
+        }
+        const updatedWorkflow = responseData.workflow;
+        setSavedWorkflows((prev) => prev.map((workflow) => (workflow.id === updatedWorkflow.id ? updatedWorkflow : workflow)));
+        setPreferencesDraft((prev) => ({
+          ...prev,
+          defaultProcessingProfile: "custom",
+          defaultWorkflowSource: "saved",
+          defaultSavedWorkflowId: updatedWorkflow.id,
+        }));
+        setWorkflowStatus(`Workflow updated: ${updatedWorkflow.name}.`);
+        return true;
+      } catch (workflowUpdateError) {
+        const message = workflowUpdateError instanceof Error ? workflowUpdateError.message : "Failed to update workflow";
+        setWorkflowError(message);
+        return false;
+      }
+    },
+    [getWorkflowControlledValues],
+  );
+
+  const renameSavedWorkflow = useCallback(async (workflowId: string, name: string): Promise<boolean> => {
+    setWorkflowError(null);
+    setWorkflowStatus(null);
+    try {
+      const response = await fetch(`/api/workflows/${encodeURIComponent(workflowId)}`, {
+        method: "PATCH",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ name }),
+      });
+      const responseData = await response.json().catch(() => ({} as { error?: string; workflow?: SavedWorkflow }));
+      if (!response.ok || !responseData.workflow) {
+        throw new Error(responseData.error || "Failed to rename workflow");
+      }
+      const renamedWorkflow = responseData.workflow;
+      setSavedWorkflows((prev) => prev.map((workflow) => (workflow.id === renamedWorkflow.id ? renamedWorkflow : workflow)));
+      setWorkflowStatus(`Workflow renamed: ${renamedWorkflow.name}.`);
+      return true;
+    } catch (workflowRenameError) {
+      const message = workflowRenameError instanceof Error ? workflowRenameError.message : "Failed to rename workflow";
+      setWorkflowError(message);
+      return false;
+    }
+  }, []);
+
+  const deleteSavedWorkflow = useCallback(async (workflowId: string): Promise<boolean> => {
+    setWorkflowError(null);
+    setWorkflowStatus(null);
+    try {
+      const response = await fetch(`/api/workflows/${encodeURIComponent(workflowId)}`, {
+        method: "DELETE",
+      });
+      const responseData = await response.json().catch(() => ({} as { error?: string }));
+      if (!response.ok) {
+        throw new Error(responseData.error || "Failed to delete workflow");
+      }
+      setSavedWorkflows((prev) => prev.filter((workflow) => workflow.id !== workflowId));
+      setPreferencesDraft((prev) => {
+        if (prev.defaultSavedWorkflowId !== workflowId) {
+          return prev;
+        }
+        return {
+          ...prev,
+          defaultProcessingProfile: "custom",
+          defaultWorkflowSource: "custom",
+          defaultSavedWorkflowId: null,
+        };
+      });
+      setWorkflowStatus("Workflow deleted.");
+      return true;
+    } catch (workflowDeleteError) {
+      const message = workflowDeleteError instanceof Error ? workflowDeleteError.message : "Failed to delete workflow";
+      setWorkflowError(message);
+      return false;
+    }
+  }, []);
 
   const loadFonts = useCallback(async () => {
     try {
@@ -633,8 +840,29 @@ function SettingsPageContent() {
 
       try {
         const resolvedAiModel = preferencesDraft.aiModel.trim() || DEFAULT_AI_MODELS[preferencesDraft.aiProvider];
+        const resolvedWorkflowSelection = resolveWorkflowSelection({
+          values: {
+            reviewBeforeRenderEnabled: preferencesDraft.reviewBeforeRenderEnabled,
+            timelineEditorEnabled: preferencesDraft.timelineEditorEnabled,
+            transitionsEnabled: preferencesDraft.transitionsEnabled,
+            transcriptionProvider: preferencesDraft.transcriptionProvider,
+            whisperModelSize: preferencesDraft.whisperModelSize,
+            defaultFramingMode: preferencesDraft.defaultFramingMode,
+            faceDetectionMode: preferencesDraft.faceDetectionMode,
+            fallbackCropPosition: preferencesDraft.fallbackCropPosition,
+            faceAnchorProfile: preferencesDraft.faceAnchorProfile,
+          },
+          savedWorkflows,
+          persistedSource: preferencesDraft.defaultWorkflowSource,
+          persistedBuiltInProfile: preferencesDraft.defaultProcessingProfile,
+          persistedSavedWorkflowId: preferencesDraft.defaultSavedWorkflowId,
+        });
+        const workflowMetadata = getWorkflowSelectionMetadata(resolvedWorkflowSelection, savedWorkflows);
         const payload: UserPreferences = {
           ...preferencesDraft,
+          defaultProcessingProfile: workflowMetadata.processingProfile,
+          defaultWorkflowSource: workflowMetadata.workflowSource,
+          defaultSavedWorkflowId: workflowMetadata.savedWorkflowId,
           aiModel: resolvedAiModel,
         };
 
@@ -664,7 +892,7 @@ function SettingsPageContent() {
         setIsSavingPreferences(false);
       }
     },
-    [isDirty, preferencesDraft, session?.user?.id],
+    [isDirty, preferencesDraft, savedWorkflows, session?.user?.id],
   );
 
   const updateSectionQueryParam = useCallback(
@@ -1342,8 +1570,9 @@ function SettingsPageContent() {
 
   useEffect(() => {
     const sectionParam = searchParams.get("section");
-    if (!isSettingsSection(sectionParam)) {
-      updateSectionQueryParam("font");
+    const canonicalSection = getActiveSection(sectionParam);
+    if (sectionParam !== canonicalSection) {
+      updateSectionQueryParam(canonicalSection);
     }
   }, [searchParams, updateSectionQueryParam]);
 
@@ -1384,9 +1613,24 @@ function SettingsPageContent() {
               ? data.timelineEditorEnabled
               : DEFAULT_USER_PREFERENCES.timelineEditorEnabled,
           defaultProcessingProfile:
-            typeof data.defaultProcessingProfile === "string" && isProcessingProfile(data.defaultProcessingProfile)
+            typeof data.defaultProcessingProfile === "string" && isPersistedProcessingProfile(data.defaultProcessingProfile)
               ? data.defaultProcessingProfile
               : DEFAULT_USER_PREFERENCES.defaultProcessingProfile,
+          defaultWorkflowSource:
+            typeof data.defaultWorkflowSource === "string" && isWorkflowSource(data.defaultWorkflowSource)
+              ? data.defaultWorkflowSource
+              : DEFAULT_USER_PREFERENCES.defaultWorkflowSource,
+          defaultSavedWorkflowId:
+            typeof data.defaultSavedWorkflowId === "string" && data.defaultSavedWorkflowId.trim().length > 0
+              ? data.defaultSavedWorkflowId
+              : null,
+          reviewAutoSelectStrongFaceEnabled:
+            typeof data.reviewAutoSelectStrongFaceEnabled === "boolean"
+              ? data.reviewAutoSelectStrongFaceEnabled
+              : DEFAULT_REVIEW_AUTO_SELECT_STRONG_FACE_ENABLED,
+          reviewAutoSelectStrongFaceMinScorePercent: normalizeReviewAutoSelectStrongFaceMinScorePercent(
+            data.reviewAutoSelectStrongFaceMinScorePercent,
+          ),
           defaultFramingMode:
             typeof data.defaultFramingMode === "string" && isDefaultFramingMode(data.defaultFramingMode)
               ? data.defaultFramingMode
@@ -1403,6 +1647,10 @@ function SettingsPageContent() {
             typeof data.faceAnchorProfile === "string" && isFaceAnchorProfile(data.faceAnchorProfile)
               ? data.faceAnchorProfile
               : DEFAULT_USER_PREFERENCES.faceAnchorProfile,
+          defaultOutputAspectRatio:
+            typeof data.defaultOutputAspectRatio === "string" && isOutputAspectRatio(data.defaultOutputAspectRatio)
+              ? data.defaultOutputAspectRatio
+              : DEFAULT_USER_PREFERENCES.defaultOutputAspectRatio,
           transcriptionProvider:
             typeof data.transcriptionProvider === "string" && isTranscriptionProvider(data.transcriptionProvider)
               ? data.transcriptionProvider
@@ -1457,6 +1705,14 @@ function SettingsPageContent() {
 
     void loadTranscriptionSettings();
   }, [loadTranscriptionSettings, session?.user?.id]);
+
+  useEffect(() => {
+    if (!session?.user?.id) {
+      return;
+    }
+
+    void loadSavedWorkflows();
+  }, [loadSavedWorkflows, session?.user?.id]);
 
   useEffect(() => {
     if (!session?.user?.id) {
@@ -1594,7 +1850,7 @@ function SettingsPageContent() {
             <h2 className="text-2xl font-bold text-black">Settings</h2>
           </div>
           <p className="text-gray-600">
-            Configure your default preferences for video clip generation and per-user API keys.
+            Configure default task behavior, style, and provider connections.
           </p>
         </div>
 
@@ -1650,7 +1906,64 @@ function SettingsPageContent() {
               </Alert>
             )}
 
-            {activeSection === "font" ? (
+            {activeSection === "workflow" ? (
+              <SettingsSectionWorkflow
+                isSaving={isSavingPreferences}
+                isLoadingWorkflows={isLoadingWorkflows}
+                savedWorkflows={savedWorkflows}
+                selectedWorkflow={selectedWorkflow}
+                workflowStatus={workflowStatus}
+                workflowError={workflowError}
+                reviewBeforeRenderEnabled={preferencesDraft.reviewBeforeRenderEnabled}
+                transitionsEnabled={preferencesDraft.transitionsEnabled}
+                timelineEditorEnabled={preferencesDraft.timelineEditorEnabled}
+                reviewAutoSelectStrongFaceEnabled={preferencesDraft.reviewAutoSelectStrongFaceEnabled}
+                reviewAutoSelectStrongFaceMinScorePercent={preferencesDraft.reviewAutoSelectStrongFaceMinScorePercent}
+                transcriptionProvider={preferencesDraft.transcriptionProvider}
+                whisperModelSize={preferencesDraft.whisperModelSize}
+                defaultFramingMode={preferencesDraft.defaultFramingMode}
+                faceDetectionMode={preferencesDraft.faceDetectionMode}
+                fallbackCropPosition={preferencesDraft.fallbackCropPosition}
+                faceAnchorProfile={preferencesDraft.faceAnchorProfile}
+                onWorkflowSelectionChange={(selection) => {
+                  const workflowMetadata = getWorkflowSelectionMetadata(selection, savedWorkflows);
+                  setPreferencesDraft((prev) => ({
+                    ...applyWorkflowSelection(prev, selection, savedWorkflows),
+                    defaultProcessingProfile: workflowMetadata.processingProfile,
+                    defaultWorkflowSource: workflowMetadata.workflowSource,
+                    defaultSavedWorkflowId: workflowMetadata.savedWorkflowId,
+                  }));
+                }}
+                onSaveWorkflow={createSavedWorkflow}
+                onUpdateWorkflow={updateSavedWorkflow}
+                onRenameWorkflow={renameSavedWorkflow}
+                onDeleteWorkflow={deleteSavedWorkflow}
+                onToggleReviewBeforeRender={() => {
+                  setPreferencesDraft((prev) => ({
+                    ...prev,
+                    reviewBeforeRenderEnabled: !prev.reviewBeforeRenderEnabled,
+                  }));
+                }}
+                onToggleTransitions={() => {
+                  setPreferencesDraft((prev) => ({ ...prev, transitionsEnabled: !prev.transitionsEnabled }));
+                }}
+                onToggleTimelineEditor={() => {
+                  setPreferencesDraft((prev) => ({ ...prev, timelineEditorEnabled: !prev.timelineEditorEnabled }));
+                }}
+                onToggleReviewAutoSelectStrongFace={() => {
+                  setPreferencesDraft((prev) => ({
+                    ...prev,
+                    reviewAutoSelectStrongFaceEnabled: !prev.reviewAutoSelectStrongFaceEnabled,
+                  }));
+                }}
+                onReviewAutoSelectStrongFaceMinScorePercentChange={(value) => {
+                  setPreferencesDraft((prev) => ({
+                    ...prev,
+                    reviewAutoSelectStrongFaceMinScorePercent: normalizeReviewAutoSelectStrongFaceMinScorePercent(value),
+                  }));
+                }}
+              />
+            ) : activeSection === "captions" ? (
               <SettingsSectionFont
                 isSaving={isSavingPreferences}
                 availableFonts={availableFonts}
@@ -1727,32 +2040,14 @@ function SettingsPageContent() {
                 }}
                 onFontUpload={handleFontUpload}
               />
-            ) : activeSection === "video" ? (
-              <SettingsSectionVideo
+            ) : activeSection === "framing" ? (
+              <SettingsSectionFraming
                 isSaving={isSavingPreferences}
-                reviewBeforeRenderEnabled={preferencesDraft.reviewBeforeRenderEnabled}
-                transitionsEnabled={preferencesDraft.transitionsEnabled}
-                timelineEditorEnabled={preferencesDraft.timelineEditorEnabled}
-                defaultProcessingProfile={preferencesDraft.defaultProcessingProfile}
                 defaultFramingMode={preferencesDraft.defaultFramingMode}
                 faceDetectionMode={preferencesDraft.faceDetectionMode}
                 fallbackCropPosition={preferencesDraft.fallbackCropPosition}
                 faceAnchorProfile={preferencesDraft.faceAnchorProfile}
-                onToggleReviewBeforeRender={() => {
-                  setPreferencesDraft((prev) => ({
-                    ...prev,
-                    reviewBeforeRenderEnabled: !prev.reviewBeforeRenderEnabled,
-                  }));
-                }}
-                onToggleTransitions={() => {
-                  setPreferencesDraft((prev) => ({ ...prev, transitionsEnabled: !prev.transitionsEnabled }));
-                }}
-                onToggleTimelineEditor={() => {
-                  setPreferencesDraft((prev) => ({ ...prev, timelineEditorEnabled: !prev.timelineEditorEnabled }));
-                }}
-                onDefaultProcessingProfileChange={(value) => {
-                  setPreferencesDraft((prev) => ({ ...prev, defaultProcessingProfile: value }));
-                }}
+                defaultOutputAspectRatio={preferencesDraft.defaultOutputAspectRatio}
                 onDefaultFramingModeChange={(value) => {
                   setPreferencesDraft((prev) => ({ ...prev, defaultFramingMode: value }));
                 }}
@@ -1764,6 +2059,9 @@ function SettingsPageContent() {
                 }}
                 onFaceAnchorProfileChange={(value) => {
                   setPreferencesDraft((prev) => ({ ...prev, faceAnchorProfile: value }));
+                }}
+                onDefaultOutputAspectRatioChange={(value) => {
+                  setPreferencesDraft((prev) => ({ ...prev, defaultOutputAspectRatio: value }));
                 }}
               />
             ) : activeSection === "transcription" ? (
@@ -1781,30 +2079,10 @@ function SettingsPageContent() {
                 localWhisperModels={localWhisperModels}
                 localWhisperRuntime={localWhisperRuntime}
                 gpuWorkerEnabled={gpuWorkerEnabled}
-                isSavingAssemblyKey={isSavingAssemblyKey}
-                assemblyApiKey={assemblyApiKey}
-                hasSavedAssemblyKey={hasSavedAssemblyKey}
-                hasAssemblyEnvFallback={hasAssemblyEnvFallback}
-                isSavingYoutubeCookies={isSavingYoutubeCookies}
-                hasSavedYoutubeCookies={hasSavedYoutubeCookies}
-                hasYoutubeCookieEnvFallback={hasYoutubeCookieEnvFallback}
-                youtubeCookiesFilename={youtubeCookiesFilename}
-                youtubeCookiesUpdatedAt={youtubeCookiesUpdatedAt}
-                youtubeCookieSource={youtubeCookieSource}
-                assemblyMaxDurationSeconds={assemblyMaxDurationSeconds}
-                assemblyMaxLocalUploadSizeBytes={assemblyMaxLocalUploadSizeBytes}
-                assemblyKeyStatus={assemblyKeyStatus}
-                assemblyKeyError={assemblyKeyError}
-                youtubeCookieStatus={youtubeCookieStatus}
-                youtubeCookieError={youtubeCookieError}
                 onTranscriptionProviderChange={(provider) => {
                   if (isTranscriptionProvider(provider)) {
                     setPreferencesDraft((prev) => ({ ...prev, transcriptionProvider: provider }));
                   }
-                  setAssemblyKeyStatus(null);
-                  setAssemblyKeyError(null);
-                  setYoutubeCookieStatus(null);
-                  setYoutubeCookieError(null);
                 }}
                 onWhisperChunkingEnabledChange={(enabled) => {
                   setPreferencesDraft((prev) => ({ ...prev, whisperChunkingEnabled: enabled }));
@@ -1864,55 +2142,18 @@ function SettingsPageContent() {
                     whisperGpuIndex: gpuIndex,
                   }));
                 }}
-                onAssemblyApiKeyChange={setAssemblyApiKey}
-                onSaveAssemblyKey={() => {
-                  void saveAssemblyKey(assemblyApiKey);
-                }}
-                onDeleteAssemblyKey={() => {
-                  void deleteAssemblyKey();
-                }}
-                onYoutubeCookiesUpload={handleYoutubeCookiesUpload}
-                onDeleteYoutubeCookies={() => {
-                  void deleteYoutubeCookies();
-                }}
               />
-            ) : (
+            ) : activeSection === "ai" ? (
               <SettingsSectionAi
                 isSaving={isSavingPreferences}
                 aiProvider={preferencesDraft.aiProvider}
                 aiModel={preferencesDraft.aiModel}
                 aiModelOptions={aiModelOptions[preferencesDraft.aiProvider]}
                 hasLoadedAiModels={hasLoadedAiModels[preferencesDraft.aiProvider]}
-                hasAiKeyForSelectedProvider={hasAiKeyForSelectedProvider}
+                hasAiConnectionForSelectedProvider={hasAiConnectionForSelectedProvider}
                 isLoadingAiModels={isLoadingAiModels}
-                isSavingAiKey={isSavingAiKey}
-                aiApiKey={aiApiKeys[preferencesDraft.aiProvider]}
-                hasSavedAiKey={hasSavedAiKeys[preferencesDraft.aiProvider]}
-                hasEnvAiFallback={hasEnvAiFallback[preferencesDraft.aiProvider]}
-                ollamaServerUrl={ollamaServerUrl}
-                hasSavedOllamaServer={hasSavedOllamaServer}
-                hasEnvOllamaServer={hasEnvOllamaServer}
-                ollamaProfiles={ollamaProfiles}
-                selectedOllamaProfile={selectedOllamaProfile}
-                newOllamaProfileName={newOllamaProfileName}
-                ollamaAuthMode={ollamaAuthMode}
-                ollamaAuthHeaderName={ollamaAuthHeaderName}
-                ollamaAuthToken={ollamaAuthToken}
-                ollamaTimeoutSeconds={ollamaRequestControls.timeout_seconds}
-                ollamaMaxRetries={ollamaRequestControls.max_retries}
-                ollamaRetryBackoffMs={ollamaRequestControls.retry_backoff_ms}
-                isTestingOllamaConnection={isTestingOllamaConnection}
-                ollamaConnectionStatus={ollamaConnectionStatus}
-                ollamaConnectionError={ollamaConnectionError}
-                aiKeyStatus={aiKeyStatus}
-                aiKeyError={aiKeyError}
                 aiModelStatus={aiModelStatus}
                 aiModelError={aiModelError}
-                selectedZaiKeyProfile={selectedZaiKeyProfile}
-                zaiRoutingMode={zaiRoutingMode}
-                zaiProfileApiKey={zaiProfileApiKeys[selectedZaiKeyProfile]}
-                hasSavedZaiSubscriptionKey={hasSavedZaiProfileKeys.subscription}
-                hasSavedZaiMeteredKey={hasSavedZaiProfileKeys.metered}
                 onAiProviderChange={(provider) => {
                   if (!isAiProvider(provider)) {
                     return;
@@ -1933,25 +2174,74 @@ function SettingsPageContent() {
                       aiModel: nextModel,
                     };
                   });
-
-                  setAiKeyStatus(null);
-                  setAiKeyError(null);
                   setAiModelStatus(null);
                   setAiModelError(null);
                 }}
                 onAiModelChange={(model) => {
                   setPreferencesDraft((prev) => ({ ...prev, aiModel: model }));
                 }}
-                onAiApiKeyChange={(value) => {
-                  setAiApiKeys((prev) => ({ ...prev, [preferencesDraft.aiProvider]: value }));
+                onRefreshAiModels={() => {
+                  if (preferencesDraft.aiProvider === "ollama") {
+                    ollamaAutoEnsurePromptedRef.current = null;
+                  }
+                  void fetchAiModels(preferencesDraft.aiProvider);
                 }}
-                onSaveAiProviderKey={() => {
-                  const provider = preferencesDraft.aiProvider;
+              />
+            ) : (
+              <SettingsSectionConnections
+                isSaving={isSavingPreferences}
+                defaultKeyProvider={preferencesDraft.aiProvider}
+                aiApiKeys={aiApiKeys}
+                hasSavedAiKeys={hasSavedAiKeys}
+                hasEnvAiFallback={hasEnvAiFallback}
+                isSavingAiKey={isSavingAiKey}
+                aiKeyStatus={aiKeyStatus}
+                aiKeyError={aiKeyError}
+                onAiApiKeyChange={(provider, value) => {
+                  setAiApiKeys((prev) => ({ ...prev, [provider]: value }));
+                }}
+                onSaveAiProviderKey={(provider) => {
                   void saveAiProviderKey(provider, aiApiKeys[provider]);
                 }}
-                onDeleteAiProviderKey={() => {
-                  void deleteAiProviderKey(preferencesDraft.aiProvider);
+                onDeleteAiProviderKey={(provider) => {
+                  void deleteAiProviderKey(provider);
                 }}
+                selectedZaiKeyProfile={selectedZaiKeyProfile}
+                zaiRoutingMode={zaiRoutingMode}
+                zaiProfileApiKeys={zaiProfileApiKeys}
+                hasSavedZaiProfileKeys={hasSavedZaiProfileKeys}
+                onSelectedZaiKeyProfileChange={setSelectedZaiKeyProfile}
+                onZaiRoutingModeChange={(mode) => {
+                  if (!isZaiRoutingMode(mode)) {
+                    return;
+                  }
+                  setZaiRoutingMode(mode);
+                  void saveZaiRoutingMode(mode);
+                }}
+                onZaiProfileApiKeyChange={(profile, value) => {
+                  setZaiProfileApiKeys((prev) => ({ ...prev, [profile]: value }));
+                }}
+                onSaveZaiProfileKey={(profile) => {
+                  void saveZaiProfileKey(profile, zaiProfileApiKeys[profile]);
+                }}
+                onDeleteZaiProfileKey={(profile) => {
+                  void deleteZaiProfileKey(profile);
+                }}
+                ollamaServerUrl={ollamaServerUrl}
+                hasSavedOllamaServer={hasSavedOllamaServer}
+                hasEnvOllamaServer={hasEnvOllamaServer}
+                ollamaProfiles={ollamaProfiles}
+                selectedOllamaProfile={selectedOllamaProfile}
+                newOllamaProfileName={newOllamaProfileName}
+                ollamaAuthMode={ollamaAuthMode}
+                ollamaAuthHeaderName={ollamaAuthHeaderName}
+                ollamaAuthToken={ollamaAuthToken}
+                ollamaTimeoutSeconds={ollamaRequestControls.timeout_seconds}
+                ollamaMaxRetries={ollamaRequestControls.max_retries}
+                ollamaRetryBackoffMs={ollamaRequestControls.retry_backoff_ms}
+                isTestingOllamaConnection={isTestingOllamaConnection}
+                ollamaConnectionStatus={ollamaConnectionStatus}
+                ollamaConnectionError={ollamaConnectionError}
                 onOllamaServerUrlChange={setOllamaServerUrl}
                 onSelectedOllamaProfileChange={setSelectedOllamaProfile}
                 onNewOllamaProfileNameChange={setNewOllamaProfileName}
@@ -1996,28 +2286,32 @@ function SettingsPageContent() {
                 onTestOllamaConnection={() => {
                   void testOllamaConnection();
                 }}
-                onRefreshAiModels={() => {
-                  if (preferencesDraft.aiProvider === "ollama") {
-                    ollamaAutoEnsurePromptedRef.current = null;
-                  }
-                  void fetchAiModels(preferencesDraft.aiProvider);
+                isSavingAssemblyKey={isSavingAssemblyKey}
+                assemblyApiKey={assemblyApiKey}
+                hasSavedAssemblyKey={hasSavedAssemblyKey}
+                hasAssemblyEnvFallback={hasAssemblyEnvFallback}
+                assemblyMaxDurationSeconds={assemblyMaxDurationSeconds}
+                assemblyMaxLocalUploadSizeBytes={assemblyMaxLocalUploadSizeBytes}
+                assemblyKeyStatus={assemblyKeyStatus}
+                assemblyKeyError={assemblyKeyError}
+                onAssemblyApiKeyChange={setAssemblyApiKey}
+                onSaveAssemblyKey={() => {
+                  void saveAssemblyKey(assemblyApiKey);
                 }}
-                onSelectedZaiKeyProfileChange={setSelectedZaiKeyProfile}
-                onZaiRoutingModeChange={(mode) => {
-                  if (!isZaiRoutingMode(mode)) {
-                    return;
-                  }
-                  setZaiRoutingMode(mode);
-                  void saveZaiRoutingMode(mode);
+                onDeleteAssemblyKey={() => {
+                  void deleteAssemblyKey();
                 }}
-                onZaiProfileApiKeyChange={(value) => {
-                  setZaiProfileApiKeys((prev) => ({ ...prev, [selectedZaiKeyProfile]: value }));
-                }}
-                onSaveZaiProfileKey={() => {
-                  void saveZaiProfileKey(selectedZaiKeyProfile, zaiProfileApiKeys[selectedZaiKeyProfile]);
-                }}
-                onDeleteZaiProfileKey={() => {
-                  void deleteZaiProfileKey(selectedZaiKeyProfile);
+                isSavingYoutubeCookies={isSavingYoutubeCookies}
+                hasSavedYoutubeCookies={hasSavedYoutubeCookies}
+                hasYoutubeCookieEnvFallback={hasYoutubeCookieEnvFallback}
+                youtubeCookiesFilename={youtubeCookiesFilename}
+                youtubeCookiesUpdatedAt={youtubeCookiesUpdatedAt}
+                youtubeCookieSource={youtubeCookieSource}
+                youtubeCookieStatus={youtubeCookieStatus}
+                youtubeCookieError={youtubeCookieError}
+                onYoutubeCookiesUpload={handleYoutubeCookiesUpload}
+                onDeleteYoutubeCookies={() => {
+                  void deleteYoutubeCookies();
                 }}
               />
             )}
@@ -2038,13 +2332,17 @@ function SettingsPageContent() {
               >
                 {isSavingPreferences
                   ? "Saving..."
-                  : activeSection === "font"
-                    ? "Save Fonts"
-                    : activeSection === "video"
-                      ? "Save Video"
-                      : activeSection === "transcription"
-                        ? "Save Transcription"
-                        : "Save AI"}
+                  : activeSection === "workflow"
+                    ? "Save Workflow"
+                    : activeSection === "captions"
+                      ? "Save Captions"
+                      : activeSection === "framing"
+                        ? "Save Framing"
+                        : activeSection === "transcription"
+                          ? "Save Transcription"
+                          : activeSection === "ai"
+                            ? "Save AI"
+                            : "Save Connections"}
               </Button>
             </div>
           </section>

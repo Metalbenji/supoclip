@@ -32,7 +32,9 @@ const SUPPORTED_FACE_ANCHOR_PROFILES = new Set([
   "right_or_center",
   "right_only",
 ]);
-const SUPPORTED_PROCESSING_PROFILES = new Set(["fast_draft", "balanced", "best_quality", "stream_layout"]);
+const SUPPORTED_OUTPUT_ASPECT_RATIOS = new Set(["auto", "1:1", "21:9", "16:9", "9:16", "4:3", "4:5", "5:4", "3:4", "3:2", "2:3"]);
+const SUPPORTED_PROCESSING_PROFILES = new Set(["fast_draft", "balanced", "best_quality", "stream_layout", "custom"]);
+const SUPPORTED_WORKFLOW_SOURCES = new Set(["built_in", "saved", "custom"]);
 const SUPPORTED_AI_PROVIDERS = new Set(["openai", "google", "anthropic", "zai", "ollama"]);
 const MIN_WHISPER_CHUNK_DURATION_SECONDS = 300;
 const MAX_WHISPER_CHUNK_DURATION_SECONDS = 3600;
@@ -40,6 +42,8 @@ const MIN_WHISPER_CHUNK_OVERLAP_SECONDS = 0;
 const MAX_WHISPER_CHUNK_OVERLAP_SECONDS = 120;
 const MIN_TASK_TIMEOUT_SECONDS = 300;
 const MAX_TASK_TIMEOUT_SECONDS = 86400;
+const MIN_REVIEW_AUTO_SELECT_STRONG_FACE_MIN_SCORE_PERCENT = 0;
+const MAX_REVIEW_AUTO_SELECT_STRONG_FACE_MIN_SCORE_PERCENT = 100;
 
 type WhisperPreferenceRow = {
   default_whisper_model_size: string | null;
@@ -171,12 +175,32 @@ function normalizeFaceAnchorProfile(
   return "auto";
 }
 
-function normalizeProcessingProfile(rawValue: unknown): "fast_draft" | "balanced" | "best_quality" | "stream_layout" {
+function normalizeOutputAspectRatio(
+  rawValue: unknown,
+): "auto" | "1:1" | "21:9" | "16:9" | "9:16" | "4:3" | "4:5" | "5:4" | "3:4" | "3:2" | "2:3" {
+  const normalized = typeof rawValue === "string" ? rawValue.trim().toLowerCase() : "";
+  if (SUPPORTED_OUTPUT_ASPECT_RATIOS.has(normalized)) {
+    return normalized as "auto" | "1:1" | "21:9" | "16:9" | "9:16" | "4:3" | "4:5" | "5:4" | "3:4" | "3:2" | "2:3";
+  }
+  return "9:16";
+}
+
+function normalizeProcessingProfile(
+  rawValue: unknown,
+): "fast_draft" | "balanced" | "best_quality" | "stream_layout" | "custom" {
   const normalized = typeof rawValue === "string" ? rawValue.trim().toLowerCase() : "";
   if (SUPPORTED_PROCESSING_PROFILES.has(normalized)) {
-    return normalized as "fast_draft" | "balanced" | "best_quality" | "stream_layout";
+    return normalized as "fast_draft" | "balanced" | "best_quality" | "stream_layout" | "custom";
   }
   return "balanced";
+}
+
+function normalizeWorkflowSource(rawValue: unknown): "built_in" | "saved" | "custom" {
+  const normalized = typeof rawValue === "string" ? rawValue.trim().toLowerCase() : "";
+  if (SUPPORTED_WORKFLOW_SOURCES.has(normalized)) {
+    return normalized as "built_in" | "saved" | "custom";
+  }
+  return "built_in";
 }
 
 // GET /api/preferences - Get user preferences
@@ -214,9 +238,14 @@ export async function GET() {
         default_review_before_render_enabled: true,
         default_timeline_editor_enabled: true,
         default_processing_profile: true,
+        default_workflow_source: true,
+        default_saved_workflow_id: true,
+        default_review_auto_select_strong_face_enabled: true,
+        default_review_auto_select_strong_face_min_score_percent: true,
         default_framing_mode: true,
         default_face_detection_mode: true,
         default_fallback_crop_position: true,
+        default_output_aspect_ratio: true,
         default_transcription_provider: true,
         default_whisper_chunking_enabled: true,
         default_whisper_chunk_duration_seconds: true,
@@ -274,10 +303,27 @@ export async function GET() {
       reviewBeforeRenderEnabled: user.default_review_before_render_enabled ?? true,
       timelineEditorEnabled: user.default_timeline_editor_enabled ?? true,
       defaultProcessingProfile: normalizeProcessingProfile(user.default_processing_profile),
+      defaultWorkflowSource: normalizeWorkflowSource(user.default_workflow_source),
+      defaultSavedWorkflowId:
+        typeof user.default_saved_workflow_id === "string" && user.default_saved_workflow_id.trim().length > 0
+          ? user.default_saved_workflow_id
+          : null,
+      reviewAutoSelectStrongFaceEnabled: user.default_review_auto_select_strong_face_enabled ?? false,
+      reviewAutoSelectStrongFaceMinScorePercent:
+        typeof user.default_review_auto_select_strong_face_min_score_percent === "number"
+          ? Math.min(
+              MAX_REVIEW_AUTO_SELECT_STRONG_FACE_MIN_SCORE_PERCENT,
+              Math.max(
+                MIN_REVIEW_AUTO_SELECT_STRONG_FACE_MIN_SCORE_PERCENT,
+                Math.round(user.default_review_auto_select_strong_face_min_score_percent),
+              ),
+            )
+          : 85,
       defaultFramingMode,
       faceDetectionMode: normalizeFaceDetectionMode(user.default_face_detection_mode),
       fallbackCropPosition: normalizeFallbackCropPosition(user.default_fallback_crop_position),
       faceAnchorProfile: normalizeFaceAnchorProfile(faceAnchorPreference.default_face_anchor_profile),
+      defaultOutputAspectRatio: normalizeOutputAspectRatio(user.default_output_aspect_ratio),
       transcriptionProvider: user.default_transcription_provider || "local",
       whisperChunkingEnabled: user.default_whisper_chunking_enabled ?? true,
       whisperChunkDurationSeconds: user.default_whisper_chunk_duration_seconds || 1200,
@@ -349,10 +395,15 @@ export async function PATCH(request: NextRequest) {
       reviewBeforeRenderEnabled,
       timelineEditorEnabled,
       defaultProcessingProfile,
+      defaultWorkflowSource,
+      defaultSavedWorkflowId,
+      reviewAutoSelectStrongFaceEnabled,
+      reviewAutoSelectStrongFaceMinScorePercent,
       defaultFramingMode,
       faceDetectionMode,
       fallbackCropPosition,
       faceAnchorProfile,
+      defaultOutputAspectRatio,
       transcriptionProvider,
       whisperChunkingEnabled,
       whisperChunkDurationSeconds,
@@ -438,11 +489,46 @@ export async function PATCH(request: NextRequest) {
       return NextResponse.json({ error: "Invalid timelineEditorEnabled" }, { status: 400 });
     }
     if (
+      reviewAutoSelectStrongFaceEnabled !== undefined &&
+      typeof reviewAutoSelectStrongFaceEnabled !== "boolean"
+    ) {
+      return NextResponse.json({ error: "Invalid reviewAutoSelectStrongFaceEnabled" }, { status: 400 });
+    }
+    if (
       defaultProcessingProfile !== undefined &&
       (typeof defaultProcessingProfile !== "string" || !SUPPORTED_PROCESSING_PROFILES.has(defaultProcessingProfile))
     ) {
       return NextResponse.json(
         { error: "Invalid defaultProcessingProfile" },
+        { status: 400 },
+      );
+    }
+    if (
+      defaultWorkflowSource !== undefined &&
+      (typeof defaultWorkflowSource !== "string" || !SUPPORTED_WORKFLOW_SOURCES.has(defaultWorkflowSource))
+    ) {
+      return NextResponse.json({ error: "Invalid defaultWorkflowSource" }, { status: 400 });
+    }
+    if (
+      defaultSavedWorkflowId !== undefined &&
+      defaultSavedWorkflowId !== null &&
+      typeof defaultSavedWorkflowId !== "string"
+    ) {
+      return NextResponse.json({ error: "Invalid defaultSavedWorkflowId" }, { status: 400 });
+    }
+    if (
+      reviewAutoSelectStrongFaceMinScorePercent !== undefined &&
+      !isIntegerInRange(
+        reviewAutoSelectStrongFaceMinScorePercent,
+        MIN_REVIEW_AUTO_SELECT_STRONG_FACE_MIN_SCORE_PERCENT,
+        MAX_REVIEW_AUTO_SELECT_STRONG_FACE_MIN_SCORE_PERCENT,
+      )
+    ) {
+      return NextResponse.json(
+        {
+          error:
+            "Invalid reviewAutoSelectStrongFaceMinScorePercent (must be an integer from 0 to 100)",
+        },
         { status: 400 },
       );
     }
@@ -481,6 +567,12 @@ export async function PATCH(request: NextRequest) {
         { error: "Invalid faceAnchorProfile (must be auto, left_only, left_or_center, center_only, right_or_center, or right_only)" },
         { status: 400 },
       );
+    }
+    if (
+      defaultOutputAspectRatio !== undefined &&
+      (typeof defaultOutputAspectRatio !== "string" || !SUPPORTED_OUTPUT_ASPECT_RATIOS.has(defaultOutputAspectRatio))
+    ) {
+      return NextResponse.json({ error: "Invalid defaultOutputAspectRatio" }, { status: 400 });
     }
     if (
       transcriptionProvider !== undefined &&
@@ -583,6 +675,31 @@ export async function PATCH(request: NextRequest) {
       );
     }
 
+    const normalizedWorkflowSource =
+      defaultWorkflowSource !== undefined ? normalizeWorkflowSource(defaultWorkflowSource) : undefined;
+    const normalizedSavedWorkflowId =
+      defaultSavedWorkflowId !== undefined && defaultSavedWorkflowId !== null
+        ? defaultSavedWorkflowId.trim() || null
+        : defaultSavedWorkflowId;
+    if (
+      normalizedWorkflowSource === "saved" &&
+      (!normalizedSavedWorkflowId || typeof normalizedSavedWorkflowId !== "string")
+    ) {
+      return NextResponse.json({ error: "Saved workflows require defaultSavedWorkflowId" }, { status: 400 });
+    }
+    if (normalizedSavedWorkflowId) {
+      const savedWorkflow = await ((prisma as any).savedWorkflow as any).findFirst({
+        where: {
+          id: normalizedSavedWorkflowId,
+          user_id: session.user.id,
+        },
+        select: { id: true },
+      });
+      if (!savedWorkflow) {
+        return NextResponse.json({ error: "Saved workflow not found" }, { status: 400 });
+      }
+    }
+
     const updatedUser = await (prisma.user as any).update({
       where: { id: session.user.id },
       data: {
@@ -609,9 +726,18 @@ export async function PATCH(request: NextRequest) {
         }),
         ...(timelineEditorEnabled !== undefined && { default_timeline_editor_enabled: timelineEditorEnabled }),
         ...(defaultProcessingProfile !== undefined && { default_processing_profile: defaultProcessingProfile }),
+        ...(normalizedWorkflowSource !== undefined && { default_workflow_source: normalizedWorkflowSource }),
+        ...(defaultSavedWorkflowId !== undefined && { default_saved_workflow_id: normalizedSavedWorkflowId }),
+        ...(reviewAutoSelectStrongFaceEnabled !== undefined && {
+          default_review_auto_select_strong_face_enabled: reviewAutoSelectStrongFaceEnabled,
+        }),
+        ...(reviewAutoSelectStrongFaceMinScorePercent !== undefined && {
+          default_review_auto_select_strong_face_min_score_percent: reviewAutoSelectStrongFaceMinScorePercent,
+        }),
         ...(defaultFramingMode !== undefined && { default_framing_mode: defaultFramingMode }),
         ...(faceDetectionMode !== undefined && { default_face_detection_mode: faceDetectionMode }),
         ...(fallbackCropPosition !== undefined && { default_fallback_crop_position: fallbackCropPosition }),
+        ...(defaultOutputAspectRatio !== undefined && { default_output_aspect_ratio: defaultOutputAspectRatio }),
         ...(transcriptionProvider !== undefined && { default_transcription_provider: transcriptionProvider }),
         ...(whisperChunkingEnabled !== undefined && { default_whisper_chunking_enabled: whisperChunkingEnabled }),
         ...(whisperChunkDurationSeconds !== undefined && {
@@ -646,9 +772,14 @@ export async function PATCH(request: NextRequest) {
         default_review_before_render_enabled: true,
         default_timeline_editor_enabled: true,
         default_processing_profile: true,
+        default_workflow_source: true,
+        default_saved_workflow_id: true,
+        default_review_auto_select_strong_face_enabled: true,
+        default_review_auto_select_strong_face_min_score_percent: true,
         default_framing_mode: true,
         default_face_detection_mode: true,
         default_fallback_crop_position: true,
+        default_output_aspect_ratio: true,
         default_transcription_provider: true,
         default_whisper_chunking_enabled: true,
         default_whisper_chunk_duration_seconds: true,
@@ -699,12 +830,29 @@ export async function PATCH(request: NextRequest) {
       reviewBeforeRenderEnabled: updatedUser.default_review_before_render_enabled ?? true,
       timelineEditorEnabled: updatedUser.default_timeline_editor_enabled ?? true,
       defaultProcessingProfile: normalizeProcessingProfile(updatedUser.default_processing_profile),
+      defaultWorkflowSource: normalizeWorkflowSource(updatedUser.default_workflow_source),
+      defaultSavedWorkflowId:
+        typeof updatedUser.default_saved_workflow_id === "string" && updatedUser.default_saved_workflow_id.trim().length > 0
+          ? updatedUser.default_saved_workflow_id
+          : null,
+      reviewAutoSelectStrongFaceEnabled: updatedUser.default_review_auto_select_strong_face_enabled ?? false,
+      reviewAutoSelectStrongFaceMinScorePercent:
+        typeof updatedUser.default_review_auto_select_strong_face_min_score_percent === "number"
+          ? Math.min(
+              MAX_REVIEW_AUTO_SELECT_STRONG_FACE_MIN_SCORE_PERCENT,
+              Math.max(
+                MIN_REVIEW_AUTO_SELECT_STRONG_FACE_MIN_SCORE_PERCENT,
+                Math.round(updatedUser.default_review_auto_select_strong_face_min_score_percent),
+              ),
+            )
+          : 85,
       defaultFramingMode: hadLegacyCenterOnly
         ? "fixed_position"
         : normalizeDefaultFramingMode(updatedUser.default_framing_mode),
       faceDetectionMode: normalizeFaceDetectionMode(updatedUser.default_face_detection_mode),
       fallbackCropPosition: normalizeFallbackCropPosition(updatedUser.default_fallback_crop_position),
       faceAnchorProfile: normalizeFaceAnchorProfile(faceAnchorPreference.default_face_anchor_profile),
+      defaultOutputAspectRatio: normalizeOutputAspectRatio(updatedUser.default_output_aspect_ratio),
       transcriptionProvider: updatedUser.default_transcription_provider || "local",
       whisperChunkingEnabled: updatedUser.default_whisper_chunking_enabled ?? true,
       whisperChunkDurationSeconds: updatedUser.default_whisper_chunk_duration_seconds || 1200,

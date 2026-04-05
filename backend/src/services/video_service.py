@@ -364,6 +364,7 @@ class VideoService:
         font_size: int = 24,
         font_color: str = "#FFFFFF",
         subtitle_style: Optional[Dict[str, Any]] = None,
+        output_aspect_ratio: str = "9:16",
         transitions_enabled: bool = False,
         progress_callback: Optional[callable] = None,
         filename_prefix: Optional[str] = None,
@@ -429,6 +430,7 @@ class VideoService:
             font_size,
             font_color,
             subtitle_style,
+            output_aspect_ratio,
             render_diagnostics,
             on_clip_progress,
             filename_prefix,
@@ -464,6 +466,7 @@ class VideoService:
         face_detection_mode: str = "balanced",
         fallback_crop_position: str = "center",
         face_anchor_profile: str = "auto",
+        output_aspect_ratio: str = "9:16",
     ) -> List[Dict[str, Any]]:
         analyze_segment_framing = VideoService._video_utils_attr("analyze_segment_framing_batch")
         return await run_in_thread(
@@ -473,6 +476,7 @@ class VideoService:
             face_detection_mode,
             fallback_crop_position,
             face_anchor_profile,
+            output_aspect_ratio,
         )
 
     @staticmethod
@@ -483,6 +487,7 @@ class VideoService:
         face_detection_mode: str = "balanced",
         fallback_crop_position: str = "center",
         face_anchor_profile: str = "auto",
+        output_aspect_ratio: str = "9:16",
     ) -> Dict[str, Any]:
         analyze_segment_framing = VideoService._video_utils_attr("analyze_single_segment_framing")
         return await run_in_thread(
@@ -493,6 +498,7 @@ class VideoService:
             face_detection_mode,
             fallback_crop_position,
             face_anchor_profile,
+            output_aspect_ratio,
         )
 
     @staticmethod
@@ -1056,6 +1062,7 @@ class VideoService:
         face_detection_mode: str = "balanced",
         fallback_crop_position: str = "center",
         face_anchor_profile: str = "auto",
+        output_aspect_ratio: str = "9:16",
         progress_callback: Optional[callable] = None,
         cancel_check: Optional[Callable[[], Awaitable[None]]] = None,
     ) -> Dict[str, Any]:
@@ -1224,6 +1231,7 @@ class VideoService:
                     face_detection_mode=face_detection_mode,
                     fallback_crop_position=fallback_crop_position,
                     face_anchor_profile=face_anchor_profile,
+                    output_aspect_ratio=output_aspect_ratio,
                 )
                 for segment, framing_metadata in zip(segments_json, framing_results):
                     metadata = dict(framing_metadata or {})
@@ -1281,6 +1289,7 @@ class VideoService:
         font_size: int = 24,
         font_color: str = "#FFFFFF",
         subtitle_style: Optional[Dict[str, Any]] = None,
+        output_aspect_ratio: str = "9:16",
         transitions_enabled: bool = False,
         progress_callback: Optional[callable] = None,
         cancel_check: Optional[Callable[[], Awaitable[None]]] = None,
@@ -1303,11 +1312,12 @@ class VideoService:
         clip_result = await VideoService.create_video_clips(
             video_path,
             segments,
-            font_family,
-            font_size,
-            font_color,
-            subtitle_style,
-            transitions_enabled,
+            font_family=font_family,
+            font_size=font_size,
+            font_color=font_color,
+            subtitle_style=subtitle_style,
+            output_aspect_ratio=output_aspect_ratio,
+            transitions_enabled=transitions_enabled,
             progress_callback=progress_callback,
             filename_prefix=filename_prefix,
         )
@@ -1353,6 +1363,8 @@ class VideoService:
         default_framing_mode: str = "auto",
         face_detection_mode: str = "balanced",
         fallback_crop_position: str = "center",
+        face_anchor_profile: str = "auto",
+        output_aspect_ratio: str = "9:16",
         progress_callback: Optional[callable] = None,
         cancel_check: Optional[Callable[[], Awaitable[None]]] = None,
         filename_prefix: Optional[str] = None,
@@ -1381,6 +1393,8 @@ class VideoService:
                 default_framing_mode=default_framing_mode,
                 face_detection_mode=face_detection_mode,
                 fallback_crop_position=fallback_crop_position,
+                face_anchor_profile=face_anchor_profile,
+                output_aspect_ratio=output_aspect_ratio,
                 progress_callback=progress_callback,
                 cancel_check=cancel_check,
             )
@@ -1392,6 +1406,7 @@ class VideoService:
                 font_size=font_size,
                 font_color=font_color,
                 subtitle_style=subtitle_style,
+                output_aspect_ratio=output_aspect_ratio,
                 transitions_enabled=transitions_enabled,
                 progress_callback=progress_callback,
                 cancel_check=cancel_check,

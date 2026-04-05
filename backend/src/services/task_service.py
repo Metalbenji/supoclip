@@ -70,7 +70,7 @@ MAX_REVIEW_AUTO_SELECT_MIN_SCORE = 1.0
 SUPPORTED_FRAMING_MODE_OVERRIDES = {"auto", "prefer_face", "fixed_position"}
 SUPPORTED_FACE_DETECTION_MODES = {"balanced", "more_faces"}
 SUPPORTED_FALLBACK_CROP_POSITIONS = {"center", "left_center", "right_center"}
-SUPPORTED_PROCESSING_PROFILES = {"fast_draft", "balanced", "best_quality", "stream_layout"}
+SUPPORTED_PROCESSING_PROFILES = {"fast_draft", "balanced", "best_quality", "stream_layout", "custom"}
 SUPPORTED_FACE_ANCHOR_PROFILES = {
     "auto",
     "left_only",
@@ -357,6 +357,9 @@ class TaskService:
         review_before_render_enabled: bool = True,
         timeline_editor_enabled: bool = True,
         processing_profile: str = "balanced",
+        workflow_source: str = "built_in",
+        saved_workflow_id: Optional[str] = None,
+        workflow_name_snapshot: Optional[str] = None,
         runtime_info_json: Optional[Dict[str, Any]] = None,
     ) -> str:
         """
@@ -395,6 +398,9 @@ class TaskService:
             ai_provider=ai_provider,
             ai_focus_tags=ai_focus_tags,
             processing_profile=self._normalize_processing_profile(processing_profile),
+            workflow_source=self._normalize_workflow_source(workflow_source),
+            saved_workflow_id=(saved_workflow_id or None),
+            workflow_name_snapshot=(workflow_name_snapshot or None),
             runtime_info_json=runtime_info_json,
             stage_checkpoint="queued",
             retryable_from_stages=[],
@@ -853,6 +859,14 @@ class TaskService:
             return "auto"
         return normalized
 
+    @staticmethod
+    def _normalize_output_aspect_ratio(value: Any) -> str:
+        normalized = str(value or "9:16").strip().lower()
+        supported = {"auto", "1:1", "21:9", "16:9", "9:16", "4:3", "4:5", "5:4", "3:4", "3:2", "2:3"}
+        if normalized not in supported:
+            return "9:16"
+        return normalized
+
     @classmethod
     def _resolve_effective_default_framing_mode(
         cls,
@@ -871,10 +885,13 @@ class TaskService:
                 "review_before_render_enabled": True,
                 "timeline_editor_enabled": True,
                 "default_processing_profile": "balanced",
+                "default_review_auto_select_strong_face_enabled": False,
+                "default_review_auto_select_strong_face_min_score_percent": 85,
                 "default_framing_mode": "auto",
                 "default_face_detection_mode": "balanced",
                 "default_fallback_crop_position": "center",
                 "default_face_anchor_profile": "auto",
+                "default_output_aspect_ratio": "9:16",
                 "effective_default_framing_mode": "auto",
             }
         else:
@@ -887,6 +904,7 @@ class TaskService:
                 "default_face_detection_mode": task_video_overrides.get("face_detection_mode", preferences.get("default_face_detection_mode")),
                 "default_fallback_crop_position": task_video_overrides.get("fallback_crop_position", preferences.get("default_fallback_crop_position")),
                 "default_face_anchor_profile": task_video_overrides.get("face_anchor_profile", preferences.get("default_face_anchor_profile")),
+                "default_output_aspect_ratio": task_video_overrides.get("output_aspect_ratio", preferences.get("default_output_aspect_ratio")),
             }
         raw_detection_mode = str(preferences.get("default_face_detection_mode") or "balanced").strip().lower()
         default_framing_mode = self._normalize_framing_mode_override(preferences.get("default_framing_mode"))
@@ -896,6 +914,9 @@ class TaskService:
         )
         face_anchor_profile = self._normalize_face_anchor_profile(
             preferences.get("default_face_anchor_profile")
+        )
+        output_aspect_ratio = self._normalize_output_aspect_ratio(
+            preferences.get("default_output_aspect_ratio")
         )
         effective_default_framing_mode = self._resolve_effective_default_framing_mode(
             "fixed_position" if raw_detection_mode == "center_only" else default_framing_mode,
@@ -916,6 +937,7 @@ class TaskService:
             "default_face_detection_mode": face_detection_mode,
             "default_fallback_crop_position": fallback_crop_position,
             "default_face_anchor_profile": face_anchor_profile,
+            "default_output_aspect_ratio": output_aspect_ratio,
             "effective_default_framing_mode": effective_default_framing_mode,
         }
 
@@ -924,6 +946,13 @@ class TaskService:
         normalized = str(value or "balanced").strip().lower()
         if normalized not in SUPPORTED_PROCESSING_PROFILES:
             return "balanced"
+        return normalized
+
+    @staticmethod
+    def _normalize_workflow_source(value: Any) -> str:
+        normalized = str(value or "built_in").strip().lower()
+        if normalized not in {"built_in", "saved", "custom"}:
+            return "built_in"
         return normalized
 
     @staticmethod
@@ -1076,7 +1105,7 @@ class TaskService:
         ):
             return (
                 code,
-                "YouTube requested sign-in verification. Upload a YouTube cookies.txt file in Settings > Transcription, then retry from download.",
+                "YouTube requested sign-in verification. Upload a YouTube cookies.txt file in Settings > Connections, then retry from download.",
             )
         if code == "transcription" and any(marker in lowered for marker in CORRUPT_AUDIO_FAILURE_MARKERS):
             return (
@@ -1996,6 +2025,7 @@ class TaskService:
             face_detection_mode=str(user_video_preferences.get("default_face_detection_mode") or "balanced"),
             fallback_crop_position=str(user_video_preferences.get("default_fallback_crop_position") or "center"),
             face_anchor_profile=str(user_video_preferences.get("default_face_anchor_profile") or "auto"),
+            output_aspect_ratio=str(user_video_preferences.get("default_output_aspect_ratio") or "9:16"),
             progress_callback=update_progress,
             cancel_check=cancel_check,
         )
@@ -2177,6 +2207,7 @@ class TaskService:
             face_detection_mode=str(user_video_preferences.get("default_face_detection_mode") or "balanced"),
             fallback_crop_position=str(user_video_preferences.get("default_fallback_crop_position") or "center"),
             face_anchor_profile=str(user_video_preferences.get("default_face_anchor_profile") or "auto"),
+            output_aspect_ratio=str(user_video_preferences.get("default_output_aspect_ratio") or "9:16"),
             progress_callback=update_progress,
             cancel_check=cancel_check,
             filename_prefix=render_filename_prefix,
@@ -2907,6 +2938,7 @@ class TaskService:
             face_detection_mode=str(user_video_preferences.get("default_face_detection_mode") or "balanced"),
             fallback_crop_position=str(user_video_preferences.get("default_fallback_crop_position") or "center"),
             face_anchor_profile=str(user_video_preferences.get("default_face_anchor_profile") or "auto"),
+            output_aspect_ratio=str(user_video_preferences.get("default_output_aspect_ratio") or "9:16"),
         )
 
         preferred_text = str(edited_text or "").strip()

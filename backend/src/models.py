@@ -57,6 +57,26 @@ class User(Base):
         nullable=False,
         server_default=text("'balanced'"),
     )
+    default_workflow_source: Mapped[str] = mapped_column(
+        String(16),
+        nullable=False,
+        server_default=text("'built_in'"),
+    )
+    default_saved_workflow_id: Mapped[Optional[str]] = mapped_column(
+        String(36),
+        ForeignKey("saved_workflows.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    default_review_auto_select_strong_face_enabled: Mapped[bool] = mapped_column(
+        Boolean,
+        nullable=False,
+        server_default=text("false"),
+    )
+    default_review_auto_select_strong_face_min_score_percent: Mapped[int] = mapped_column(
+        Integer,
+        nullable=False,
+        server_default=text("85"),
+    )
     default_framing_mode: Mapped[str] = mapped_column(
         String(32),
         nullable=False,
@@ -76,6 +96,11 @@ class User(Base):
         String(24),
         nullable=False,
         server_default=text("'auto'"),
+    )
+    default_output_aspect_ratio: Mapped[str] = mapped_column(
+        String(12),
+        nullable=False,
+        server_default=text("'9:16'"),
     )
     default_transcription_provider: Mapped[str] = mapped_column(
         String(20),
@@ -135,6 +160,12 @@ class User(Base):
 
     # Relationships
     tasks: Mapped[List["Task"]] = relationship("Task", back_populates="user", cascade="all, delete-orphan")
+    saved_workflows: Mapped[List["SavedWorkflow"]] = relationship(
+        "SavedWorkflow",
+        back_populates="user",
+        cascade="all, delete-orphan",
+        foreign_keys="SavedWorkflow.user_id",
+    )
 
 class Task(Base):
     __tablename__ = "tasks"
@@ -157,6 +188,13 @@ class Task(Base):
     ai_provider: Mapped[str] = mapped_column(String(20), nullable=False, server_default=text("'openai'"))
     ai_focus_tags: Mapped[Optional[list[str]]] = mapped_column(JSONB, nullable=True)
     processing_profile: Mapped[str] = mapped_column(String(32), nullable=False, server_default=text("'balanced'"))
+    workflow_source: Mapped[str] = mapped_column(String(16), nullable=False, server_default=text("'built_in'"))
+    saved_workflow_id: Mapped[Optional[str]] = mapped_column(
+        String(36),
+        ForeignKey("saved_workflows.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    workflow_name_snapshot: Mapped[Optional[str]] = mapped_column(String(120), nullable=True)
     runtime_info_json: Mapped[Optional[dict]] = mapped_column(JSONB, nullable=True)
     failure_code: Mapped[Optional[str]] = mapped_column(String(40), nullable=True)
     failure_hint: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
@@ -171,6 +209,40 @@ class Task(Base):
     source: Mapped[Optional["Source"]] = relationship("Source", back_populates="tasks")
     generated_clips: Mapped[List["GeneratedClip"]] = relationship("GeneratedClip", back_populates="task", cascade="all, delete-orphan")
     draft_clips: Mapped[List["TaskClipDraft"]] = relationship("TaskClipDraft", back_populates="task", cascade="all, delete-orphan")
+    saved_workflow: Mapped[Optional["SavedWorkflow"]] = relationship("SavedWorkflow", foreign_keys=[saved_workflow_id])
+
+
+class SavedWorkflow(Base):
+    __tablename__ = "saved_workflows"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=generate_uuid_string)
+    user_id: Mapped[str] = mapped_column(String(36), ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    name: Mapped[str] = mapped_column(String(120), nullable=False)
+    review_before_render_enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("true"))
+    timeline_editor_enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("true"))
+    transitions_enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("false"))
+    transcription_provider: Mapped[str] = mapped_column(String(20), nullable=False, server_default=text("'local'"))
+    whisper_model_size: Mapped[str] = mapped_column(String(20), nullable=False, server_default=text("'medium'"))
+    default_framing_mode: Mapped[str] = mapped_column(String(32), nullable=False, server_default=text("'auto'"))
+    face_detection_mode: Mapped[str] = mapped_column(String(20), nullable=False, server_default=text("'balanced'"))
+    fallback_crop_position: Mapped[str] = mapped_column(String(20), nullable=False, server_default=text("'center'"))
+    face_anchor_profile: Mapped[str] = mapped_column(String(24), nullable=False, server_default=text("'auto'"))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+    user: Mapped["User"] = relationship("User", back_populates="saved_workflows", foreign_keys=[user_id])
+
+    __table_args__ = (
+        CheckConstraint("transcription_provider IN ('local', 'assemblyai')", name="check_saved_workflows_transcription_provider"),
+        CheckConstraint("whisper_model_size IN ('tiny', 'base', 'small', 'medium', 'large', 'turbo')", name="check_saved_workflows_whisper_model_size"),
+        CheckConstraint("default_framing_mode IN ('auto', 'prefer_face', 'fixed_position')", name="check_saved_workflows_default_framing_mode"),
+        CheckConstraint("face_detection_mode IN ('balanced', 'more_faces')", name="check_saved_workflows_face_detection_mode"),
+        CheckConstraint("fallback_crop_position IN ('center', 'left_center', 'right_center')", name="check_saved_workflows_fallback_crop_position"),
+        CheckConstraint(
+            "face_anchor_profile IN ('auto', 'left_only', 'left_or_center', 'center_only', 'right_or_center', 'right_only')",
+            name="check_saved_workflows_face_anchor_profile",
+        ),
+    )
 
 class Source(Base):
     __tablename__ = "sources"
