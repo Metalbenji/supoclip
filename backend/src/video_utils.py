@@ -2721,12 +2721,35 @@ def _build_styled_word_layers(
     max_x: int,
     max_y: int,
     opacity_scale: float = 1.0,
+    animated_y_start: Optional[int] = None,
 ) -> List[TextClip]:
     if not text or duration <= 0 or box_width <= 0 or box_height <= 0:
         return []
 
     layered_clips: List[TextClip] = []
     safe_opacity_scale = max(0.0, min(1.0, float(opacity_scale)))
+
+    # Build position function — either static or animated (vertical scroll).
+    if animated_y_start is not None and duration > 0:
+        _y_from = animated_y_start
+        _y_to = base_y
+        # Ease-out cubic: fast start, gentle deceleration
+        _anim_duration = min(0.45, duration * 0.6)
+
+        def _pos_fn(x: int, y: int):
+            """Return a MoviePy-compatible position lambda."""
+            return lambda t: (
+                x,
+                int(_y_from + (_y_to - _y_from) * min(1.0, (t / _anim_duration) ** 0.6))
+                if _anim_duration > 0
+                else y,
+            )
+
+        def _layer_pos(x: int, y: int):
+            return _pos_fn(max(0, min(x, max_x)), max(0, min(y, max_y)))
+    else:
+        def _layer_pos(x: int, y: int):
+            return (max(0, min(x, max_x)), max(0, min(y, max_y)))
 
     def _make_text_clip(
         *,
@@ -2802,19 +2825,19 @@ def _build_styled_word_layers(
                 layer_x = max(0, min(base_x + offset_x, max_x))
                 layer_y = max(0, min(base_y + offset_y, max_y))
                 layered_clips.append(
-                    shadow_clip.with_position((layer_x, layer_y)).with_opacity(
+                    shadow_clip.with_position(_layer_pos(layer_x, layer_y)).with_opacity(
                         per_layer_opacity * safe_opacity_scale
                     )
                 )
 
     if soft_stroke_clip is not None and soft_stroke_opacity > 0:
         layered_clips.append(
-            soft_stroke_clip.with_position((base_x, base_y)).with_opacity(soft_stroke_opacity * safe_opacity_scale)
+            soft_stroke_clip.with_position(_layer_pos(base_x, base_y)).with_opacity(soft_stroke_opacity * safe_opacity_scale)
         )
 
     if stroke_text_clip is not None:
         layered_clips.append(
-            stroke_text_clip.with_position((base_x, base_y)).with_opacity(max(0.01, safe_opacity_scale))
+            stroke_text_clip.with_position(_layer_pos(base_x, base_y)).with_opacity(max(0.01, safe_opacity_scale))
         )
 
     weight_offsets: List[Tuple[int, int]] = []
@@ -2827,10 +2850,10 @@ def _build_styled_word_layers(
         layer_x = max(0, min(base_x + offset_x, max_x))
         layer_y = max(0, min(base_y + offset_y, max_y))
         layered_clips.append(
-            fill_clip.with_position((layer_x, layer_y)).with_opacity(0.8 * safe_opacity_scale)
+            fill_clip.with_position(_layer_pos(layer_x, layer_y)).with_opacity(0.8 * safe_opacity_scale)
         )
 
-    layered_clips.append(fill_clip.with_position((base_x, base_y)).with_opacity(max(0.01, safe_opacity_scale)))
+    layered_clips.append(fill_clip.with_position(_layer_pos(base_x, base_y)).with_opacity(max(0.01, safe_opacity_scale)))
     return layered_clips
 
 
@@ -3026,24 +3049,18 @@ def create_assemblyai_subtitles(
         else:
             target_y_ratio = 0.70
 
-        # Determine if this word group should animate (vertical_scroll).
-        if subtitle_animation == "vertical_scroll":
-            # In vertical_scroll mode, the FIRST group starts at the top and
-            # subsequent groups slide down toward the target position.
-            group_index = i // words_per_subtitle
-            total_groups = (len(relevant_words) + words_per_subtitle - 1) // words_per_subtitle
-            # Clamp progress so the last group sits at the target position.
-            scroll_progress = group_index / max(1, total_groups - 1) if total_groups > 1 else 1.0
-            top_ratio = 0.08
-            base_y = int(video_height * (top_ratio + scroll_progress * (target_y_ratio - top_ratio)) - line_box_height // 2)
-            # Apply a gentle fade-in: the first couple of groups start slightly transparent
-            # to create a smooth scroll-in effect.
-            scroll_fade_scale = 0.55 + 0.45 * min(1.0, scroll_progress * 1.5)
-        else:
-            base_y = int(video_height * target_y_ratio - line_box_height // 2)
-            scroll_fade_scale = None
+        base_y = int(video_height * target_y_ratio - line_box_height // 2)
         max_y = max(0, video_height - line_box_height)
         base_y = max(0, min(base_y, max_y))
+
+        # Vertical scroll: each word group slides down from above.
+        animated_y_start = None
+        scroll_fade_scale = None
+        if subtitle_animation == "vertical_scroll":
+            # Start position: ~25% of video height above the target
+            animated_y_start = max(0, base_y - int(video_height * 0.25))
+            # Apply a gentle fade-in for the first moments
+            scroll_fade_scale = 1.0
 
         current_x = line_start_x
         for word_index, (word_text, (word_start, word_end), word_width) in enumerate(
@@ -3076,6 +3093,7 @@ def create_assemblyai_subtitles(
                 max_x=word_box_max_x,
                 max_y=max_y,
                 opacity_scale=(0.52 if dim_unhighlighted else 1.0) * (scroll_fade_scale if scroll_fade_scale is not None else 1.0),
+                animated_y_start=animated_y_start,
             )
             subtitle_clips.extend(base_layers)
 
@@ -3108,6 +3126,7 @@ def create_assemblyai_subtitles(
                 max_x=word_box_max_x,
                 max_y=max_y,
                 opacity_scale=1.0 * (scroll_fade_scale if scroll_fade_scale is not None else 1.0),
+                animated_y_start=animated_y_start,
             )
             subtitle_clips.extend(highlight_layers)
 

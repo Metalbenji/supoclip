@@ -188,7 +188,7 @@ export function SettingsSectionFont({
       </div>
 
       {/* Position and Animation */}
-      <div className="grid gap-4 sm:grid-cols-2">
+      <div className="grid gap-4 sm:grid-cols-2 pt-1">
         <div className="space-y-2">
           <Label className="text-sm font-medium text-black">Position</Label>
           <Select
