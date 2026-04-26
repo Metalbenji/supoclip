@@ -2735,8 +2735,8 @@ def _build_styled_word_layers(
     if animated_y_start is not None and duration > 0:
         _y_from = animated_y_start
         _y_to = base_y
-        # Ease-out cubic: fast start, gentle deceleration
-        _anim_duration = min(0.45, duration * 0.6)
+        # Smooth ease-out: noticeable slide-in over ~1 second
+        _anim_duration = max(0.8, min(1.2, duration * 0.5))
 
         def _pos_fn(x: int, y: int):
             """Return a MoviePy-compatible position lambda.
@@ -2745,7 +2745,7 @@ def _build_styled_word_layers(
             """
             return lambda t: (
                 x,
-                int(_y_from + (_y_to - _y_from) * min(1.0, (t / _anim_duration) ** 0.6))
+                int(_y_from + (_y_to - _y_from) * min(1.0, (t / _anim_duration) ** 0.4))
                 if _anim_duration > 0
                 else y,
             )
@@ -3063,8 +3063,8 @@ def create_assemblyai_subtitles(
         animated_y_start = None
         scroll_fade_scale = None
         if subtitle_animation == "vertical_scroll":
-            # Start position: ~25% of video height above the target
-            animated_y_start = max(0, base_y - int(video_height * 0.25))
+            # Start position: ~45% of video height above the target (more dramatic)
+            animated_y_start = max(0, base_y - int(video_height * 0.45))
             # Apply a gentle fade-in for the first moments
             scroll_fade_scale = 1.0
             logger.info(
