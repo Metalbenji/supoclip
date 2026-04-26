@@ -2985,10 +2985,7 @@ def create_assemblyai_subtitles(
     dim_unhighlighted = bool(style.get("dim_unhighlighted", True))
     subtitle_position = str(style.get("position", "bottom"))
     subtitle_animation = str(style.get("animation", "none"))
-    logger.info(
-        "Subtitle style resolved: position=%s animation=%s (raw style keys: %s)",
-        subtitle_position, subtitle_animation, list(style.keys()),
-    )
+    print(f"[SUBTITLE_DEBUG] style resolved: position={subtitle_position} animation={subtitle_animation} keys={list(style.keys())}", flush=True)
 
     words_per_subtitle = 3
     for i in range(0, len(relevant_words), words_per_subtitle):
@@ -3074,6 +3071,7 @@ def create_assemblyai_subtitles(
                 "VERTICAL SCROLL enabled for segment %s: base_y=%s y_start=%s video_h=%s",
                 i, base_y, animated_y_start, video_height,
             )
+            print(f"[SUBTITLE_DEBUG] VERTICAL SCROLL segment {i}: base_y={base_y} y_start={animated_y_start} video_h={video_height}", flush=True)
 
         current_x = line_start_x
         for word_index, (word_text, (word_start, word_end), word_width) in enumerate(

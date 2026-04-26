@@ -1408,7 +1408,11 @@ async def create_task(request: Request, db: AsyncSession = Depends(get_db)):
     font_options = data.get("font_options", {})
     if not isinstance(font_options, dict):
         font_options = {}
+    # DEBUG: log raw font_options keys to verify animation/position are received
+    logger.info("CREATE_TASK font_options keys: %s", list(font_options.keys()))
+    logger.info("CREATE_TASK font_options animation=%r position=%r", font_options.get("animation"), font_options.get("position"))
     subtitle_style = normalize_subtitle_style(font_options)
+    logger.info("CREATE_TASK normalized subtitle_style animation=%r position=%r", subtitle_style.get("animation"), subtitle_style.get("position"))
     font_family = subtitle_style["font_family"]
     font_size = subtitle_style["font_size"]
     font_color = subtitle_style["font_color"]
