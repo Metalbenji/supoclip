@@ -4,7 +4,18 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Slider } from "@/components/ui/slider";
-import { TEXT_ALIGN_OPTIONS, TEXT_TRANSFORM_OPTIONS, type TextAlignOption, type TextTransformOption } from "@/lib/font-style-options";
+import {
+  SUBTITLE_ANIMATION_OPTIONS,
+  SUBTITLE_POSITION_OPTIONS,
+  SUBTITLE_PRESETS,
+  TEXT_ALIGN_OPTIONS,
+  TEXT_TRANSFORM_OPTIONS,
+  type SubtitleAnimationOption,
+  type SubtitlePresetId,
+  type SubtitlePositionOption,
+  type TextAlignOption,
+  type TextTransformOption,
+} from "@/lib/font-style-options";
 
 interface SettingsSectionFontProps {
   isSaving: boolean;
@@ -27,6 +38,9 @@ interface SettingsSectionFontProps {
   shadowOffsetX: number;
   shadowOffsetY: number;
   dimUnhighlighted: boolean;
+  position: SubtitlePositionOption;
+  animation: SubtitleAnimationOption;
+  subtitlePreset: SubtitlePresetId;
   isUploadingFont: boolean;
   fontUploadMessage: string | null;
   fontUploadError: string | null;
@@ -48,6 +62,9 @@ interface SettingsSectionFontProps {
   onShadowOffsetXChange: (offset: number) => void;
   onShadowOffsetYChange: (offset: number) => void;
   onDimUnhighlightedChange: (value: boolean) => void;
+  onPositionChange: (value: SubtitlePositionOption) => void;
+  onAnimationChange: (value: SubtitleAnimationOption) => void;
+  onSubtitlePresetChange: (presetId: SubtitlePresetId) => void;
   onFontUpload: (event: ChangeEvent<HTMLInputElement>) => void;
 }
 
@@ -92,6 +109,9 @@ export function SettingsSectionFont({
   shadowOffsetX,
   shadowOffsetY,
   dimUnhighlighted,
+  position,
+  animation,
+  subtitlePreset,
   isUploadingFont,
   fontUploadMessage,
   fontUploadError,
@@ -113,6 +133,9 @@ export function SettingsSectionFont({
   onShadowOffsetXChange,
   onShadowOffsetYChange,
   onDimUnhighlightedChange,
+  onPositionChange,
+  onAnimationChange,
+  onSubtitlePresetChange,
   onFontUpload,
 }: SettingsSectionFontProps) {
   const previewFilterBaseId = useId().replace(/:/g, "");
@@ -134,6 +157,80 @@ export function SettingsSectionFont({
 
   return (
     <div className="space-y-6">
+      {/* Style Preset Selector */}
+      <div className="space-y-2">
+        <Label className="text-sm font-medium text-black flex items-center gap-2">
+          <Palette className="w-4 h-4" />
+          Style Preset
+        </Label>
+        <Select
+          value={subtitlePreset}
+          onValueChange={(value) => onSubtitlePresetChange(value as SubtitlePresetId)}
+          disabled={isSaving || isUploadingFont}
+        >
+          <SelectTrigger className="w-full">
+            <SelectValue placeholder="Select preset" />
+          </SelectTrigger>
+          <SelectContent>
+            {SUBTITLE_PRESETS.map((preset) => (
+              <SelectItem key={preset.id} value={preset.id}>
+                {preset.label}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+        {(() => {
+          const activePreset = SUBTITLE_PRESETS.find((p) => p.id === subtitlePreset);
+          return activePreset ? (
+            <p className="text-xs text-gray-500">{activePreset.description}</p>
+          ) : null;
+        })()}
+      </div>
+
+      {/* Position and Animation */}
+      <div className="grid gap-4 sm:grid-cols-2">
+        <div className="space-y-2">
+          <Label className="text-sm font-medium text-black">Position</Label>
+          <Select
+            value={position}
+            onValueChange={(value) => onPositionChange(value as SubtitlePositionOption)}
+            disabled={isSaving || isUploadingFont}
+          >
+            <SelectTrigger className="w-full">
+              <SelectValue placeholder="Select position" />
+            </SelectTrigger>
+            <SelectContent>
+              {SUBTITLE_POSITION_OPTIONS.map((option) => (
+                <SelectItem key={option} value={option}>
+                  {option.charAt(0).toUpperCase() + option.slice(1).replace("_", " ")}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
+
+        <div className="space-y-2">
+          <Label className="text-sm font-medium text-black">Animation</Label>
+          <Select
+            value={animation}
+            onValueChange={(value) => onAnimationChange(value as SubtitleAnimationOption)}
+            disabled={isSaving || isUploadingFont}
+          >
+            <SelectTrigger className="w-full">
+              <SelectValue placeholder="Select animation" />
+            </SelectTrigger>
+            <SelectContent>
+              {SUBTITLE_ANIMATION_OPTIONS.map((option) => (
+                <SelectItem key={option} value={option}>
+                  {option === "none" ? "None" : "Vertical Scroll"}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
+      </div>
+
+      {/* Font Family */}
       <div className="space-y-2">
         <Label className="text-sm font-medium text-black flex items-center gap-2">
           <Type className="w-4 h-4" />

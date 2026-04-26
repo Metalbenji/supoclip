@@ -2955,6 +2955,8 @@ def create_assemblyai_subtitles(
     if not highlight_color:
         highlight_color = _resolve_karaoke_highlight_color(str(style["font_color"]))
     dim_unhighlighted = bool(style.get("dim_unhighlighted", True))
+    subtitle_position = str(style.get("position", "bottom"))
+    subtitle_animation = str(style.get("animation", "none"))
 
     words_per_subtitle = 3
     for i in range(0, len(relevant_words), words_per_subtitle):
@@ -3016,7 +3018,30 @@ def create_assemblyai_subtitles(
         max_line_start = max(0, video_width - total_width)
         line_start_x = max(0, min(int(line_start_x), max_line_start))
 
-        base_y = int(video_height * 0.70 - line_box_height // 2)
+        # Resolve vertical position based on subtitle_position setting.
+        if subtitle_position == "top":
+            target_y_ratio = 0.15
+        elif subtitle_position == "center":
+            target_y_ratio = 0.45
+        else:
+            target_y_ratio = 0.70
+
+        # Determine if this word group should animate (vertical_scroll).
+        if subtitle_animation == "vertical_scroll":
+            # In vertical_scroll mode, the FIRST group starts at the top and
+            # subsequent groups slide down toward the target position.
+            group_index = i // words_per_subtitle
+            total_groups = (len(relevant_words) + words_per_subtitle - 1) // words_per_subtitle
+            # Clamp progress so the last group sits at the target position.
+            scroll_progress = group_index / max(1, total_groups - 1) if total_groups > 1 else 1.0
+            top_ratio = 0.08
+            base_y = int(video_height * (top_ratio + scroll_progress * (target_y_ratio - top_ratio)) - line_box_height // 2)
+            # Apply a gentle fade-in: the first couple of groups start slightly transparent
+            # to create a smooth scroll-in effect.
+            scroll_fade_scale = 0.55 + 0.45 * min(1.0, scroll_progress * 1.5)
+        else:
+            base_y = int(video_height * target_y_ratio - line_box_height // 2)
+            scroll_fade_scale = None
         max_y = max(0, video_height - line_box_height)
         base_y = max(0, min(base_y, max_y))
 
@@ -3050,7 +3075,7 @@ def create_assemblyai_subtitles(
                 box_height=line_box_height,
                 max_x=word_box_max_x,
                 max_y=max_y,
-                opacity_scale=0.52 if dim_unhighlighted else 1.0,
+                opacity_scale=(0.52 if dim_unhighlighted else 1.0) * (scroll_fade_scale if scroll_fade_scale is not None else 1.0),
             )
             subtitle_clips.extend(base_layers)
 
@@ -3082,7 +3107,7 @@ def create_assemblyai_subtitles(
                 box_height=line_box_height,
                 max_x=word_box_max_x,
                 max_y=max_y,
-                opacity_scale=1.0,
+                opacity_scale=1.0 * (scroll_fade_scale if scroll_fade_scale is not None else 1.0),
             )
             subtitle_clips.extend(highlight_layers)
 

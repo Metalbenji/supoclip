@@ -5,6 +5,9 @@ import prisma from "@/lib/prisma";
 import {
   DEFAULT_FONT_STYLE_OPTIONS,
   isHexColor,
+  isSubtitleAnimation,
+  isSubtitlePreset,
+  isSubtitlePosition,
   isTextAlign,
   isTextTransform,
   normalizeFontSize,
@@ -348,6 +351,9 @@ export async function GET() {
           : null,
       aiProvider: user.default_ai_provider || "openai",
       aiModel: user.default_ai_model || "",
+      position: DEFAULT_FONT_STYLE_OPTIONS.position,
+      animation: DEFAULT_FONT_STYLE_OPTIONS.animation,
+      subtitlePreset: DEFAULT_FONT_STYLE_OPTIONS.subtitlePreset,
     });
   } catch (error) {
     console.error("Error fetching preferences:", error);
@@ -417,6 +423,9 @@ export async function PATCH(request: NextRequest) {
       whisperGpuIndex,
       aiProvider,
       aiModel,
+      position,
+      animation,
+      subtitlePreset,
     } = body;
 
     if (fontFamily !== undefined && typeof fontFamily !== "string") {
@@ -484,6 +493,15 @@ export async function PATCH(request: NextRequest) {
     }
     if (dimUnhighlighted !== undefined && typeof dimUnhighlighted !== "boolean") {
       return NextResponse.json({ error: "Invalid dimUnhighlighted" }, { status: 400 });
+    }
+    if (position !== undefined && !isSubtitlePosition(position)) {
+      return NextResponse.json({ error: "Invalid position (must be bottom, center, or top)" }, { status: 400 });
+    }
+    if (animation !== undefined && !isSubtitleAnimation(animation)) {
+      return NextResponse.json({ error: "Invalid animation (must be none or vertical_scroll)" }, { status: 400 });
+    }
+    if (subtitlePreset !== undefined && !isSubtitlePreset(subtitlePreset)) {
+      return NextResponse.json({ error: "Invalid subtitlePreset" }, { status: 400 });
     }
     if (transitionsEnabled !== undefined && typeof transitionsEnabled !== "boolean") {
       return NextResponse.json({ error: "Invalid transitionsEnabled" }, { status: 400 });
@@ -884,6 +902,9 @@ export async function PATCH(request: NextRequest) {
           : null,
       aiProvider: updatedUser.default_ai_provider || "openai",
       aiModel: updatedUser.default_ai_model || "",
+      position: isSubtitlePosition(position) ? position : DEFAULT_FONT_STYLE_OPTIONS.position,
+      animation: isSubtitleAnimation(animation) ? animation : DEFAULT_FONT_STYLE_OPTIONS.animation,
+      subtitlePreset: isSubtitlePreset(subtitlePreset) ? subtitlePreset : DEFAULT_FONT_STYLE_OPTIONS.subtitlePreset,
     });
   } catch (error) {
     console.error("Error updating preferences:", error);

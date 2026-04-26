@@ -35,6 +35,7 @@ import {
   type WhisperPresetId,
 } from "@/lib/whisper-transcription";
 import {
+  applySubtitlePreset,
   normalizeFontStyleOptions,
   normalizeFontWeight,
   normalizeLetterSpacing,
@@ -44,6 +45,9 @@ import {
   normalizeShadowOpacity,
   normalizeStrokeBlur,
   normalizeStrokeWidth,
+  type SubtitleAnimationOption,
+  type SubtitlePresetId,
+  type SubtitlePositionOption,
   type TextAlignOption,
   type TextTransformOption,
 } from "@/lib/font-style-options";
@@ -1985,6 +1989,9 @@ function SettingsPageContent() {
                 shadowOffsetX={preferencesDraft.shadowOffsetX}
                 shadowOffsetY={preferencesDraft.shadowOffsetY}
                 dimUnhighlighted={preferencesDraft.dimUnhighlighted}
+                position={preferencesDraft.position}
+                animation={preferencesDraft.animation}
+                subtitlePreset={preferencesDraft.subtitlePreset}
                 isUploadingFont={isUploadingFont}
                 fontUploadMessage={fontUploadMessage}
                 fontUploadError={fontUploadError}
@@ -2041,6 +2048,17 @@ function SettingsPageContent() {
                 }}
                 onDimUnhighlightedChange={(dimUnhighlighted) => {
                   setPreferencesDraft((prev) => ({ ...prev, dimUnhighlighted }));
+                }}
+                onPositionChange={(position) => {
+                  setPreferencesDraft((prev) => ({ ...prev, position: position as SubtitlePositionOption }));
+                }}
+                onAnimationChange={(animation) => {
+                  setPreferencesDraft((prev) => ({ ...prev, animation: animation as SubtitleAnimationOption }));
+                }}
+                onSubtitlePresetChange={(presetId) => {
+                  setPreferencesDraft((prev) =>
+                    applySubtitlePreset(prev, presetId as SubtitlePresetId),
+                  );
                 }}
                 onFontUpload={handleFontUpload}
               />

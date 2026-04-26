@@ -8,6 +8,8 @@ import re
 HEX_COLOR_PATTERN = re.compile(r"^#[0-9A-Fa-f]{6}$")
 TEXT_TRANSFORM_OPTIONS = {"none", "uppercase", "lowercase", "capitalize"}
 TEXT_ALIGN_OPTIONS = {"left", "center", "right"}
+SUBTITLE_POSITION_OPTIONS = {"bottom", "center", "top"}
+SUBTITLE_ANIMATION_OPTIONS = {"none", "vertical_scroll"}
 
 DEFAULT_SUBTITLE_STYLE: Dict[str, Any] = {
     "font_family": "TikTokSans-Regular",
@@ -28,6 +30,8 @@ DEFAULT_SUBTITLE_STYLE: Dict[str, Any] = {
     "shadow_offset_x": 0,
     "shadow_offset_y": 2,
     "dim_unhighlighted": True,
+    "position": "bottom",
+    "animation": "none",
 }
 
 
@@ -137,5 +141,13 @@ def normalize_subtitle_style(raw: Optional[Dict[str, Any]]) -> Dict[str, Any]:
         normalized["dim_unhighlighted"] = dim_unhighlighted
     elif isinstance(dim_unhighlighted, str):
         normalized["dim_unhighlighted"] = dim_unhighlighted.strip().lower() in ("true", "1", "yes")
+
+    position = source.get("position")
+    if isinstance(position, str) and position.strip().lower() in SUBTITLE_POSITION_OPTIONS:
+        normalized["position"] = position.strip().lower()
+
+    animation = source.get("animation")
+    if isinstance(animation, str) and animation.strip().lower() in SUBTITLE_ANIMATION_OPTIONS:
+        normalized["animation"] = animation.strip().lower()
 
     return normalized

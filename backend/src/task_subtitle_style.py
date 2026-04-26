@@ -23,6 +23,8 @@ USER_DEFAULT_STYLE_COLUMNS: Dict[str, str] = {
     "shadow_offset_x": "default_shadow_offset_x",
     "shadow_offset_y": "default_shadow_offset_y",
     "dim_unhighlighted": "default_dim_unhighlighted",
+    "position": "default_subtitle_position",
+    "animation": "default_subtitle_animation",
 }
 
 
