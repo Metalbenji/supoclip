@@ -49,6 +49,7 @@ class User(Base):
     default_shadow_blur: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("2"))
     default_shadow_offset_x: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("0"))
     default_shadow_offset_y: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("2"))
+    default_dim_unhighlighted: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("true"))
     default_transitions_enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("false"))
     default_review_before_render_enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("true"))
     default_timeline_editor_enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("true"))

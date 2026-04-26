@@ -1,0 +1,225 @@
+# Docker Compose override for running a separate "dev" instance of supoclip
+# alongside your existing main instance.
+#
+# Usage:
+#   docker compose --env-file .env.dev -f docker-compose.yml -f docker-compose.dev.yml up -d
+#
+# This runs on shifted ports so nothing clashes:
+#   Frontend:  http://localhost:3001
+#   Backend:   http://localhost:8001
+#   Postgres:  localhost:5434
+#   Redis:     localhost:6380
+
+services:
+  frontend:
+    container_name: supoclip-dev-frontend
+    environment:
+      - NEXT_PUBLIC_API_URL=http://${APP_HOST:-localhost}:${BACKEND_HOST_PORT:-8001}
+      - DATABASE_URL=postgresql://supoclip:supoclip_password@supoclip-dev-postgres:5432/supoclip
+      - BETTER_AUTH_SECRET=${BETTER_AUTH_SECRET:-supoclip_dev_secret_DIM_UNHIGHLIGHTED}
+      - BETTER_AUTH_URL=http://${APP_HOST:-localhost}:${FRONTEND_HOST_PORT:-3001}
+      - BETTER_AUTH_TRUSTED_ORIGINS=${BETTER_AUTH_TRUSTED_ORIGINS:-http://localhost:3001,http://127.0.0.1:3001}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      backend:
+        condition: service_healthy
+    volumes:
+      - ./frontend/src:/app/src
+      - ./frontend/public:/app/public
+      - ./frontend/prisma:/app/prisma
+
+  backend:
+    container_name: supoclip-dev-backend
+    image: supoclip-dev-backend:latest
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+      args:
+        UV_SYNC_EXTRA: ""
+      platforms:
+        - linux/amd64
+    environment:
+      - DATABASE_URL=postgresql+asyncpg://supoclip:supoclip_password@supoclip-dev-postgres:5432/supoclip
+      - REDIS_HOST=supoclip-dev-redis
+      - REDIS_PORT=6379
+      - ARQ_QUEUE_NAME_LOCAL=${ARQ_QUEUE_NAME_LOCAL:-arq:queue:local-dev}
+      - ARQ_QUEUE_NAME_LOCAL_GPU=${ARQ_QUEUE_NAME_LOCAL_GPU:-arq:queue:local-gpu-dev}
+      - ARQ_QUEUE_NAME_ASSEMBLY=${ARQ_QUEUE_NAME_ASSEMBLY:-arq:queue:assembly-dev}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - ./backend/src:/app/src
+      - ./backend/uploads-dev:/app/uploads
+      - ./backend/clips-dev:/app/clips
+      - ./backend/fonts:/app/fonts
+      - ./backend/transitions:/app/transitions
+      - ./backend/.secrets:/app/.secrets:ro
+      - ${WHISPER_CACHE_HOST_DIR:-./backend/.cache/whisper-dev}:/root/.cache/whisper
+
+  worker:
+    container_name: supoclip-dev-worker
+    image: supoclip-dev-worker:latest
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+      args:
+        UV_SYNC_EXTRA: worker
+        TORCH_VARIANT: cpu
+      platforms:
+        - linux/amd64
+    environment:
+      - DATABASE_URL=postgresql+asyncpg://supoclip:supoclip_password@supoclip-dev-postgres:5432/supoclip
+      - REDIS_HOST=supoclip-dev-redis
+      - REDIS_PORT=6379
+      - ARQ_QUEUE_NAME=${ARQ_QUEUE_NAME_LOCAL:-arq:queue:local-dev}
+      - ARQ_QUEUE_NAME_LOCAL=${ARQ_QUEUE_NAME_LOCAL:-arq:queue:local-dev}
+      - ARQ_QUEUE_NAME_LOCAL_GPU=${ARQ_QUEUE_NAME_LOCAL_GPU:-arq:queue:local-gpu-dev}
+      - ARQ_QUEUE_NAME_ASSEMBLY=${ARQ_QUEUE_NAME_ASSEMBLY:-arq:queue:assembly-dev}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      backend:
+        condition: service_healthy
+    volumes:
+      - ./backend/src:/app/src
+      - ./backend/uploads-dev:/app/uploads
+      - ./backend/clips-dev:/app/clips
+      - ./backend/fonts:/app/fonts
+      - ./backend/transitions:/app/transitions
+      - ./backend/.secrets:/app/.secrets:ro
+      - ${WHISPER_CACHE_HOST_DIR:-./backend/.cache/whisper-dev}:/root/.cache/whisper
+
+  worker2:
+    profiles: ["multi-worker"]
+    container_name: supoclip-dev-worker-2
+    image: supoclip-dev-worker:latest
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+      args:
+        UV_SYNC_EXTRA: worker
+        TORCH_VARIANT: cpu
+      platforms:
+        - linux/amd64
+    environment:
+      - DATABASE_URL=postgresql+asyncpg://supoclip:supoclip_password@supoclip-dev-postgres:5432/supoclip
+      - REDIS_HOST=supoclip-dev-redis
+      - REDIS_PORT=6379
+      - ARQ_QUEUE_NAME=${ARQ_QUEUE_NAME_LOCAL:-arq:queue:local-dev}
+      - ARQ_QUEUE_NAME_LOCAL=${ARQ_QUEUE_NAME_LOCAL:-arq:queue:local-dev}
+      - ARQ_QUEUE_NAME_LOCAL_GPU=${ARQ_QUEUE_NAME_LOCAL_GPU:-arq:queue:local-gpu-dev}
+      - ARQ_QUEUE_NAME_ASSEMBLY=${ARQ_QUEUE_NAME_ASSEMBLY:-arq:queue:assembly-dev}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      backend:
+        condition: service_healthy
+    volumes:
+      - ./backend/src:/app/src
+      - ./backend/uploads-dev:/app/uploads
+      - ./backend/clips-dev:/app/clips
+      - ./backend/fonts:/app/fonts
+      - ./backend/transitions:/app/transitions
+      - ./backend/.secrets:/app/.secrets:ro
+      - ${WHISPER_CACHE_HOST_DIR:-./backend/.cache/whisper-dev}:/root/.cache/whisper
+
+  worker-gpu:
+    profiles: ["gpu-worker"]
+    container_name: supoclip-dev-worker-gpu
+    image: supoclip-dev-worker-gpu:latest
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+      args:
+        UV_SYNC_EXTRA: worker
+        TORCH_VARIANT: default
+        CUDA_NVCC_WHEEL_VERSION: 12.8.93
+      platforms:
+        - linux/amd64
+    environment:
+      - DATABASE_URL=postgresql+asyncpg://supoclip:supoclip_password@supoclip-dev-postgres:5432/supoclip
+      - REDIS_HOST=supoclip-dev-redis
+      - REDIS_PORT=6379
+      - ARQ_QUEUE_NAME=${ARQ_QUEUE_NAME_LOCAL_GPU:-arq:queue:local-gpu-dev}
+      - ARQ_QUEUE_NAME_LOCAL=${ARQ_QUEUE_NAME_LOCAL:-arq:queue:local-dev}
+      - ARQ_QUEUE_NAME_LOCAL_GPU=${ARQ_QUEUE_NAME_LOCAL_GPU:-arq:queue:local-gpu-dev}
+      - ARQ_QUEUE_NAME_ASSEMBLY=${ARQ_QUEUE_NAME_ASSEMBLY:-arq:queue:assembly-dev}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      backend:
+        condition: service_healthy
+    volumes:
+      - ./backend/src:/app/src
+      - ./backend/uploads-dev:/app/uploads
+      - ./backend/clips-dev:/app/clips
+      - ./backend/fonts:/app/fonts
+      - ./backend/transitions:/app/transitions
+      - ./backend/.secrets:/app/.secrets:ro
+      - ${WHISPER_CACHE_HOST_DIR:-./backend/.cache/whisper-dev}:/root/.cache/whisper
+
+  worker-assembly:
+    profiles: ["assembly-worker"]
+    container_name: supoclip-dev-worker-assembly
+    image: supoclip-dev-worker:latest
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+      args:
+        UV_SYNC_EXTRA: worker
+        TORCH_VARIANT: cpu
+      platforms:
+        - linux/amd64
+    environment:
+      - DATABASE_URL=postgresql+asyncpg://supoclip:supoclip_password@supoclip-dev-postgres:5432/supoclip
+      - REDIS_HOST=supoclip-dev-redis
+      - REDIS_PORT=6379
+      - TRANSCRIPTION_PROVIDER=assemblyai
+      - ARQ_QUEUE_NAME=${ARQ_QUEUE_NAME_ASSEMBLY:-arq:queue:assembly-dev}
+      - ARQ_QUEUE_NAME_LOCAL=${ARQ_QUEUE_NAME_LOCAL:-arq:queue:local-dev}
+      - ARQ_QUEUE_NAME_LOCAL_GPU=${ARQ_QUEUE_NAME_LOCAL_GPU:-arq:queue:local-gpu-dev}
+      - ARQ_QUEUE_NAME_ASSEMBLY=${ARQ_QUEUE_NAME_ASSEMBLY:-arq:queue:assembly-dev}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      backend:
+        condition: service_healthy
+    volumes:
+      - ./backend/src:/app/src
+      - ./backend/uploads-dev:/app/uploads
+      - ./backend/clips-dev:/app/clips
+      - ./backend/fonts:/app/fonts
+      - ./backend/transitions:/app/transitions
+      - ./backend/.secrets:/app/.secrets:ro
+      - ${WHISPER_CACHE_HOST_DIR:-./backend/.cache/whisper-dev}:/root/.cache/whisper
+
+  redis:
+    container_name: supoclip-dev-redis
+
+  postgres:
+    container_name: supoclip-dev-postgres
+    ports:
+      - "${POSTGRES_HOST_PORT:-5434}:5432"
+    volumes:
+      - postgres_dev_data:/var/lib/postgresql/data
+      - ./init.sql:/docker-entrypoint-initdb.d/init.sql
+
+volumes:
+  postgres_dev_data:
+    driver: local
+
+networks:
+  default:
+    name: supoclip-dev-network

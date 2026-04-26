@@ -48,6 +48,7 @@ model User {
   default_shadow_blur     Int?    @default(2)
   default_shadow_offset_x Int?    @default(0)
   default_shadow_offset_y Int?    @default(2)
+  default_dim_unhighlighted Boolean? @default(true)
   default_transitions_enabled Boolean? @default(false)
   default_review_before_render_enabled Boolean? @default(true)
   default_timeline_editor_enabled Boolean? @default(true)

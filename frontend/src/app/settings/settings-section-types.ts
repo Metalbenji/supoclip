@@ -246,6 +246,7 @@ export function arePreferencesEqual(a: UserPreferences, b: UserPreferences): boo
     a.shadowBlur === b.shadowBlur &&
     a.shadowOffsetX === b.shadowOffsetX &&
     a.shadowOffsetY === b.shadowOffsetY &&
+    a.dimUnhighlighted === b.dimUnhighlighted &&
     a.transitionsEnabled === b.transitionsEnabled &&
     a.reviewBeforeRenderEnabled === b.reviewBeforeRenderEnabled &&
     a.timelineEditorEnabled === b.timelineEditorEnabled &&

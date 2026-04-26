@@ -234,6 +234,7 @@ export async function GET() {
         default_shadow_blur: true,
         default_shadow_offset_x: true,
         default_shadow_offset_y: true,
+        default_dim_unhighlighted: true,
         default_transitions_enabled: true,
         default_review_before_render_enabled: true,
         default_timeline_editor_enabled: true,
@@ -299,6 +300,7 @@ export async function GET() {
       shadowBlur: normalizeShadowBlur(user.default_shadow_blur),
       shadowOffsetX: normalizeShadowOffset(user.default_shadow_offset_x),
       shadowOffsetY: normalizeShadowOffset(user.default_shadow_offset_y),
+      dimUnhighlighted: typeof user.default_dim_unhighlighted === "boolean" ? user.default_dim_unhighlighted : true,
       transitionsEnabled: user.default_transitions_enabled ?? false,
       reviewBeforeRenderEnabled: user.default_review_before_render_enabled ?? true,
       timelineEditorEnabled: user.default_timeline_editor_enabled ?? true,
@@ -391,6 +393,7 @@ export async function PATCH(request: NextRequest) {
       shadowBlur,
       shadowOffsetX,
       shadowOffsetY,
+      dimUnhighlighted,
       transitionsEnabled,
       reviewBeforeRenderEnabled,
       timelineEditorEnabled,
@@ -478,6 +481,9 @@ export async function PATCH(request: NextRequest) {
         { error: "Invalid shadowOffsetY (must be an integer from -12 to 12)" },
         { status: 400 },
       );
+    }
+    if (dimUnhighlighted !== undefined && typeof dimUnhighlighted !== "boolean") {
+      return NextResponse.json({ error: "Invalid dimUnhighlighted" }, { status: 400 });
     }
     if (transitionsEnabled !== undefined && typeof transitionsEnabled !== "boolean") {
       return NextResponse.json({ error: "Invalid transitionsEnabled" }, { status: 400 });
@@ -720,6 +726,7 @@ export async function PATCH(request: NextRequest) {
         ...(shadowBlur !== undefined && { default_shadow_blur: normalizeShadowBlur(shadowBlur) }),
         ...(shadowOffsetX !== undefined && { default_shadow_offset_x: normalizeShadowOffset(shadowOffsetX) }),
         ...(shadowOffsetY !== undefined && { default_shadow_offset_y: normalizeShadowOffset(shadowOffsetY) }),
+        ...(dimUnhighlighted !== undefined && { default_dim_unhighlighted: dimUnhighlighted }),
         ...(transitionsEnabled !== undefined && { default_transitions_enabled: transitionsEnabled }),
         ...(reviewBeforeRenderEnabled !== undefined && {
           default_review_before_render_enabled: reviewBeforeRenderEnabled,
@@ -768,6 +775,7 @@ export async function PATCH(request: NextRequest) {
         default_shadow_blur: true,
         default_shadow_offset_x: true,
         default_shadow_offset_y: true,
+        default_dim_unhighlighted: true,
         default_transitions_enabled: true,
         default_review_before_render_enabled: true,
         default_timeline_editor_enabled: true,
@@ -826,6 +834,7 @@ export async function PATCH(request: NextRequest) {
       shadowBlur: normalizeShadowBlur(updatedUser.default_shadow_blur),
       shadowOffsetX: normalizeShadowOffset(updatedUser.default_shadow_offset_x),
       shadowOffsetY: normalizeShadowOffset(updatedUser.default_shadow_offset_y),
+      dimUnhighlighted: typeof updatedUser.default_dim_unhighlighted === "boolean" ? updatedUser.default_dim_unhighlighted : true,
       transitionsEnabled: updatedUser.default_transitions_enabled ?? false,
       reviewBeforeRenderEnabled: updatedUser.default_review_before_render_enabled ?? true,
       timelineEditorEnabled: updatedUser.default_timeline_editor_enabled ?? true,

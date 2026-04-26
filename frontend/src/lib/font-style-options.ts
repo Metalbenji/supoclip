@@ -22,6 +22,7 @@ export interface FontStyleOptions {
   shadowBlur: number;
   shadowOffsetX: number;
   shadowOffsetY: number;
+  dimUnhighlighted: boolean;
 }
 
 export const DEFAULT_FONT_STYLE_OPTIONS: FontStyleOptions = {
@@ -42,6 +43,7 @@ export const DEFAULT_FONT_STYLE_OPTIONS: FontStyleOptions = {
   shadowBlur: 2,
   shadowOffsetX: 0,
   shadowOffsetY: 2,
+  dimUnhighlighted: true,
 };
 
 const HEX_COLOR_PATTERN = /^#[0-9A-Fa-f]{6}$/;
@@ -168,5 +170,6 @@ export function normalizeFontStyleOptions(
     shadowBlur: normalizeShadowBlur(raw?.shadowBlur),
     shadowOffsetX: normalizeShadowOffset(raw?.shadowOffsetX),
     shadowOffsetY: normalizeShadowOffset(raw?.shadowOffsetY),
+    dimUnhighlighted: typeof raw?.dimUnhighlighted === "boolean" ? raw.dimUnhighlighted : DEFAULT_FONT_STYLE_OPTIONS.dimUnhighlighted,
   };
 }

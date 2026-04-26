@@ -2954,6 +2954,7 @@ def create_assemblyai_subtitles(
     highlight_color = str(style.get("highlight_color") or "").strip()
     if not highlight_color:
         highlight_color = _resolve_karaoke_highlight_color(str(style["font_color"]))
+    dim_unhighlighted = bool(style.get("dim_unhighlighted", True))
 
     words_per_subtitle = 3
     for i in range(0, len(relevant_words), words_per_subtitle):
@@ -3049,7 +3050,7 @@ def create_assemblyai_subtitles(
                 box_height=line_box_height,
                 max_x=word_box_max_x,
                 max_y=max_y,
-                opacity_scale=0.52,
+                opacity_scale=0.52 if dim_unhighlighted else 1.0,
             )
             subtitle_clips.extend(base_layers)
 

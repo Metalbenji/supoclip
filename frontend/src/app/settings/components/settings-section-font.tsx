@@ -26,6 +26,7 @@ interface SettingsSectionFontProps {
   shadowBlur: number;
   shadowOffsetX: number;
   shadowOffsetY: number;
+  dimUnhighlighted: boolean;
   isUploadingFont: boolean;
   fontUploadMessage: string | null;
   fontUploadError: string | null;
@@ -46,6 +47,7 @@ interface SettingsSectionFontProps {
   onShadowBlurChange: (blur: number) => void;
   onShadowOffsetXChange: (offset: number) => void;
   onShadowOffsetYChange: (offset: number) => void;
+  onDimUnhighlightedChange: (value: boolean) => void;
   onFontUpload: (event: ChangeEvent<HTMLInputElement>) => void;
 }
 
@@ -89,6 +91,7 @@ export function SettingsSectionFont({
   shadowBlur,
   shadowOffsetX,
   shadowOffsetY,
+  dimUnhighlighted,
   isUploadingFont,
   fontUploadMessage,
   fontUploadError,
@@ -109,6 +112,7 @@ export function SettingsSectionFont({
   onShadowBlurChange,
   onShadowOffsetXChange,
   onShadowOffsetYChange,
+  onDimUnhighlightedChange,
   onFontUpload,
 }: SettingsSectionFontProps) {
   const previewFilterBaseId = useId().replace(/:/g, "");
@@ -504,6 +508,31 @@ export function SettingsSectionFont({
             />
           </div>
         </div>
+      </div>
+
+      <div className="flex items-center justify-between rounded-lg border border-gray-200 p-4">
+        <div className="space-y-0.5">
+          <Label className="text-sm font-medium text-black">Dim Unhighlighted Words</Label>
+          <p className="text-xs text-gray-500">
+            When enabled, words not yet spoken are shown at reduced opacity for a karaoke effect.
+          </p>
+        </div>
+        <button
+          type="button"
+          role="switch"
+          aria-checked={dimUnhighlighted}
+          onClick={() => onDimUnhighlightedChange(!dimUnhighlighted)}
+          disabled={isSaving || isUploadingFont}
+          className={`relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50 ${
+            dimUnhighlighted ? "bg-black" : "bg-gray-300"
+          }`}
+        >
+          <span
+            className={`pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out ${
+              dimUnhighlighted ? "translate-x-5" : "translate-x-0"
+            }`}
+          />
+        </button>
       </div>
 
       <div className="space-y-2">

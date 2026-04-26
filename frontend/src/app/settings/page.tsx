@@ -1984,6 +1984,7 @@ function SettingsPageContent() {
                 shadowBlur={preferencesDraft.shadowBlur}
                 shadowOffsetX={preferencesDraft.shadowOffsetX}
                 shadowOffsetY={preferencesDraft.shadowOffsetY}
+                dimUnhighlighted={preferencesDraft.dimUnhighlighted}
                 isUploadingFont={isUploadingFont}
                 fontUploadMessage={fontUploadMessage}
                 fontUploadError={fontUploadError}
@@ -2037,6 +2038,9 @@ function SettingsPageContent() {
                 }}
                 onShadowOffsetYChange={(shadowOffsetY) => {
                   setPreferencesDraft((prev) => ({ ...prev, shadowOffsetY: normalizeShadowOffset(shadowOffsetY) }));
+                }}
+                onDimUnhighlightedChange={(dimUnhighlighted) => {
+                  setPreferencesDraft((prev) => ({ ...prev, dimUnhighlighted }));
                 }}
                 onFontUpload={handleFontUpload}
               />

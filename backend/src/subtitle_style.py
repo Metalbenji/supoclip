@@ -27,6 +27,7 @@ DEFAULT_SUBTITLE_STYLE: Dict[str, Any] = {
     "shadow_blur": 2,
     "shadow_offset_x": 0,
     "shadow_offset_y": 2,
+    "dim_unhighlighted": True,
 }
 
 
@@ -130,5 +131,11 @@ def normalize_subtitle_style(raw: Optional[Dict[str, Any]]) -> Dict[str, Any]:
     normalized["shadow_offset_y"] = _normalize_int(
         source.get("shadow_offset_y"), DEFAULT_SUBTITLE_STYLE["shadow_offset_y"], -12, 12, 1
     )
+
+    dim_unhighlighted = source.get("dim_unhighlighted")
+    if isinstance(dim_unhighlighted, bool):
+        normalized["dim_unhighlighted"] = dim_unhighlighted
+    elif isinstance(dim_unhighlighted, str):
+        normalized["dim_unhighlighted"] = dim_unhighlighted.strip().lower() in ("true", "1", "yes")
 
     return normalized
