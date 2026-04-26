@@ -493,6 +493,8 @@ export default function Home() {
           shadow_offset_x: preferences.shadowOffsetX,
           shadow_offset_y: preferences.shadowOffsetY,
           dim_unhighlighted: preferences.dimUnhighlighted,
+          position: preferences.position,
+          animation: preferences.animation,
           transitions_enabled: workflowPayload.transitionsEnabled,
         },
         transcription_options: {

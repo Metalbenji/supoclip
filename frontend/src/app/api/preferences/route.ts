@@ -239,6 +239,8 @@ export async function GET() {
         default_shadow_offset_y: true,
         default_dim_unhighlighted: true,
         default_transitions_enabled: true,
+        default_subtitle_position: true,
+        default_subtitle_animation: true,
         default_review_before_render_enabled: true,
         default_timeline_editor_enabled: true,
         default_processing_profile: true,
@@ -351,8 +353,12 @@ export async function GET() {
           : null,
       aiProvider: user.default_ai_provider || "openai",
       aiModel: user.default_ai_model || "",
-      position: DEFAULT_FONT_STYLE_OPTIONS.position,
-      animation: DEFAULT_FONT_STYLE_OPTIONS.animation,
+      position: isSubtitlePosition(user.default_subtitle_position)
+        ? user.default_subtitle_position
+        : DEFAULT_FONT_STYLE_OPTIONS.position,
+      animation: isSubtitleAnimation(user.default_subtitle_animation)
+        ? user.default_subtitle_animation
+        : DEFAULT_FONT_STYLE_OPTIONS.animation,
       subtitlePreset: DEFAULT_FONT_STYLE_OPTIONS.subtitlePreset,
     });
   } catch (error) {
@@ -746,6 +752,8 @@ export async function PATCH(request: NextRequest) {
         ...(shadowOffsetY !== undefined && { default_shadow_offset_y: normalizeShadowOffset(shadowOffsetY) }),
         ...(dimUnhighlighted !== undefined && { default_dim_unhighlighted: dimUnhighlighted }),
         ...(transitionsEnabled !== undefined && { default_transitions_enabled: transitionsEnabled }),
+        ...(position !== undefined && { default_subtitle_position: position }),
+        ...(animation !== undefined && { default_subtitle_animation: animation }),
         ...(reviewBeforeRenderEnabled !== undefined && {
           default_review_before_render_enabled: reviewBeforeRenderEnabled,
         }),
@@ -795,6 +803,8 @@ export async function PATCH(request: NextRequest) {
         default_shadow_offset_y: true,
         default_dim_unhighlighted: true,
         default_transitions_enabled: true,
+        default_subtitle_position: true,
+        default_subtitle_animation: true,
         default_review_before_render_enabled: true,
         default_timeline_editor_enabled: true,
         default_processing_profile: true,
@@ -902,8 +912,12 @@ export async function PATCH(request: NextRequest) {
           : null,
       aiProvider: updatedUser.default_ai_provider || "openai",
       aiModel: updatedUser.default_ai_model || "",
-      position: isSubtitlePosition(position) ? position : DEFAULT_FONT_STYLE_OPTIONS.position,
-      animation: isSubtitleAnimation(animation) ? animation : DEFAULT_FONT_STYLE_OPTIONS.animation,
+      position: isSubtitlePosition(updatedUser.default_subtitle_position)
+        ? updatedUser.default_subtitle_position
+        : DEFAULT_FONT_STYLE_OPTIONS.position,
+      animation: isSubtitleAnimation(updatedUser.default_subtitle_animation)
+        ? updatedUser.default_subtitle_animation
+        : DEFAULT_FONT_STYLE_OPTIONS.animation,
       subtitlePreset: isSubtitlePreset(subtitlePreset) ? subtitlePreset : DEFAULT_FONT_STYLE_OPTIONS.subtitlePreset,
     });
   } catch (error) {

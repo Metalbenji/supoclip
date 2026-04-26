@@ -50,6 +50,8 @@ model User {
   default_shadow_offset_y Int?    @default(2)
   default_dim_unhighlighted Boolean? @default(true)
   default_transitions_enabled Boolean? @default(false)
+  default_subtitle_position String? @default("bottom") @db.VarChar(16)
+  default_subtitle_animation String? @default("none") @db.VarChar(24)
   default_review_before_render_enabled Boolean? @default(true)
   default_timeline_editor_enabled Boolean? @default(true)
   default_processing_profile String? @default("balanced") @db.VarChar(32)
