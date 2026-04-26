@@ -3137,7 +3137,9 @@ def create_assemblyai_subtitles(
                 max_x=word_box_max_x,
                 max_y=max_y,
                 opacity_scale=1.0 * (scroll_fade_scale if scroll_fade_scale is not None else 1.0),
-                animated_y_start=animated_y_start,
+                # Highlight appears at the final resting position — no slide-in
+                # so it doesn't drop awkwardly onto the already-settled base text.
+                animated_y_start=None,
             )
             subtitle_clips.extend(highlight_layers)
 
