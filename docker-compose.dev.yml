@@ -63,22 +63,28 @@ services:
   worker:
     container_name: supoclip-dev-worker
     image: supoclip-dev-worker:latest
+    platform: linux/amd64
+    gpus: all
     build:
       context: ./backend
       dockerfile: Dockerfile
       args:
         UV_SYNC_EXTRA: worker
-        TORCH_VARIANT: cpu
+        TORCH_VARIANT: default
+        CUDA_NVCC_WHEEL_VERSION: 12.8.93
       platforms:
         - linux/amd64
     environment:
       - DATABASE_URL=postgresql+asyncpg://supoclip:supoclip_password@supoclip-dev-postgres:5432/supoclip
       - REDIS_HOST=supoclip-dev-redis
       - REDIS_PORT=6379
+      - WHISPER_DEVICE=gpu
       - ARQ_QUEUE_NAME=${ARQ_QUEUE_NAME_LOCAL:-arq:queue:local-dev}
       - ARQ_QUEUE_NAME_LOCAL=${ARQ_QUEUE_NAME_LOCAL:-arq:queue:local-dev}
       - ARQ_QUEUE_NAME_LOCAL_GPU=${ARQ_QUEUE_NAME_LOCAL_GPU:-arq:queue:local-gpu-dev}
       - ARQ_QUEUE_NAME_ASSEMBLY=${ARQ_QUEUE_NAME_ASSEMBLY:-arq:queue:assembly-dev}
+      - NVIDIA_VISIBLE_DEVICES=all
+      - NVIDIA_DRIVER_CAPABILITIES=compute,utility,video
     depends_on:
       postgres:
         condition: service_healthy
