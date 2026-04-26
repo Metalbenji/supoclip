@@ -1,8 +1,10 @@
 "use client";
 
 import {
+  forwardRef,
   useCallback,
   useEffect,
+  useImperativeHandle,
   useMemo,
   useRef,
   useState,
@@ -22,6 +24,11 @@ interface TimelineDraftClip {
 }
 
 export type TimelineZoomLevel = number;
+
+export interface DraftTimelineEditorHandle {
+  /** Seek the video and scroll the timeline to center on the given time (seconds). */
+  seekToTime: (seconds: number) => void;
+}
 
 interface DraftTimelineEditorProps {
   sourceVideoUrl: string | null;
@@ -161,7 +168,7 @@ function buildWaveformUrlFromSourceVideoUrl(
   }
 }
 
-export default function DraftTimelineEditor({
+export default forwardRef<DraftTimelineEditorHandle, DraftTimelineEditorProps>(function DraftTimelineEditor({
   sourceVideoUrl,
   drafts,
   conflictingClipIds = [],
@@ -174,7 +181,7 @@ export default function DraftTimelineEditor({
   onAddDraft,
   onSelectClip,
   onTimelineZoomLevelChange,
-}: DraftTimelineEditorProps) {
+}, ref) {
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const waveformCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const timelineScrollerRef = useRef<HTMLDivElement | null>(null);
@@ -275,6 +282,26 @@ export default function DraftTimelineEditor({
     if (!videoRef.current || !Number.isFinite(seconds)) return;
     videoRef.current.currentTime = clamp(seconds, 0, durationSeconds || seconds);
   }, [durationSeconds]);
+
+  /** Scroll the timeline track so that the given time ratio (0–1) is centered in view. */
+  const scrollToTimeRatio = useCallback((ratio: number) => {
+    const scroller = timelineScrollerRef.current;
+    const track = trackRef.current;
+    if (!scroller || !track) return;
+    const trackWidth = track.getBoundingClientRect().width;
+    if (trackWidth <= 0) return;
+    const maxScrollLeft = Math.max(0, trackWidth - scroller.clientWidth);
+    scroller.scrollLeft = clamp(ratio * trackWidth - scroller.clientWidth / 2, 0, maxScrollLeft);
+  }, []);
+
+  useImperativeHandle(ref, () => ({
+    seekToTime(seconds: number) {
+      if (!Number.isFinite(seconds) || !durationSeconds) return;
+      seekVideo(seconds);
+      setCurrentTimeSeconds(seconds);
+      scrollToTimeRatio(seconds / durationSeconds);
+    },
+  }), [seekVideo, scrollToTimeRatio, durationSeconds]);
 
   useEffect(() => {
     if (!onSelectClip || selectedClipId === undefined) return;
@@ -1097,4 +1124,4 @@ export default function DraftTimelineEditor({
       </p>
     </div>
   );
-}
+});

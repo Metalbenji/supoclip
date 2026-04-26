@@ -23,7 +23,7 @@ import { useSession } from "@/lib/auth-client";
 import { ArrowLeft, Download, Clock, Timer, Star, AlertCircle, Trash2, Edit2, X, Check } from "lucide-react";
 import Link from "next/link";
 import DynamicVideoPlayer from "@/components/dynamic-video-player";
-import DraftTimelineEditor, { type TimelineZoomLevel } from "@/components/draft-timeline-editor";
+import DraftTimelineEditor, { type TimelineZoomLevel, type DraftTimelineEditorHandle } from "@/components/draft-timeline-editor";
 import { formatAiFocusTag } from "@/lib/ai-focus-tags";
 import { formatSourceTypeLabel, getTaskRuntimeSummary, isHttpUrl } from "@/lib/task-metadata";
 
@@ -492,6 +492,8 @@ export default function TaskPage() {
   const [task, setTask] = useState<TaskDetails | null>(null);
   const [clips, setClips] = useState<Clip[]>([]);
   const [draftClips, setDraftClips] = useState<DraftClip[]>([]);
+  const draftClipsRef = useRef<DraftClip[]>(draftClips);
+  draftClipsRef.current = draftClips;
   const [draftsDirty, setDraftsDirty] = useState(false);
   const [isSavingDrafts, setIsSavingDrafts] = useState(false);
   const [isFinalizing, setIsFinalizing] = useState(false);
@@ -520,6 +522,7 @@ export default function TaskPage() {
   const [isDeleting, setIsDeleting] = useState(false);
   const [nowMs, setNowMs] = useState(() => Date.now());
   const draftClipRowRefs = useRef<Record<string, HTMLDivElement | null>>({});
+  const timelineEditorRef = useRef<DraftTimelineEditorHandle | null>(null);
   const progressRef = useRef(progress);
   const progressMessageRef = useRef(progressMessage);
   const sourceTypeRef = useRef<string | undefined>(task?.source_type);
@@ -626,6 +629,12 @@ export default function TaskPage() {
   const toggleDraftClipExpansion = useCallback((draftId: string) => {
     setActiveDraftClipId(draftId);
     setExpandedDraftClipId((prev) => (prev === draftId ? null : draftId));
+    // Seek the timeline to the clip's start time
+    const draft = draftClipsRef.current?.find((d) => d.id === draftId);
+    if (draft) {
+      const startSeconds = parseTimestampToSeconds(draft.start_time);
+      timelineEditorRef.current?.seekToTime(startSeconds);
+    }
   }, []);
 
   const toggleReasoningVisibility = useCallback((draftId: string) => {
@@ -2062,6 +2071,7 @@ export default function TaskPage() {
                 {timelineEditorEnabled ? (
                   <div className="lg:sticky lg:top-32">
                     <DraftTimelineEditor
+                      ref={timelineEditorRef}
                       sourceVideoUrl={sourceVideoUrl}
                       drafts={draftClips}
                       conflictingClipIds={[...conflictingDraftIds]}
