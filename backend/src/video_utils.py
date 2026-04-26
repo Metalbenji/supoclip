@@ -2735,12 +2735,15 @@ def _build_styled_word_layers(
         _y_to = base_y
         # Ease-out cubic: fast start, gentle deceleration
         _anim_duration = min(0.45, duration * 0.6)
+        # Capture start time so the animation progress is relative to when
+        # the subtitle first appears rather than to the composition origin.
+        _clip_start = float(start)
 
         def _pos_fn(x: int, y: int):
             """Return a MoviePy-compatible position lambda."""
             return lambda t: (
                 x,
-                int(_y_from + (_y_to - _y_from) * min(1.0, (t / _anim_duration) ** 0.6))
+                int(_y_from + (_y_to - _y_from) * min(1.0, max(0.0, (t - _clip_start) / _anim_duration) ** 0.6))
                 if _anim_duration > 0
                 else y,
             )
