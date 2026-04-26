@@ -32,6 +32,7 @@ CREATE TABLE users (
     default_shadow_blur INTEGER DEFAULT 2,
     default_shadow_offset_x INTEGER DEFAULT 0,
     default_shadow_offset_y INTEGER DEFAULT 2,
+    default_dim_unhighlighted BOOLEAN NOT NULL DEFAULT true,
     default_review_before_render_enabled BOOLEAN NOT NULL DEFAULT true,
     default_timeline_editor_enabled BOOLEAN NOT NULL DEFAULT true,
     -- Optional user-managed API secret (encrypted)
