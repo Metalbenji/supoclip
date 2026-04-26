@@ -2056,9 +2056,10 @@ function SettingsPageContent() {
                   setPreferencesDraft((prev) => ({ ...prev, animation: animation as SubtitleAnimationOption }));
                 }}
                 onSubtitlePresetChange={(presetId) => {
-                  setPreferencesDraft((prev) =>
-                    applySubtitlePreset(prev, presetId as SubtitlePresetId),
-                  );
+                  setPreferencesDraft((prev) => ({
+                    ...prev,
+                    ...applySubtitlePreset(prev, presetId as SubtitlePresetId),
+                  }));
                 }}
                 onFontUpload={handleFontUpload}
               />
