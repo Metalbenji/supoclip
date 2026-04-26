@@ -2730,20 +2730,22 @@ def _build_styled_word_layers(
     safe_opacity_scale = max(0.0, min(1.0, float(opacity_scale)))
 
     # Build position function — either static or animated (vertical scroll).
+    # NOTE: MoviePy v2 calls self.pos(ct) where ct = t - self.start (clip-local
+    # time starting at 0). So the lambda receives t=0 when the clip first appears.
     if animated_y_start is not None and duration > 0:
         _y_from = animated_y_start
         _y_to = base_y
         # Ease-out cubic: fast start, gentle deceleration
         _anim_duration = min(0.45, duration * 0.6)
-        # Capture start time so the animation progress is relative to when
-        # the subtitle first appears rather than to the composition origin.
-        _clip_start = float(start)
 
         def _pos_fn(x: int, y: int):
-            """Return a MoviePy-compatible position lambda."""
+            """Return a MoviePy-compatible position lambda.
+
+            ``t`` here is clip-local time (0 at first frame of the clip).
+            """
             return lambda t: (
                 x,
-                int(_y_from + (_y_to - _y_from) * min(1.0, max(0.0, (t - _clip_start) / _anim_duration) ** 0.6))
+                int(_y_from + (_y_to - _y_from) * min(1.0, (t / _anim_duration) ** 0.6))
                 if _anim_duration > 0
                 else y,
             )
@@ -2983,6 +2985,10 @@ def create_assemblyai_subtitles(
     dim_unhighlighted = bool(style.get("dim_unhighlighted", True))
     subtitle_position = str(style.get("position", "bottom"))
     subtitle_animation = str(style.get("animation", "none"))
+    logger.info(
+        "Subtitle style resolved: position=%s animation=%s (raw style keys: %s)",
+        subtitle_position, subtitle_animation, list(style.keys()),
+    )
 
     words_per_subtitle = 3
     for i in range(0, len(relevant_words), words_per_subtitle):
@@ -3064,6 +3070,10 @@ def create_assemblyai_subtitles(
             animated_y_start = max(0, base_y - int(video_height * 0.25))
             # Apply a gentle fade-in for the first moments
             scroll_fade_scale = 1.0
+            logger.info(
+                "VERTICAL SCROLL enabled for segment %s: base_y=%s y_start=%s video_h=%s",
+                i, base_y, animated_y_start, video_height,
+            )
 
         current_x = line_start_x
         for word_index, (word_text, (word_start, word_end), word_width) in enumerate(
