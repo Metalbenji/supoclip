@@ -67,7 +67,11 @@ interface SettingsSectionFontProps {
 
 const SWATCH_COLORS = ["#FFFFFF", "#000000", "#FFD700", "#FF6B6B", "#4ECDC4", "#45B7D1"];
 const PREVIEW_TEXT = "Your subtitle will look like this";
-const SCROLL_PREVIEW_WORDS = ["before", "current", "after"];
+const SCROLL_PREVIEW_WORDS = [
+  { text: "after", label: "next" },
+  { text: "current", label: "highlight" },
+  { text: "before", label: "prev" },
+];
 
 function applyTextTransform(text: string, mode: TextTransformOption): string {
   if (mode === "uppercase") {
@@ -634,35 +638,34 @@ export function SettingsSectionFont({
           <div className="relative w-full">
             {animation === "vertical_scroll" ? (
               /* ═══════════════════════════════════════════════════════════
-                 Vertical Scroll preview — 3 stacked words cycling through
-                 Top/bottom dimmed, middle highlighted, scrolls up per beat
+                 Vertical Scroll preview — wheel style
+                 3 words stacked tightly: next(dimmed,top) / current(HL,center) / prev(dimmed,bottom)
+                 Wheel scrolls DOWN: words roll from top into center
                  ═══════════════════════════════════════════════════════════ */
               <div
-                className="w-full flex flex-col items-center justify-center"
-                style={{ height: Math.max(100, previewSvgHeight + 40) }}
+                className="w-full flex flex-col items-center justify-center overflow-hidden"
+                style={{ height: Math.max(90, previewSvgHeight + 16) }}
               >
                 {SCROLL_PREVIEW_WORDS.map((word, i) => {
-                  const isHighlighted = i === 1;
-                  const rowOpacity = isHighlighted ? 1.0 : 0.4;
+                  const isHighlighted = word.label === "highlight";
+                  const rowOpacity = isHighlighted ? 1.0 : 0.35;
                   const rowColor = isHighlighted ? highlightColor : fontColor;
+                  const slideInDelay = i * 0.15;
                   return (
                     <div
                       key={i}
                       className="flex items-center justify-center"
                       style={{
                         opacity: rowOpacity,
-                        animation: isHighlighted
-                          ? "scrollRowHighlight 1.8s cubic-bezier(0.22, 0.61, 0.36, 1) infinite"
-                          : "none",
+                        animation: `wheelRowIn 2.4s cubic-bezier(0.22, 0.61, 0.36, 1) ${slideInDelay}s infinite`,
                         lineHeight: 1,
-                        marginBottom: i < SCROLL_PREVIEW_WORDS.length - 1 ? 4 : 0,
                       }}
                     >
                       <svg
                         className="block overflow-visible"
                         height={previewSvgHeight}
                         role="img"
-                        aria-label={word}
+                        aria-label={word.text}
                       >
                         <defs>
                           {shadowOpacity > 0 && (
@@ -684,12 +687,12 @@ export function SettingsSectionFont({
                           )}
                         </defs>
                         {shadowOpacity > 0 && (
-                          <text aria-hidden x={previewTextX} y="50%" textAnchor={previewTextAnchor} dominantBaseline="middle" style={previewTextStyle} fill="#FFFFFF" filter={`url(#${previewShadowFilterId}-scroll-${i})`}>{word}</text>
+                          <text aria-hidden x={previewTextX} y="50%" textAnchor={previewTextAnchor} dominantBaseline="middle" style={previewTextStyle} fill="#FFFFFF" filter={`url(#${previewShadowFilterId}-scroll-${i})`}>{word.text}</text>
                         )}
                         {strokeWidth > 0 && (
-                          <text aria-hidden x={previewTextX} y="50%" textAnchor={previewTextAnchor} dominantBaseline="middle" style={previewTextStyle} fill="#FFFFFF" filter={`url(#${previewStrokeFilterId}-scroll-${i})`}>{word}</text>
+                          <text aria-hidden x={previewTextX} y="50%" textAnchor={previewTextAnchor} dominantBaseline="middle" style={previewTextStyle} fill="#FFFFFF" filter={`url(#${previewStrokeFilterId}-scroll-${i})`}>{word.text}</text>
                         )}
-                        <text x={previewTextX} y="50%" textAnchor={previewTextAnchor} dominantBaseline="middle" style={previewTextStyle} fill={rowColor}>{word}</text>
+                        <text x={previewTextX} y="50%" textAnchor={previewTextAnchor} dominantBaseline="middle" style={previewTextStyle} fill={rowColor}>{word.text}</text>
                       </svg>
                     </div>
                   );
@@ -774,6 +777,11 @@ export function SettingsSectionFont({
               @keyframes scrollRowHighlight {
                 0% { transform: translateY(100%); opacity: 0; }
                 30% { transform: translateY(0); opacity: 1; }
+                100% { transform: translateY(0); opacity: 1; }
+              }
+              @keyframes wheelRowIn {
+                0% { transform: translateY(-40px); opacity: 0; }
+                20% { transform: translateY(0); opacity: 1; }
                 100% { transform: translateY(0); opacity: 1; }
               }
             `}</style>

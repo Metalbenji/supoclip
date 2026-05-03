@@ -3047,14 +3047,19 @@ def create_assemblyai_subtitles(
     # ── Choose rendering path ───────────────────────────────────────────
     if subtitle_animation == "vertical_scroll":
         # ═══════════════════════════════════════════════════════════════════
-        # VERTICAL SCROLL: 3 words stacked — prev (dimmed) / current (highlight) / next (dimmed)
-        # Each word "becomes current" for its spoken duration.  When the next word
-        # starts the stack scrolls up so the old current shifts to dimmed-top and
-        # the new word fades in as dimmed-bottom before becoming highlighted.
+        # VERTICAL SCROLL — WHEEL STYLE
+        # 3 words stacked tightly.  Layout (top → bottom):
+        #   TOP:    next word     (dimmed)
+        #   CENTER: current word  (highlighted)
+        #   BOTTOM: previous word (dimmed)
+        #
+        # When the next word starts being spoken the wheel scrolls DOWN —
+        # the old current drops to bottom, the next rolls from top into
+        # centre, and a brand-new next word appears at the top.
         # ═══════════════════════════════════════════════════════════════════
-        SCROLL_ANIM_DURATION = 0.40          # seconds for the slide transition
-        LINE_SPACING = line_box_height        # vertical gap between stacked rows
-        DIMMED_OPACITY = 0.40                # opacity for prev/next rows
+        # Tight spacing: rows almost overlap for that wheel/drum look
+        LINE_SPACING = max(int(line_box_height * 0.75), line_box_height - 8)
+        DIMMED_OPACITY = 0.35
 
         for idx, (word_text, (word_start, word_end)) in enumerate(
             zip(display_words_all, word_timings_all)
@@ -3068,26 +3073,26 @@ def create_assemblyai_subtitles(
                 highlight_end = word_end
             highlight_duration = max(0.01, highlight_end - word_start)
 
-            # ── Determine the 3-row window around this word ─────────────
-            # row -1: previous word (dimmed, top)
-            # row  0: current word  (highlighted, middle)
-            # row +1: next word     (dimmed, bottom)
-            row_contexts = []   # (display_text, row_offset, is_highlight)
+            # ── 3-row window ────────────────────────────────────────────
+            # row -1 (TOP):    next word     (dimmed)
+            # row  0 (CENTER): current word  (highlighted)
+            # row +1 (BOTTOM): previous word (dimmed)
+            row_contexts: List[Tuple[str, int, bool]] = []
 
-            # Previous word (row above)
-            if idx > 0:
-                row_contexts.append((display_words_all[idx - 1], -1, False))
+            # Next word — top of stack
+            if idx < len(display_words_all) - 1:
+                row_contexts.append((display_words_all[idx + 1], -1, False))
 
-            # Current word (center, highlighted)
+            # Current word — center, highlighted
             row_contexts.append((word_text, 0, True))
 
-            # Next word (row below)
-            if idx < len(display_words_all) - 1:
-                row_contexts.append((display_words_all[idx + 1], 1, False))
+            # Previous word — bottom of stack
+            if idx > 0:
+                row_contexts.append((display_words_all[idx - 1], 1, False))
 
-            # ── Render each row in the stack ────────────────────────────
+            # ── Render each row ─────────────────────────────────────────
             for ctx_text, row_offset, is_highlight in row_contexts:
-                ctx_idx = idx + row_offset
+                ctx_idx = idx + (row_offset * -1) if row_offset != 0 else idx  # -1→next(idx+1), +1→prev(idx-1)
                 ctx_word_width = word_widths_all[ctx_idx]
 
                 word_box_width = max(1, ctx_word_width + (KARAOKE_WORD_HORIZONTAL_PADDING_PX * 2))
@@ -3102,47 +3107,57 @@ def create_assemblyai_subtitles(
                 word_box_max_x = max(0, video_width - word_box_width)
                 word_box_x = max(0, min(int(word_box_x), word_box_max_x))
 
-                # Vertical position: row -1 is above, row 0 is center, row +1 is below
+                # Vertical position: row -1 = above, row 0 = center, row +1 = below
                 row_y = base_y + (row_offset * LINE_SPACING)
                 row_y = max(0, min(row_y, max_y))
 
-                # ── Scroll animation Y ───────────────────────────────────
-                # When this word first appears as context (prev/next), the
-                # stack needs to scroll.  New bottom rows slide up from below,
-                # the whole stack shifts up by one line_box_height.
-                # We animate the Y position of each row's clip.
+                # ── Wheel scroll animation ──────────────────────────────
+                # The wheel scrolls DOWN: new words enter from TOP, old words
+                # exit at BOTTOM.
+                #
+                # For the CURRENT (highlighted) word:
+                #   It was previously the "next" row (top).  Now it slides
+                #   DOWN from the top position into center.
+                #
+                # For the PREVIOUS word (bottom, dimmed):
+                #   It was previously the "current" (center).  Now it slides
+                #   DOWN from center to the bottom.
+                #
+                # For the NEXT word (top, dimmed):
+                #   It's brand new — slides DOWN into the top position from
+                #   further above.
+                anim_y_start = None
+
                 if is_highlight:
-                    # Highlighted row: visible from word_start, stays until highlight_end
-                    # If it was the bottom row in the previous step it scrolls up
-                    anim_y_start = None
-                    if idx > 0 and row_offset == 0:
-                        # This word was previously the "next" (bottom) row.
-                        # It should slide from the bottom position to center.
-                        prev_bottom_y = base_y + LINE_SPACING  # where it was as "next"
-                        anim_y_start = prev_bottom_y
+                    # Highlighted center word
                     clip_start_time = word_start
                     clip_duration = highlight_duration
-                else:
-                    # Dimmed context row (prev or next)
-                    # The dimmed row for word[idx] exists from when word[idx] starts
-                    # being highlighted until the next transition.
-                    anim_y_start = None
-                    if row_offset == -1 and idx > 0:
-                        # Previous word row: it was the highlighted row before,
-                        # now it scrolls up from center to top position.
-                        prev_center_y = base_y  # where it was as highlighted
-                        anim_y_start = prev_center_y
-                    elif row_offset == 1:
-                        # Next word row: slides in from below bottom.
-                        anim_y_start = base_y + LINE_SPACING * 2
-
+                    if idx > 0:
+                        # Was previously the "next" (top row).  Scroll DOWN
+                        # from top into center.
+                        anim_y_start = base_y - LINE_SPACING
+                elif row_offset == -1:
+                    # Next word (top, dimmed)
                     clip_start_time = word_start
-                    # Dimmed row stays visible until the next word's highlight starts
                     if idx < len(word_timings_all) - 1:
                         clip_end_time = float(word_timings_all[idx + 1][0])
                     else:
                         clip_end_time = word_end
                     clip_duration = max(0.01, clip_end_time - clip_start_time)
+                    # Brand-new word sliding in from above the top
+                    anim_y_start = base_y - LINE_SPACING * 2
+                else:
+                    # Previous word (bottom, dimmed)
+                    clip_start_time = word_start
+                    if idx < len(word_timings_all) - 1:
+                        clip_end_time = float(word_timings_all[idx + 1][0])
+                    else:
+                        clip_end_time = word_end
+                    clip_duration = max(0.01, clip_end_time - clip_start_time)
+                    if idx > 0:
+                        # Was previously the highlighted (center) word.
+                        # Scroll DOWN from center to bottom.
+                        anim_y_start = base_y
 
                 # ── Build dimmed base layer ─────────────────────────────
                 base_layers = _build_styled_word_layers(
@@ -3172,7 +3187,7 @@ def create_assemblyai_subtitles(
                 )
                 subtitle_clips.extend(base_layers)
 
-                # ── Build highlight layer (only for the current/center word) ─
+                # ── Build highlight layer (center word only) ────────────
                 if is_highlight:
                     hl_layers = _build_styled_word_layers(
                         text=ctx_text,
