@@ -2987,7 +2987,7 @@ def create_assemblyai_subtitles(
     else:
         transcript_data = load_cached_transcript_data(video_path)
         if not transcript_data or not transcript_data.get("words"):
-            logger.warning("No cached transcript data available for subtitles")
+            logger.warning(f"No cached transcript data available for subtitles (video_path={video_path}, cache_exists={video_path.with_suffix('.transcript_cache.json').exists() if hasattr(video_path, 'with_suffix') else 'N/A'})")
             return []
 
         # Find words that fall within our clip timerange
@@ -3012,7 +3012,7 @@ def create_assemblyai_subtitles(
                     )
 
     if not relevant_words:
-        logger.warning("No words found in clip timerange")
+        logger.warning(f"No words found in clip timerange (start={clip_start}, end={clip_end}, word_timings_override={bool(word_timings_override)}, has_cache={bool(word_timings_override is None and load_cached_transcript_data(video_path))})")
         return []
     relevant_words.sort(key=lambda word: (float(word.get("start", 0.0)), float(word.get("end", 0.0))))
 
@@ -3831,20 +3831,26 @@ def create_optimized_clip(
         final_clips = [cropped_clip]
 
         if add_subtitles:
-            subtitle_clips = create_assemblyai_subtitles(
-                video_path,
-                start_time,
-                end_time,
-                new_width,
-                new_height,
-                font_family,
-                font_size,
-                font_color,
-                subtitle_style=subtitle_style,
-                word_timings_override=subtitle_word_timings,
-                base_clip=cropped_clip,
-            )
-            final_clips.extend(subtitle_clips)
+            try:
+                subtitle_clips = create_assemblyai_subtitles(
+                    video_path,
+                    start_time,
+                    end_time,
+                    new_width,
+                    new_height,
+                    font_family,
+                    font_size,
+                    font_color,
+                    subtitle_style=subtitle_style,
+                    word_timings_override=subtitle_word_timings,
+                    base_clip=cropped_clip,
+                )
+                final_clips.extend(subtitle_clips)
+                logger.info(f"Added {len(subtitle_clips)} subtitle clips to final composition")
+            except Exception as subtitle_error:
+                logger.error(f"Subtitle creation failed, rendering clip without subtitles: {subtitle_error}", exc_info=True)
+                if error_collector is not None:
+                    error_collector.append(f"Subtitle creation failed: {subtitle_error}")
 
         # Compose and encode
         final_clip = CompositeVideoClip(final_clips) if len(final_clips) > 1 else cropped_clip
