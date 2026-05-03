@@ -1339,6 +1339,47 @@ class VideoService:
         }
 
     @staticmethod
+    async def get_word_timings_for_range(
+        *,
+        video_path: Path,
+        clip_start: float,
+        clip_end: float,
+    ) -> Optional[List[Dict[str, Any]]]:
+        """Load word timings from the transcript cache for a given clip range.
+
+        Returns a list of word timing dicts (with ``start`` and ``end`` in
+        seconds relative to the clip start), or ``None`` if unavailable.
+        """
+        load_cached_transcript_data = VideoService._video_utils_attr("load_cached_transcript_data")
+
+        def _load():
+            transcript_data = load_cached_transcript_data(video_path)
+            if not transcript_data or not transcript_data.get("words"):
+                return None
+
+            clip_start_ms = int(clip_start * 1000)
+            clip_end_ms = int(clip_end * 1000)
+            clip_duration = max(0.0, clip_end - clip_start)
+
+            words = []
+            for word_data in transcript_data["words"]:
+                word_start = word_data["start"]
+                word_end = word_data["end"]
+                if word_start < clip_end_ms and word_end > clip_start_ms:
+                    rel_start = max(0.0, (word_start - clip_start_ms) / 1000.0)
+                    rel_end = min(clip_duration, (word_end - clip_start_ms) / 1000.0)
+                    if rel_end > rel_start:
+                        words.append({
+                            "text": word_data["text"],
+                            "start": rel_start,
+                            "end": rel_end,
+                            "confidence": word_data.get("confidence", 1.0),
+                        })
+            return words if words else None
+
+        return await run_in_thread(_load)
+
+    @staticmethod
     async def process_video_complete(
         url: str,
         source_type: str,

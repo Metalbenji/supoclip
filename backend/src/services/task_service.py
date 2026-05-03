@@ -2063,6 +2063,20 @@ class TaskService:
                 start_seconds,
                 end_seconds,
             ) if analysis_video_path is not None else ""
+
+            # Extract word timings from transcript cache for karaoke rendering.
+            # This ensures subtitles work even if the cache is cleaned up before finalization.
+            draft_word_timings = None
+            if analysis_video_path is not None:
+                try:
+                    draft_word_timings = await self.video_service.get_word_timings_for_range(
+                        video_path=analysis_video_path,
+                        clip_start=start_seconds,
+                        clip_end=end_seconds,
+                    )
+                except Exception as wt_err:
+                    logger.warning("Failed to extract word timings for draft %s: %s", index, wt_err)
+
             text_value = transcript_text or str(segment.get("text") or "").strip()
             framing_metadata = (
                 dict(segment.get("framing_metadata"))
@@ -2102,7 +2116,7 @@ class TaskService:
                     "is_selected": is_selected,
                     "auto_selection_rule_excluded": review_auto_select_min_score is not None and not is_selected,
                     "is_deleted": False,
-                    "edited_word_timings_json": None,
+                    "edited_word_timings_json": draft_word_timings,
                 }
             )
             drafts_payload[-1].update(self._build_draft_feedback_state(drafts_payload[-1]))
@@ -2341,13 +2355,32 @@ class TaskService:
                     word_timings=word_timings_override,
                 )
             else:
-                if draft.get("edited_word_timings_json") is not None:
-                    await self.draft_clip_repo.update_draft_word_timings(
-                        self.db,
-                        task_id=task_id,
-                        draft_id=str(draft["id"]),
-                        word_timings=None,
-                    )
+                # Text wasn't edited — use stored word timings if available,
+                # otherwise fall back to loading from the transcript cache.
+                stored_timings = draft.get("edited_word_timings_json")
+                if isinstance(stored_timings, list) and stored_timings:
+                    word_timings_override = stored_timings
+                else:
+                    # Clear stale data and try the transcript cache.
+                    if draft.get("edited_word_timings_json") is not None:
+                        await self.draft_clip_repo.update_draft_word_timings(
+                            self.db,
+                            task_id=task_id,
+                            draft_id=str(draft["id"]),
+                            word_timings=None,
+                        )
+                    try:
+                        word_timings_override = await self.video_service.get_word_timings_for_range(
+                            video_path=video_path,
+                            clip_start=start_seconds,
+                            clip_end=end_seconds,
+                        )
+                    except Exception as wt_error:
+                        logger.warning(
+                            "Could not load word timings for non-edited clip %s: %s",
+                            draft.get("clip_order"),
+                            wt_error,
+                        )
 
             rendered_segments.append(
                 {
