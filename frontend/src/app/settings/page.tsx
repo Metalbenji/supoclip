@@ -45,7 +45,6 @@ import {
   normalizeShadowOpacity,
   normalizeStrokeBlur,
   normalizeStrokeWidth,
-  type SubtitleAnimationOption,
   type SubtitlePresetId,
   type SubtitlePositionOption,
   type TextAlignOption,
@@ -2051,9 +2050,6 @@ function SettingsPageContent() {
                 }}
                 onPositionChange={(position) => {
                   setPreferencesDraft((prev) => ({ ...prev, position: typeof position === "number" ? position : Number(position) }));
-                }}
-                onAnimationChange={(animation) => {
-                  setPreferencesDraft((prev) => ({ ...prev, animation: animation as SubtitleAnimationOption }));
                 }}
                 onSubtitlePresetChange={(presetId) => {
                   setPreferencesDraft((prev) => ({

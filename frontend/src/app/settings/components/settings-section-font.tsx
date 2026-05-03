@@ -5,11 +5,9 @@ import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Slider } from "@/components/ui/slider";
 import {
-  SUBTITLE_ANIMATION_OPTIONS,
   SUBTITLE_PRESETS,
   TEXT_ALIGN_OPTIONS,
   TEXT_TRANSFORM_OPTIONS,
-  type SubtitleAnimationOption,
   type SubtitlePresetId,
   type TextAlignOption,
   type TextTransformOption,
@@ -60,7 +58,6 @@ interface SettingsSectionFontProps {
   onShadowOffsetYChange: (offset: number) => void;
   onDimUnhighlightedChange: (value: boolean) => void;
   onPositionChange: (value: number) => void;
-  onAnimationChange: (value: SubtitleAnimationOption) => void;
   onSubtitlePresetChange: (presetId: SubtitlePresetId) => void;
   onFontUpload: (event: ChangeEvent<HTMLInputElement>) => void;
 }
@@ -132,7 +129,6 @@ export function SettingsSectionFont({
   onShadowOffsetYChange,
   onDimUnhighlightedChange,
   onPositionChange,
-  onAnimationChange,
   onSubtitlePresetChange,
   onFontUpload,
 }: SettingsSectionFontProps) {
@@ -313,45 +309,23 @@ export function SettingsSectionFont({
         })()}
       </div>
 
-      {/* Position slider and Animation dropdown */}
-      <div className="grid gap-4 sm:grid-cols-2">
-        <div className="space-y-2">
-          <Label className="text-sm font-medium text-black">Position: {position}%</Label>
-          <div className="px-2 pt-5">
-            <Slider
-              value={[position]}
-              onValueChange={(value) => onPositionChange(value[0])}
-              min={10}
-              max={90}
-              step={1}
-              disabled={isSaving || isUploadingFont}
-              className="w-full"
-            />
-          </div>
-          <p className="text-xs text-gray-500">
-            {position <= 25 ? "Top" : position <= 60 ? "Center" : "Bottom"} — vertical placement of subtitles
-          </p>
-        </div>
-
-        <div className="space-y-2">
-          <Label className="text-sm font-medium text-black">Animation</Label>
-          <Select
-            value={animation}
-            onValueChange={(value) => onAnimationChange(value as SubtitleAnimationOption)}
+      {/* Position slider */}
+      <div className="space-y-2">
+        <Label className="text-sm font-medium text-black">Position: {position}%</Label>
+        <div className="px-2 pt-5">
+          <Slider
+            value={[position]}
+            onValueChange={(value) => onPositionChange(value[0])}
+            min={10}
+            max={90}
+            step={1}
             disabled={isSaving || isUploadingFont}
-          >
-            <SelectTrigger className="w-full">
-              <SelectValue placeholder="Select animation" />
-            </SelectTrigger>
-            <SelectContent>
-              {SUBTITLE_ANIMATION_OPTIONS.map((option) => (
-                <SelectItem key={option} value={option}>
-                  {option === "none" ? "None" : "Vertical Scroll"}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
+            className="w-full"
+          />
         </div>
+        <p className="text-xs text-gray-500">
+          {position <= 25 ? "Top" : position <= 60 ? "Center" : "Bottom"} — vertical placement of subtitles
+        </p>
       </div>
 
       {/* Font Family */}
