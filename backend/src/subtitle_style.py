@@ -9,7 +9,7 @@ HEX_COLOR_PATTERN = re.compile(r"^#[0-9A-Fa-f]{6}$")
 TEXT_TRANSFORM_OPTIONS = {"none", "uppercase", "lowercase", "capitalize"}
 TEXT_ALIGN_OPTIONS = {"left", "center", "right"}
 SUBTITLE_POSITION_OPTIONS = {"bottom", "center", "top"}
-SUBTITLE_ANIMATION_OPTIONS = {"none", "vertical_scroll"}
+SUBTITLE_ANIMATION_OPTIONS = {"none", "vertical_scroll", "hormozi"}
 
 # Position can be a string ("top", "center", "bottom") or a number (10-90 representing %).
 _POSITION_STRING_MAP = {"top": 15, "center": 45, "bottom": 75}

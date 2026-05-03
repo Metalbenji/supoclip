@@ -3187,6 +3187,110 @@ def create_assemblyai_subtitles(
             )
             subtitle_clips.extend(highlight_layers)
 
+    elif subtitle_animation == "hormozi":
+        # ═══════════════════════════════════════════════════════════════════
+        # HORMOZI STYLE: white text + black stroke, yellow BOX behind
+        # each word as it's spoken.  Words are grouped 3 per line like
+        # standard karaoke, but highlighting is a colored rectangle behind
+        # the active word rather than a fill-color overlay.
+        # ═══════════════════════════════════════════════════════════════════
+        BOX_PADDING_X = int(final_font_size * 0.15)
+        BOX_PADDING_Y = int(final_font_size * 0.12)
+
+        # Convert highlight hex to RGB tuple for ColorClip
+        _hl_hex = highlight_color.lstrip("#")
+        _hl_r = int(_hl_hex[0:2], 16)
+        _hl_g = int(_hl_hex[2:4], 16)
+        _hl_b = int(_hl_hex[4:6], 16)
+
+        words_per_subtitle = 3
+        for i in range(0, len(display_words_all), words_per_subtitle):
+            word_group_words = display_words_all[i:i + words_per_subtitle]
+            word_group_timings = word_timings_all[i:i + words_per_subtitle]
+            word_group_widths = word_widths_all[i:i + words_per_subtitle]
+            if not word_group_words:
+                continue
+
+            segment_start = float(word_group_timings[0][0])
+            segment_end = float(word_group_timings[-1][1])
+            segment_duration = segment_end - segment_start
+            if segment_duration < 0.1:
+                continue
+
+            space_width, _ = _measure_label_text(" ", processor.font_path, final_font_size)
+            space_width = max(1, space_width)
+            total_width = sum(word_group_widths) + (space_width * max(0, len(word_group_words) - 1))
+
+            horizontal_padding = int(video_width * 0.04)
+            if text_align == "left":
+                line_start_x = horizontal_padding
+            elif text_align == "right":
+                line_start_x = video_width - horizontal_padding - total_width
+            else:
+                line_start_x = (video_width - total_width) // 2
+            max_line_start = max(0, video_width - total_width)
+            line_start_x = max(0, min(int(line_start_x), max_line_start))
+
+            # Render ALL words as white text (full segment duration)
+            current_x = line_start_x
+            for word_index, (w_text, w_width) in enumerate(
+                zip(word_group_words, word_group_widths)
+            ):
+                word_box_width = max(1, w_width + (KARAOKE_WORD_HORIZONTAL_PADDING_PX * 2))
+                word_box_x = current_x - KARAOKE_WORD_HORIZONTAL_PADDING_PX
+                word_box_max_x = max(0, video_width - word_box_width)
+                word_box_x = max(0, min(word_box_x, word_box_max_x))
+
+                text_layers = _build_styled_word_layers(
+                    text=w_text,
+                    font_path=processor.font_path,
+                    font_size=final_font_size,
+                    fill_color=str(style["font_color"]),
+                    stroke_color=str(style["stroke_color"]),
+                    stroke_width=stroke_width,
+                    stroke_blur=stroke_blur,
+                    shadow_color=shadow_color,
+                    shadow_opacity=shadow_opacity,
+                    shadow_blur=shadow_blur,
+                    shadow_offset_x=shadow_offset_x,
+                    shadow_offset_y=shadow_offset_y,
+                    font_weight=font_weight,
+                    start=segment_start,
+                    duration=segment_duration,
+                    base_x=word_box_x,
+                    base_y=base_y,
+                    box_width=word_box_width,
+                    box_height=line_box_height,
+                    max_x=word_box_max_x,
+                    max_y=max_y,
+                    opacity_scale=1.0,
+                    animated_y_start=None,
+                )
+                subtitle_clips.extend(text_layers)
+
+                # ── Yellow highlight BOX behind the active word ─────────
+                w_start = float(word_group_timings[word_index][0])
+                w_end = float(word_group_timings[word_index][1])
+                if word_index < len(word_group_timings) - 1:
+                    box_end = max(w_end, float(word_group_timings[word_index + 1][0]))
+                else:
+                    box_end = max(w_end, segment_end)
+                box_duration = max(0.01, box_end - w_start)
+
+                box_w = w_width + (BOX_PADDING_X * 2)
+                box_h = line_box_height + (BOX_PADDING_Y * 2)
+                box_x = current_x - BOX_PADDING_X
+                box_y = base_y - BOX_PADDING_Y
+
+                box_clip = (ColorClip(size=(box_w, box_h), color=(_hl_r, _hl_g, _hl_b))
+                            .with_start(w_start)
+                            .with_duration(box_duration)
+                            .with_position((max(0, box_x), max(0, box_y)))
+                            .with_opacity(1.0))
+                subtitle_clips.append(box_clip)
+
+                current_x += w_width + space_width
+
     else:
         # ═══════════════════════════════════════════════════════════════════
         # STANDARD KARAOKE: 3 words per line, horizontal layout

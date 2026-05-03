@@ -1,7 +1,7 @@
 export const TEXT_TRANSFORM_OPTIONS = ["none", "uppercase", "lowercase", "capitalize"] as const;
 export const TEXT_ALIGN_OPTIONS = ["left", "center", "right"] as const;
 export const SUBTITLE_POSITION_OPTIONS = ["bottom", "center", "top"] as const;
-export const SUBTITLE_ANIMATION_OPTIONS = ["none", "vertical_scroll"] as const;
+export const SUBTITLE_ANIMATION_OPTIONS = ["none", "vertical_scroll", "hormozi"] as const;
 
 export type TextTransformOption = (typeof TEXT_TRANSFORM_OPTIONS)[number];
 export type TextAlignOption = (typeof TEXT_ALIGN_OPTIONS)[number];
@@ -111,7 +111,7 @@ export const SUBTITLE_PRESETS: ReadonlyArray<SubtitlePreset> = [
       shadowOffsetY: 3,
       dimUnhighlighted: true,
       position: 50,
-      animation: "none",
+      animation: "hormozi",
     },
   },
   {
