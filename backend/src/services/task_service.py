@@ -2312,6 +2312,32 @@ class TaskService:
             user_id=user_id,
         )
 
+        # Ensure the transcript cache exists so subtitle rendering can access
+        # word-level timings.  If the cache was cleaned up or the container
+        # was recreated, re-run transcription to rebuild it.
+        _cache_path = Path(video_path).with_suffix(".transcript_cache.json")
+        if not _cache_path.exists():
+            logger.info(
+                "Transcript cache missing for render-from-drafts (%s). "
+                "Re-generating transcript to build word-level timings.",
+                _cache_path,
+            )
+            try:
+                # Use generate_transcript (not _with_progress) because we need
+                # the .transcript_cache.json file to be created.  The
+                # _with_progress variant checks .transcript.txt and may skip
+                # transcription even when the word-timings JSON cache is gone.
+                await self.video_service.generate_transcript(
+                    Path(video_path),
+                )
+                logger.info("Transcript re-generated successfully for render-from-drafts.")
+            except Exception as _tce:
+                logger.warning(
+                    "Could not re-generate transcript for subtitle timings: %s. "
+                    "Subtitles may not render for some clips.",
+                    _tce,
+                )
+
         rendered_segments: List[Dict[str, Any]] = []
         total_selected = len(selected_drafts)
         for index, draft in enumerate(selected_drafts, start=1):
