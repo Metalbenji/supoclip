@@ -1093,6 +1093,9 @@ def get_video_transcript(
                 release_local_whisper_model_cache()
 
         cache_transcript_data(video_path, transcript_data)
+        _diag_cache_path = video_path.with_suffix(".transcript_cache.json")
+        logger.info(f"[SUBTITLE_DIAG] Transcript cache written to {_diag_cache_path} "
+                    f"(exists={_diag_cache_path.exists()}, words={len(transcript_data.get('words', []))})")
         formatted_transcript = build_formatted_transcript_from_words(transcript_data["words"])
         formatted_lines = [line for line in formatted_transcript.splitlines() if line.strip()]
         cache_formatted_transcript(video_path, formatted_lines)
@@ -2966,6 +2969,7 @@ def create_assemblyai_subtitles(
 
     relevant_words = []
     if word_timings_override:
+        logger.info(f"[SUBTITLE_DIAG] Using word_timings_override ({len(word_timings_override)} entries)")
         for word_data in word_timings_override:
             text = str(word_data.get("text") or "").strip()
             if not text:
@@ -2985,9 +2989,16 @@ def create_assemblyai_subtitles(
                 }
             )
     else:
+        _diag_cache_path = video_path.with_suffix('.transcript_cache.json') if hasattr(video_path, 'with_suffix') else None
         transcript_data = load_cached_transcript_data(video_path)
+        _diag_cache_exists = _diag_cache_path.exists() if _diag_cache_path else False
+        _diag_cache_words = len(transcript_data.get("words", [])) if transcript_data else 0
+        logger.info(
+            f"[SUBTITLE_DIAG] Cache path: {_diag_cache_path}, exists={_diag_cache_exists}, "
+            f"cached_words={_diag_cache_words}, clip_range=[{clip_start_ms}-{clip_end_ms}]ms"
+        )
         if not transcript_data or not transcript_data.get("words"):
-            logger.warning(f"No cached transcript data available for subtitles (video_path={video_path}, cache_exists={video_path.with_suffix('.transcript_cache.json').exists() if hasattr(video_path, 'with_suffix') else 'N/A'})")
+            logger.warning(f"No cached transcript data available for subtitles (video_path={video_path}, cache_exists={_diag_cache_exists})")
             return []
 
         # Find words that fall within our clip timerange
@@ -3012,8 +3023,12 @@ def create_assemblyai_subtitles(
                     )
 
     if not relevant_words:
-        logger.warning(f"No words found in clip timerange (start={clip_start}, end={clip_end}, word_timings_override={bool(word_timings_override)}, has_cache={bool(word_timings_override is None and load_cached_transcript_data(video_path))})")
+        logger.warning(f"[SUBTITLE_DIAG] No words found in clip timerange (clip=[{clip_start}-{clip_end}]s, "
+                       f"override={bool(word_timings_override)}, cache_exists={_diag_cache_exists if not word_timings_override else 'N/A'}, "
+                       f"cache_words={_diag_cache_words if not word_timings_override else 'N/A'})")
         return []
+
+    logger.info(f"[SUBTITLE_DIAG] Found {len(relevant_words)} relevant words for clip [{clip_start}-{clip_end}]s")
     relevant_words.sort(key=lambda word: (float(word.get("start", 0.0)), float(word.get("end", 0.0))))
 
     if KARAOKE_TIMING_SHIFT_SECONDS > 0:
@@ -3648,7 +3663,8 @@ def create_assemblyai_subtitles(
 
                 current_x += w_width + space_width
 
-    logger.info(f"Created {len(subtitle_clips)} subtitle elements from cached transcript data")
+    logger.info(f"[SUBTITLE_DIAG] Created {len(subtitle_clips)} subtitle elements (animation={style.get('animation')}, "
+               f"font={style.get('font_family')}, font_size={style.get('font_size')})")
     return subtitle_clips
 
 def create_optimized_clip(
@@ -3831,6 +3847,9 @@ def create_optimized_clip(
         final_clips = [cropped_clip]
 
         if add_subtitles:
+            logger.info(f"[SUBTITLE_DIAG] create_optimized_clip: add_subtitles=True, "
+                        f"word_timings_override={'yes (' + str(len(subtitle_word_timings)) + ' entries)' if subtitle_word_timings else 'None'}, "
+                        f"video_path={video_path}, clip=[{start_time}-{end_time}]s")
             try:
                 subtitle_clips = create_assemblyai_subtitles(
                     video_path,
@@ -3846,11 +3865,14 @@ def create_optimized_clip(
                     base_clip=cropped_clip,
                 )
                 final_clips.extend(subtitle_clips)
-                logger.info(f"Added {len(subtitle_clips)} subtitle clips to final composition")
+                logger.info(f"[SUBTITLE_DIAG] Added {len(subtitle_clips)} subtitle clips to final composition "
+                            f"(total clips in composition: {len(final_clips)})")
             except Exception as subtitle_error:
-                logger.error(f"Subtitle creation failed, rendering clip without subtitles: {subtitle_error}", exc_info=True)
+                logger.error(f"[SUBTITLE_DIAG] Subtitle creation FAILED: {subtitle_error}", exc_info=True)
                 if error_collector is not None:
                     error_collector.append(f"Subtitle creation failed: {subtitle_error}")
+        else:
+            logger.info(f"[SUBTITLE_DIAG] create_optimized_clip: add_subtitles=False, skipping subtitles")
 
         # Compose and encode
         final_clip = CompositeVideoClip(final_clips) if len(final_clips) > 1 else cropped_clip
