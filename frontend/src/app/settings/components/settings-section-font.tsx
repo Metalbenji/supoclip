@@ -631,116 +631,117 @@ export function SettingsSectionFont({
         <Label className="text-sm font-medium text-black">Preview {animation !== "none" ? <span className="text-xs text-gray-400 font-normal">(animated)</span> : null}</Label>
         <div className="p-6 bg-black rounded-lg min-h-[120px] flex items-center overflow-hidden">
           <div className="relative w-full">
-            <svg
-              className="block w-full overflow-visible"
-              height={previewSvgHeight}
-              role="img"
-              aria-label={previewText}
-            >
-              <defs>
-                {shadowOpacity > 0 && (
-                  <filter id={previewShadowFilterId} x="-50%" y="-50%" width="200%" height="200%" colorInterpolationFilters="sRGB">
-                    <feOffset in="SourceAlpha" dx={shadowOffsetX} dy={shadowOffsetY} result="shadow-offset" />
-                    <feGaussianBlur in="shadow-offset" stdDeviation={previewShadowStdDeviation} result="shadow-blur" />
-                    <feFlood floodColor={shadowColor} floodOpacity={shadowOpacity} result="shadow-color" />
-                    <feComposite in="shadow-color" in2="shadow-blur" operator="in" result="shadow-only" />
-                  </filter>
-                )}
-                {strokeWidth > 0 && (
-                  <filter id={previewStrokeFilterId} x="-50%" y="-50%" width="200%" height="200%" colorInterpolationFilters="sRGB">
-                    <feMorphology in="SourceAlpha" operator="dilate" radius={strokeWidth} result="stroke-expanded" />
-                    <feComposite in="stroke-expanded" in2="SourceAlpha" operator="out" result="stroke-outer" />
-                    <feFlood floodColor={strokeColor} result="stroke-color" />
-                    <feComposite in="stroke-color" in2="stroke-outer" operator="in" result="stroke-only" />
-                    <feGaussianBlur in="stroke-only" stdDeviation={previewStrokeStdDeviation} result="stroke-final" />
-                  </filter>
-                )}
-              </defs>
-
-              {shadowOpacity > 0 && (
-                <text
-                  aria-hidden
-                  x={previewTextX}
-                  y="50%"
-                  textAnchor={previewTextAnchor}
-                  dominantBaseline="middle"
-                  style={previewTextStyle}
-                  fill="#FFFFFF"
-                  filter={`url(#${previewShadowFilterId})`}
-                >
-                  {previewText}
-                </text>
-              )}
-
-              {strokeWidth > 0 && (
-                <text
-                  aria-hidden
-                  x={previewTextX}
-                  y="50%"
-                  textAnchor={previewTextAnchor}
-                  dominantBaseline="middle"
-                  style={previewTextStyle}
-                  fill="#FFFFFF"
-                  filter={`url(#${previewStrokeFilterId})`}
-                >
-                  {previewText}
-                </text>
-              )}
-
-              <text
-                x={previewTextX}
-                y="50%"
-                textAnchor={previewTextAnchor}
-                dominantBaseline="middle"
-                style={previewTextStyle}
-                fill={fontColor}
-              >
-                {previewText}
-              </text>
-            </svg>
-            {animation === "vertical_scroll" && (
+            {animation === "vertical_scroll" ? (
+              /* Animated preview — slides in from above with fade */
               <div
-                className="absolute inset-0 flex items-center"
+                className="w-full"
                 style={{
-                  animation: "subtitleScrollIn 1.8s cubic-bezier(0.25, 0.46, 0.45, 0.94) infinite",
+                  animation: "subtitleScrollIn 1.8s cubic-bezier(0.22, 0.61, 0.36, 1) infinite",
                 }}
               >
-                <div className="w-full">
-                  <svg className="block w-full overflow-visible" height={previewSvgHeight} role="img" aria-hidden="true">
-                    <defs>
-                      {shadowOpacity > 0 && (
-                        <filter id={`${previewShadowFilterId}-anim`} x="-50%" y="-50%" width="200%" height="200%" colorInterpolationFilters="sRGB">
-                          <feOffset in="SourceAlpha" dx={shadowOffsetX} dy={shadowOffsetY} result="shadow-offset" />
-                          <feGaussianBlur in="shadow-offset" stdDeviation={previewShadowStdDeviation} result="shadow-blur" />
-                          <feFlood floodColor={shadowColor} floodOpacity={shadowOpacity} result="shadow-color" />
-                          <feComposite in="shadow-color" in2="shadow-blur" operator="in" result="shadow-only" />
-                        </filter>
-                      )}
-                      {strokeWidth > 0 && (
-                        <filter id={`${previewStrokeFilterId}-anim`} x="-50%" y="-50%" width="200%" height="200%" colorInterpolationFilters="sRGB">
-                          <feMorphology in="SourceAlpha" operator="dilate" radius={strokeWidth} result="stroke-expanded" />
-                          <feComposite in="stroke-expanded" in2="SourceAlpha" operator="out" result="stroke-outer" />
-                          <feFlood floodColor={strokeColor} result="stroke-color" />
-                          <feComposite in="stroke-color" in2="stroke-outer" operator="in" result="stroke-only" />
-                          <feGaussianBlur in="stroke-only" stdDeviation={previewStrokeStdDeviation} result="stroke-final" />
-                        </filter>
-                      )}
-                    </defs>
+                <svg className="block w-full overflow-visible" height={previewSvgHeight} role="img" aria-label={previewText}>
+                  <defs>
                     {shadowOpacity > 0 && (
-                      <text aria-hidden x={previewTextX} y="50%" textAnchor={previewTextAnchor} dominantBaseline="middle" style={previewTextStyle} fill="#FFFFFF" filter={`url(#${previewShadowFilterId}-anim)`}>{previewText}</text>
+                      <filter id={`${previewShadowFilterId}-anim`} x="-50%" y="-50%" width="200%" height="200%" colorInterpolationFilters="sRGB">
+                        <feOffset in="SourceAlpha" dx={shadowOffsetX} dy={shadowOffsetY} result="shadow-offset" />
+                        <feGaussianBlur in="shadow-offset" stdDeviation={previewShadowStdDeviation} result="shadow-blur" />
+                        <feFlood floodColor={shadowColor} floodOpacity={shadowOpacity} result="shadow-color" />
+                        <feComposite in="shadow-color" in2="shadow-blur" operator="in" result="shadow-only" />
+                      </filter>
                     )}
                     {strokeWidth > 0 && (
-                      <text aria-hidden x={previewTextX} y="50%" textAnchor={previewTextAnchor} dominantBaseline="middle" style={previewTextStyle} fill="#FFFFFF" filter={`url(#${previewStrokeFilterId}-anim)`}>{previewText}</text>
+                      <filter id={`${previewStrokeFilterId}-anim`} x="-50%" y="-50%" width="200%" height="200%" colorInterpolationFilters="sRGB">
+                        <feMorphology in="SourceAlpha" operator="dilate" radius={strokeWidth} result="stroke-expanded" />
+                        <feComposite in="stroke-expanded" in2="SourceAlpha" operator="out" result="stroke-outer" />
+                        <feFlood floodColor={strokeColor} result="stroke-color" />
+                        <feComposite in="stroke-color" in2="stroke-outer" operator="in" result="stroke-only" />
+                        <feGaussianBlur in="stroke-only" stdDeviation={previewStrokeStdDeviation} result="stroke-final" />
+                      </filter>
                     )}
-                    <text x={previewTextX} y="50%" textAnchor={previewTextAnchor} dominantBaseline="middle" style={previewTextStyle} fill={fontColor}>{previewText}</text>
-                  </svg>
-                </div>
+                  </defs>
+                  {shadowOpacity > 0 && (
+                    <text aria-hidden x={previewTextX} y="50%" textAnchor={previewTextAnchor} dominantBaseline="middle" style={previewTextStyle} fill="#FFFFFF" filter={`url(#${previewShadowFilterId}-anim)`}>{previewText}</text>
+                  )}
+                  {strokeWidth > 0 && (
+                    <text aria-hidden x={previewTextX} y="50%" textAnchor={previewTextAnchor} dominantBaseline="middle" style={previewTextStyle} fill="#FFFFFF" filter={`url(#${previewStrokeFilterId}-anim)`}>{previewText}</text>
+                  )}
+                  <text x={previewTextX} y="50%" textAnchor={previewTextAnchor} dominantBaseline="middle" style={previewTextStyle} fill={fontColor}>{previewText}</text>
+                </svg>
               </div>
+            ) : (
+              /* Static preview */
+              <svg
+                className="block w-full overflow-visible"
+                height={previewSvgHeight}
+                role="img"
+                aria-label={previewText}
+              >
+                <defs>
+                  {shadowOpacity > 0 && (
+                    <filter id={previewShadowFilterId} x="-50%" y="-50%" width="200%" height="200%" colorInterpolationFilters="sRGB">
+                      <feOffset in="SourceAlpha" dx={shadowOffsetX} dy={shadowOffsetY} result="shadow-offset" />
+                      <feGaussianBlur in="shadow-offset" stdDeviation={previewShadowStdDeviation} result="shadow-blur" />
+                      <feFlood floodColor={shadowColor} floodOpacity={shadowOpacity} result="shadow-color" />
+                      <feComposite in="shadow-color" in2="shadow-blur" operator="in" result="shadow-only" />
+                    </filter>
+                  )}
+                  {strokeWidth > 0 && (
+                    <filter id={previewStrokeFilterId} x="-50%" y="-50%" width="200%" height="200%" colorInterpolationFilters="sRGB">
+                      <feMorphology in="SourceAlpha" operator="dilate" radius={strokeWidth} result="stroke-expanded" />
+                      <feComposite in="stroke-expanded" in2="SourceAlpha" operator="out" result="stroke-outer" />
+                      <feFlood floodColor={strokeColor} result="stroke-color" />
+                      <feComposite in="stroke-color" in2="stroke-outer" operator="in" result="stroke-only" />
+                      <feGaussianBlur in="stroke-only" stdDeviation={previewStrokeStdDeviation} result="stroke-final" />
+                    </filter>
+                  )}
+                </defs>
+
+                {shadowOpacity > 0 && (
+                  <text
+                    aria-hidden
+                    x={previewTextX}
+                    y="50%"
+                    textAnchor={previewTextAnchor}
+                    dominantBaseline="middle"
+                    style={previewTextStyle}
+                    fill="#FFFFFF"
+                    filter={`url(#${previewShadowFilterId})`}
+                  >
+                    {previewText}
+                  </text>
+                )}
+
+                {strokeWidth > 0 && (
+                  <text
+                    aria-hidden
+                    x={previewTextX}
+                    y="50%"
+                    textAnchor={previewTextAnchor}
+                    dominantBaseline="middle"
+                    style={previewTextStyle}
+                    fill="#FFFFFF"
+                    filter={`url(#${previewStrokeFilterId})`}
+                  >
+                    {previewText}
+                  </text>
+                )}
+
+                <text
+                  x={previewTextX}
+                  y="50%"
+                  textAnchor={previewTextAnchor}
+                  dominantBaseline="middle"
+                  style={previewTextStyle}
+                  fill={fontColor}
+                >
+                  {previewText}
+                </text>
+              </svg>
             )}
             <style>{`
               @keyframes subtitleScrollIn {
                 0% { transform: translateY(-100%); opacity: 0; }
-                15% { opacity: 1; }
+                25% { opacity: 1; }
                 100% { transform: translateY(0); opacity: 1; }
               }
             `}</style>

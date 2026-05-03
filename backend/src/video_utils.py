@@ -2649,7 +2649,7 @@ def _resolve_karaoke_highlight_color(base_color: str) -> str:
 
 KARAOKE_WORD_HORIZONTAL_PADDING_PX = 12
 KARAOKE_WORD_VERTICAL_PADDING_PX = 6
-KARAOKE_TIMING_SHIFT_SECONDS = 0.55
+KARAOKE_TIMING_SHIFT_SECONDS = 0.0
 
 
 def _compute_vertical_effect_padding(
@@ -2732,20 +2732,22 @@ def _build_styled_word_layers(
     # Build position function — either static or animated (vertical scroll).
     # NOTE: MoviePy v2 calls self.pos(ct) where ct = t - self.start (clip-local
     # time starting at 0). So the lambda receives t=0 when the clip first appears.
-    if animated_y_start is not None and duration > 0:
+    _is_animated = animated_y_start is not None and duration > 0
+    if _is_animated:
         _y_from = animated_y_start
         _y_to = base_y
-        # Smooth ease-out: noticeable slide-in over ~1 second
-        _anim_duration = max(0.8, min(1.2, duration * 0.5))
+        # Fixed short duration for snappy, consistent animation.
+        _anim_duration = 0.45
 
         def _pos_fn(x: int, y: int):
             """Return a MoviePy-compatible position lambda.
 
             ``t`` here is clip-local time (0 at first frame of the clip).
+            Uses cubic ease-out for a natural deceleration into position.
             """
             return lambda t: (
                 x,
-                int(_y_from + (_y_to - _y_from) * min(1.0, (t / _anim_duration) ** 0.4))
+                int(_y_from + (_y_to - _y_from) * min(1.0, 1.0 - (1.0 - min(1.0, t / _anim_duration)) ** 3))
                 if _anim_duration > 0
                 else y,
             )
@@ -3063,12 +3065,10 @@ def create_assemblyai_subtitles(
 
         # Vertical scroll: each word group slides down from above.
         animated_y_start = None
-        scroll_fade_scale = None
         if subtitle_animation == "vertical_scroll":
-            # Start position: ~30% of video height above the target
-            animated_y_start = max(0, base_y - int(video_height * 0.30))
-            # Apply a gentle fade-in for the first moments
-            scroll_fade_scale = 1.0
+            # Start position: ~35% of video height above the target — slides in
+            # from near the top for a dramatic entrance effect.
+            animated_y_start = max(0, base_y - int(video_height * 0.35))
 
         current_x = line_start_x
         for word_index, (word_text, (word_start, word_end), word_width) in enumerate(
@@ -3100,7 +3100,7 @@ def create_assemblyai_subtitles(
                 box_height=line_box_height,
                 max_x=word_box_max_x,
                 max_y=max_y,
-                opacity_scale=(0.52 if dim_unhighlighted else 1.0) * (scroll_fade_scale if scroll_fade_scale is not None else 1.0),
+                opacity_scale=0.52 if dim_unhighlighted else 1.0,
                 animated_y_start=animated_y_start,
             )
             subtitle_clips.extend(base_layers)
@@ -3133,10 +3133,12 @@ def create_assemblyai_subtitles(
                 box_height=line_box_height,
                 max_x=word_box_max_x,
                 max_y=max_y,
-                opacity_scale=1.0 * (scroll_fade_scale if scroll_fade_scale is not None else 1.0),
-                # Highlight appears at the final resting position — no slide-in
-                # so it doesn't drop awkwardly onto the already-settled base text.
-                animated_y_start=None,
+                opacity_scale=1.0,
+                # Highlight slides in together with the dimmed base text
+                # for a cohesive animation. Since both use the same start/end
+                # positions and the animation completes in ~0.45s, the visual
+                # result is the entire subtitle group sliding in as one unit.
+                animated_y_start=animated_y_start,
             )
             subtitle_clips.extend(highlight_layers)
 
