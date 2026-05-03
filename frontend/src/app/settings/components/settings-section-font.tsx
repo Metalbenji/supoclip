@@ -149,7 +149,7 @@ export function SettingsSectionFont({
   const previewStrokeStdDeviation = Math.max(0, strokeBlur / 2);
   const previewShadowStdDeviation = Math.max(0, shadowBlur / 2);
 
-  // Wheel preview: cycle through words one at a time with slide-in/hold/slide-out
+  // Wheel preview: 3-word stack slides — next above, current center, previous below
   const wheelContainerRef = useRef<HTMLDivElement>(null);
 
   // Hormozi preview: slide highlight box across words
@@ -158,52 +158,68 @@ export function SettingsSectionFont({
     if (animation !== "vertical_scroll") return;
     const container = wheelContainerRef.current;
     if (!container) return;
-    const texts = container.querySelectorAll<SVGTextElement>("text[id='wheel-preview-text']");
-    if (texts.length === 0) return;
+
+    // We update 6 text elements: 3 shadow layers + 3 stroke layers + 3 fill layers
+    const prevTexts = container.querySelectorAll<SVGTextElement>("text[id^='wheel-prev']");
+    const curTexts = container.querySelectorAll<SVGTextElement>("text[id^='wheel-cur']");
+    const nextTexts = container.querySelectorAll<SVGTextElement>("text[id^='wheel-next']");
+    if (prevTexts.length === 0 || curTexts.length === 0 || nextTexts.length === 0) return;
 
     let idx = 0;
     let cancelled = false;
-    const SLIDE_IN = 400;   // ms
-    const HOLD = 800;       // ms
-    const SLIDE_OUT = 400;  // ms
+    const HOLD = 900;
+
+    function words(i: number) {
+      const n = SCROLL_PREVIEW_WORDS.length;
+      const prev = SCROLL_PREVIEW_WORDS[(i - 1 + n) % n];
+      const cur = SCROLL_PREVIEW_WORDS[i];
+      const next = SCROLL_PREVIEW_WORDS[(i + 1) % n];
+      return { prev, cur, next };
+    }
+
+    function setTexts(sel: NodeListOf<SVGTextElement>, txt: string) {
+      for (const el of sel) el.textContent = txt;
+    }
+
+    // Row spacing in the SVG
+    const rowSpacing = Math.max(28, fontSize * lineHeight * 0.9);
 
     function tick() {
       if (cancelled) return;
-      const word = SCROLL_PREVIEW_WORDS[idx];
-      for (const el of texts) el.textContent = word;
+      const w = words(idx);
+      setTexts(prevTexts, w.prev);
+      setTexts(curTexts, w.cur);
+      setTexts(nextTexts, w.next);
 
-      // Slide in from above
-      container.style.transition = `transform ${SLIDE_IN}ms cubic-bezier(0.22, 0.61, 0.36, 1), opacity ${SLIDE_IN}ms ease`;
+      // Position: whole container slides. The 3 rows are fixed offsets within it.
+      // prev row is at +rowSpacing (below center), cur at 0, next at -rowSpacing (above).
+      container.style.transition = `transform 400ms cubic-bezier(0.22, 0.61, 0.36, 1), opacity 400ms ease`;
       container.style.transform = "translateY(0)";
       container.style.opacity = "1";
 
-      // After slide-in + hold, slide out below
       setTimeout(() => {
         if (cancelled) return;
-        container.style.transition = `transform ${SLIDE_OUT}ms ease-in, opacity ${SLIDE_OUT}ms ease`;
-        container.style.transform = "translateY(30px)";
+        container.style.transition = "transform 350ms ease-in, opacity 350ms ease";
+        container.style.transform = "translateY(20px)";
         container.style.opacity = "0";
 
-        // After slide-out, reset above and show next word
         setTimeout(() => {
           if (cancelled) return;
           container.style.transition = "none";
-          container.style.transform = "translateY(-30px)";
+          container.style.transform = "translateY(-20px)";
           idx = (idx + 1) % SCROLL_PREVIEW_WORDS.length;
-          // Small pause before next word slides in
-          setTimeout(() => tick(), 200);
-        }, SLIDE_OUT + 50);
-      }, SLIDE_IN + HOLD);
+          setTimeout(() => tick(), 150);
+        }, 380);
+      }, HOLD);
     }
 
-    // Start above (invisible)
     container.style.transition = "none";
-    container.style.transform = "translateY(-30px)";
+    container.style.transform = "translateY(-20px)";
     container.style.opacity = "0";
     setTimeout(() => tick(), 300);
 
     return () => { cancelled = true; };
-  }, [animation]);
+  }, [animation, fontSize, lineHeight]);
 
   // Hormozi preview: slide highlight box across words using getExtentOfChar
   useEffect(() => {
@@ -743,13 +759,13 @@ export function SettingsSectionFont({
               <div
                 ref={wheelContainerRef}
                 className="w-full relative overflow-hidden"
-                style={{ height: Math.max(80, previewSvgHeight + 20), transform: "translateY(-30px)", opacity: 0 }}
+                style={{ height: Math.max(100, previewSvgHeight * 2.5), transform: "translateY(-20px)", opacity: 0 }}
               >
-                {/* Single slot — content swapped by JS timer */}
+                {/* 3-row stack — prev (below), current (center/highlighted), next (above) */}
                 <div className="absolute inset-0 flex items-center justify-center">
                   <svg
                     className="block overflow-visible"
-                    height={previewSvgHeight}
+                    height={Math.max(90, previewSvgHeight * 2.2)}
                     role="img"
                     aria-label="wheel preview"
                   >
@@ -772,23 +788,31 @@ export function SettingsSectionFont({
                         </filter>
                       )}
                     </defs>
+                    {/* Helper: renders shadow + stroke + fill layers for one row */}
+                    {/* NEXT word (above center) — dimmed */}
                     {shadowOpacity > 0 && (
-                      <text aria-hidden x={previewTextX} y="50%" textAnchor={previewTextAnchor} dominantBaseline="middle" style={previewTextStyle} fill="#FFFFFF" filter={`url(#${previewShadowFilterId}-wheel)`}>{SCROLL_PREVIEW_WORDS[0]}</text>
+                      <text id="wheel-next-shadow" aria-hidden x={previewTextX} y="25%" textAnchor={previewTextAnchor} dominantBaseline="middle" style={previewTextStyle} fill="#FFFFFF" opacity="0.35" filter={`url(#${previewShadowFilterId}-wheel)`}>{SCROLL_PREVIEW_WORDS[1]}</text>
                     )}
                     {strokeWidth > 0 && (
-                      <text aria-hidden x={previewTextX} y="50%" textAnchor={previewTextAnchor} dominantBaseline="middle" style={previewTextStyle} fill="#FFFFFF" filter={`url(#${previewStrokeFilterId}-wheel)`}>{SCROLL_PREVIEW_WORDS[0]}</text>
+                      <text id="wheel-next-stroke" aria-hidden x={previewTextX} y="25%" textAnchor={previewTextAnchor} dominantBaseline="middle" style={previewTextStyle} fill="#FFFFFF" opacity="0.35" filter={`url(#${previewStrokeFilterId}-wheel)`}>{SCROLL_PREVIEW_WORDS[1]}</text>
                     )}
-                    <text
-                      id="wheel-preview-text"
-                      x={previewTextX}
-                      y="50%"
-                      textAnchor={previewTextAnchor}
-                      dominantBaseline="middle"
-                      style={previewTextStyle}
-                      fill={highlightColor}
-                    >
-                      {SCROLL_PREVIEW_WORDS[0]}
-                    </text>
+                    <text id="wheel-next-fill" x={previewTextX} y="25%" textAnchor={previewTextAnchor} dominantBaseline="middle" style={previewTextStyle} fill={fontColor} opacity="0.35">{SCROLL_PREVIEW_WORDS[1]}</text>
+                    {/* CURRENT word (center) — highlighted */}
+                    {shadowOpacity > 0 && (
+                      <text id="wheel-cur-shadow" aria-hidden x={previewTextX} y="50%" textAnchor={previewTextAnchor} dominantBaseline="middle" style={previewTextStyle} fill="#FFFFFF" filter={`url(#${previewShadowFilterId}-wheel)`}>{SCROLL_PREVIEW_WORDS[0]}</text>
+                    )}
+                    {strokeWidth > 0 && (
+                      <text id="wheel-cur-stroke" aria-hidden x={previewTextX} y="50%" textAnchor={previewTextAnchor} dominantBaseline="middle" style={previewTextStyle} fill="#FFFFFF" filter={`url(#${previewStrokeFilterId}-wheel)`}>{SCROLL_PREVIEW_WORDS[0]}</text>
+                    )}
+                    <text id="wheel-cur-fill" x={previewTextX} y="50%" textAnchor={previewTextAnchor} dominantBaseline="middle" style={previewTextStyle} fill={highlightColor}>{SCROLL_PREVIEW_WORDS[0]}</text>
+                    {/* PREVIOUS word (below center) — dimmed */}
+                    {shadowOpacity > 0 && (
+                      <text id="wheel-prev-shadow" aria-hidden x={previewTextX} y="75%" textAnchor={previewTextAnchor} dominantBaseline="middle" style={previewTextStyle} fill="#FFFFFF" opacity="0.35" filter={`url(#${previewShadowFilterId}-wheel)`}>{SCROLL_PREVIEW_WORDS[SCROLL_PREVIEW_WORDS.length - 1]}</text>
+                    )}
+                    {strokeWidth > 0 && (
+                      <text id="wheel-prev-stroke" aria-hidden x={previewTextX} y="75%" textAnchor={previewTextAnchor} dominantBaseline="middle" style={previewTextStyle} fill="#FFFFFF" opacity="0.35" filter={`url(#${previewStrokeFilterId}-wheel)`}>{SCROLL_PREVIEW_WORDS[SCROLL_PREVIEW_WORDS.length - 1]}</text>
+                    )}
+                    <text id="wheel-prev-fill" x={previewTextX} y="75%" textAnchor={previewTextAnchor} dominantBaseline="middle" style={previewTextStyle} fill={fontColor} opacity="0.35">{SCROLL_PREVIEW_WORDS[SCROLL_PREVIEW_WORDS.length - 1]}</text>
                   </svg>
                 </div>
               </div>

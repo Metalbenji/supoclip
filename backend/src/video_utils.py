@@ -3117,39 +3117,34 @@ def create_assemblyai_subtitles(
     # ── Choose rendering path ───────────────────────────────────────────
     if subtitle_animation == "vertical_scroll":
         # ═══════════════════════════════════════════════════════════════════
-        # VERTICAL SCROLL — WHEEL STYLE
-        # Each word independently slides down from above, pauses at center
-        # (highlighted), then slides out below.  All words are positioned at
-        # the same spot so they overlap — the staggered timing creates the
-        # rolling wheel effect.
-        #
-        # Like a slot-machine / conveyor belt of words.
+        # VERTICAL SCROLL — WHEEL STYLE (3-row stack)
+        # For each spoken word, shows 3 rows stacked vertically:
+        #   - NEXT word above center (dimmed)
+        #   - CURRENT word at center (highlighted)
+        #   - PREVIOUS word below center (dimmed)
+        # All three rows share the same wheel animation timing so the
+        # stack slides as a unit — creating a slot-machine / conveyor
+        # belt effect where the highlight contrast is always visible.
         # ═══════════════════════════════════════════════════════════════════
-        SLIDE_OFFSET = int(final_font_size * 0.85)  # pixels above/below center
-        PAD_SECONDS = 0.30                          # slide-in/out time on each side
+        ROW_SPACING = int(final_font_size * lineHeight * 0.95)
+        SLIDE_OFFSET = int(final_font_size * 0.9)
+        PAD_SECONDS = 0.30
 
-        for idx, (word_text, (word_start, word_end)) in enumerate(
-            zip(display_words_all, word_timings_all)
-        ):
+        n_words = len(display_words_all)
+        for idx in range(n_words):
+            word_text = display_words_all[idx]
+            word_start, word_end = word_timings_all[idx]
             word_width = word_widths_all[idx]
 
-            # Extend clip so the slide-in starts before word and slide-out
-            # finishes after word.  The word is "held" at center during
-            # its spoken duration.
             clip_start = max(0.0, word_start - PAD_SECONDS)
             clip_end = word_end + PAD_SECONDS
-            # Last word: hold a bit longer before sliding out
-            if idx == len(display_words_all) - 1:
+            if idx == n_words - 1:
                 clip_end = word_end + PAD_SECONDS * 1.5
             clip_duration = max(0.1, clip_end - clip_start)
-
-            # hold_fraction: what fraction of clip_duration is the "hold at center"
             hold_duration = word_end - word_start
             hold_fraction = hold_duration / clip_duration if clip_duration > 0 else 0.5
 
             word_box_width = max(1, word_width + (KARAOKE_WORD_HORIZONTAL_PADDING_PX * 2))
-
-            # Horizontal centering per word
             if text_align == "left":
                 word_box_x = int(video_width * 0.04)
             elif text_align == "right":
@@ -3159,7 +3154,54 @@ def create_assemblyai_subtitles(
             word_box_max_x = max(0, video_width - word_box_width)
             word_box_x = max(0, min(int(word_box_x), word_box_max_x))
 
-            # ── Dimmed base layer (full clip, always visible) ──────────
+            # ── PREVIOUS word (below center) — dimmed, static position ──
+            prev_idx = idx - 1
+            if prev_idx >= 0:
+                prev_text = display_words_all[prev_idx]
+                prev_width = word_widths_all[prev_idx]
+                prev_start, prev_end = word_timings_all[prev_idx]
+                # Show previous word from when it starts being spoken until current word slides out
+                prev_clip_start = prev_start
+                prev_clip_end = clip_end
+                prev_duration = max(0.1, prev_clip_end - prev_clip_start)
+                prev_box_w = max(1, prev_width + (KARAOKE_WORD_HORIZONTAL_PADDING_PX * 2))
+                if text_align == "left":
+                    prev_box_x = int(video_width * 0.04)
+                elif text_align == "right":
+                    prev_box_x = video_width - int(video_width * 0.04) - prev_box_w
+                else:
+                    prev_box_x = (video_width - prev_box_w) // 2
+                prev_box_x = max(0, min(int(prev_box_x), max(0, video_width - prev_box_w)))
+                prev_y = base_y + ROW_SPACING
+                prev_y = min(prev_y, max_y)
+
+                prev_layers = _build_styled_word_layers(
+                    text=prev_text,
+                    font_path=processor.font_path,
+                    font_size=final_font_size,
+                    fill_color=str(style["font_color"]),
+                    stroke_color=str(style["stroke_color"]),
+                    stroke_width=stroke_width,
+                    stroke_blur=stroke_blur,
+                    shadow_color=shadow_color,
+                    shadow_opacity=shadow_opacity,
+                    shadow_blur=shadow_blur,
+                    shadow_offset_x=shadow_offset_x,
+                    shadow_offset_y=shadow_offset_y,
+                    font_weight=font_weight,
+                    start=prev_clip_start,
+                    duration=prev_duration,
+                    base_x=prev_box_x,
+                    base_y=prev_y,
+                    box_width=prev_box_w,
+                    box_height=line_box_height,
+                    max_x=max(0, video_width - prev_box_w),
+                    max_y=max_y,
+                    opacity_scale=0.35 if dim_unhighlighted else 0.7,
+                )
+                subtitle_clips.extend(prev_layers)
+
+            # ── CURRENT word (center) — dimmed base layer with wheel animation ──
             base_layers = _build_styled_word_layers(
                 text=word_text,
                 font_path=processor.font_path,
@@ -3189,7 +3231,7 @@ def create_assemblyai_subtitles(
             )
             subtitle_clips.extend(base_layers)
 
-            # ── Highlight layer (only during the spoken hold period) ────
+            # ── CURRENT word (center) — highlight layer with wheel animation ──
             highlight_layers = _build_styled_word_layers(
                 text=word_text,
                 font_path=processor.font_path,
@@ -3218,6 +3260,52 @@ def create_assemblyai_subtitles(
                 wheel_hold_fraction=hold_fraction,
             )
             subtitle_clips.extend(highlight_layers)
+
+            # ── NEXT word (above center) — dimmed, static position ──
+            next_idx = idx + 1
+            if next_idx < n_words:
+                next_text = display_words_all[next_idx]
+                next_width = word_widths_all[next_idx]
+                next_start, next_end = word_timings_all[next_idx]
+                # Show next word from when current word slides in until it becomes active
+                next_clip_start = clip_start
+                next_clip_end = next_end + PAD_SECONDS
+                next_duration = max(0.1, next_clip_end - next_clip_start)
+                next_box_w = max(1, next_width + (KARAOKE_WORD_HORIZONTAL_PADDING_PX * 2))
+                if text_align == "left":
+                    next_box_x = int(video_width * 0.04)
+                elif text_align == "right":
+                    next_box_x = video_width - int(video_width * 0.04) - next_box_w
+                else:
+                    next_box_x = (video_width - next_box_w) // 2
+                next_box_x = max(0, min(int(next_box_x), max(0, video_width - next_box_w)))
+                next_y = max(0, base_y - ROW_SPACING)
+
+                next_layers = _build_styled_word_layers(
+                    text=next_text,
+                    font_path=processor.font_path,
+                    font_size=final_font_size,
+                    fill_color=str(style["font_color"]),
+                    stroke_color=str(style["stroke_color"]),
+                    stroke_width=stroke_width,
+                    stroke_blur=stroke_blur,
+                    shadow_color=shadow_color,
+                    shadow_opacity=shadow_opacity,
+                    shadow_blur=shadow_blur,
+                    shadow_offset_x=shadow_offset_x,
+                    shadow_offset_y=shadow_offset_y,
+                    font_weight=font_weight,
+                    start=next_clip_start,
+                    duration=next_duration,
+                    base_x=next_box_x,
+                    base_y=next_y,
+                    box_width=next_box_w,
+                    box_height=line_box_height,
+                    max_x=max(0, video_width - next_box_w),
+                    max_y=max_y,
+                    opacity_scale=0.35 if dim_unhighlighted else 0.7,
+                )
+                subtitle_clips.extend(next_layers)
 
     elif subtitle_animation == "hormozi":
         # ═══════════════════════════════════════════════════════════════════
