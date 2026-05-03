@@ -3154,16 +3154,11 @@ def create_assemblyai_subtitles(
             word_box_max_x = max(0, video_width - word_box_width)
             word_box_x = max(0, min(int(word_box_x), word_box_max_x))
 
-            # ── PREVIOUS word (below center) — dimmed, static position ──
+            # ── PREVIOUS word (below center) — dimmed, rolls with wheel ──
             prev_idx = idx - 1
             if prev_idx >= 0:
                 prev_text = display_words_all[prev_idx]
                 prev_width = word_widths_all[prev_idx]
-                prev_start, prev_end = word_timings_all[prev_idx]
-                # Show previous word from when it starts being spoken until current word slides out
-                prev_clip_start = prev_start
-                prev_clip_end = clip_end
-                prev_duration = max(0.1, prev_clip_end - prev_clip_start)
                 prev_box_w = max(1, prev_width + (KARAOKE_WORD_HORIZONTAL_PADDING_PX * 2))
                 if text_align == "left":
                     prev_box_x = int(video_width * 0.04)
@@ -3175,6 +3170,8 @@ def create_assemblyai_subtitles(
                 prev_y = base_y + ROW_SPACING
                 prev_y = min(prev_y, max_y)
 
+                # Use same clip timing as current word so the whole stack
+                # rolls in sync (slide in → hold → slide out together).
                 prev_layers = _build_styled_word_layers(
                     text=prev_text,
                     font_path=processor.font_path,
@@ -3189,8 +3186,8 @@ def create_assemblyai_subtitles(
                     shadow_offset_x=shadow_offset_x,
                     shadow_offset_y=shadow_offset_y,
                     font_weight=font_weight,
-                    start=prev_clip_start,
-                    duration=prev_duration,
+                    start=clip_start,
+                    duration=clip_duration,
                     base_x=prev_box_x,
                     base_y=prev_y,
                     box_width=prev_box_w,
@@ -3198,6 +3195,8 @@ def create_assemblyai_subtitles(
                     max_x=max(0, video_width - prev_box_w),
                     max_y=max_y,
                     opacity_scale=0.35 if dim_unhighlighted else 0.7,
+                    wheel_slide_offset=SLIDE_OFFSET,
+                    wheel_hold_fraction=hold_fraction,
                 )
                 subtitle_clips.extend(prev_layers)
 
@@ -3261,16 +3260,11 @@ def create_assemblyai_subtitles(
             )
             subtitle_clips.extend(highlight_layers)
 
-            # ── NEXT word (above center) — dimmed, static position ──
+            # ── NEXT word (above center) — dimmed, rolls with wheel ──
             next_idx = idx + 1
             if next_idx < n_words:
                 next_text = display_words_all[next_idx]
                 next_width = word_widths_all[next_idx]
-                next_start, next_end = word_timings_all[next_idx]
-                # Show next word from when current word slides in until it becomes active
-                next_clip_start = clip_start
-                next_clip_end = next_end + PAD_SECONDS
-                next_duration = max(0.1, next_clip_end - next_clip_start)
                 next_box_w = max(1, next_width + (KARAOKE_WORD_HORIZONTAL_PADDING_PX * 2))
                 if text_align == "left":
                     next_box_x = int(video_width * 0.04)
@@ -3281,6 +3275,8 @@ def create_assemblyai_subtitles(
                 next_box_x = max(0, min(int(next_box_x), max(0, video_width - next_box_w)))
                 next_y = max(0, base_y - ROW_SPACING)
 
+                # Use same clip timing as current word so the whole stack
+                # rolls in sync (slide in → hold → slide out together).
                 next_layers = _build_styled_word_layers(
                     text=next_text,
                     font_path=processor.font_path,
@@ -3295,8 +3291,8 @@ def create_assemblyai_subtitles(
                     shadow_offset_x=shadow_offset_x,
                     shadow_offset_y=shadow_offset_y,
                     font_weight=font_weight,
-                    start=next_clip_start,
-                    duration=next_duration,
+                    start=clip_start,
+                    duration=clip_duration,
                     base_x=next_box_x,
                     base_y=next_y,
                     box_width=next_box_w,
@@ -3304,6 +3300,8 @@ def create_assemblyai_subtitles(
                     max_x=max(0, video_width - next_box_w),
                     max_y=max_y,
                     opacity_scale=0.35 if dim_unhighlighted else 0.7,
+                    wheel_slide_offset=SLIDE_OFFSET,
+                    wheel_hold_fraction=hold_fraction,
                 )
                 subtitle_clips.extend(next_layers)
 

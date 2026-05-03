@@ -757,7 +757,7 @@ export function SettingsSectionFont({
 
       <div className="space-y-2">
         <Label className="text-sm font-medium text-black">Preview {animation !== "none" ? <span className="text-xs text-gray-400 font-normal">(animated)</span> : null}</Label>
-        <div className="p-6 bg-black rounded-lg min-h-[120px] flex items-center overflow-hidden">
+        <div className="p-6 bg-black rounded-lg min-h-[120px] flex items-center overflow-visible">
           <div className="relative w-full">
             {animation === "vertical_scroll" ? (
               /* ═══════════════════════════════════════════════════════════
@@ -847,12 +847,12 @@ export function SettingsSectionFont({
                  ═══════════════════════════════════════════════════════════ */
               <div
                 ref={hormoziContainerRef}
-                className="w-full relative overflow-hidden"
-                style={{ height: Math.max(80, previewSvgHeight + 20) }}
+                className="w-full relative"
+                style={{ height: Math.max(70, Math.ceil(fontSize * 1.6)) }}
               >
                 <svg
                   className="block w-full overflow-visible"
-                  height={previewSvgHeight}
+                  height={Math.max(70, Math.ceil(fontSize * 1.6))}
                   role="img"
                   aria-label="hormozi preview"
                 >
@@ -890,11 +890,11 @@ export function SettingsSectionFont({
                   />
                   {shadowOpacity > 0 && (
                     <text
-                      id="hormozi-main-text"
+                      aria-hidden
                       x={previewTextX}
-                      y="50%"
+                      y={Math.round(Math.max(70, Math.ceil(fontSize * 1.6)) / 2)}
                       textAnchor={previewTextAnchor}
-                      dominantBaseline="middle"
+                      dominantBaseline="central"
                       style={previewTextStyle}
                       fill="#FFFFFF"
                       filter={`url(#${previewShadowFilterId}-hormozi)`}
@@ -904,9 +904,9 @@ export function SettingsSectionFont({
                     <text
                       aria-hidden
                       x={previewTextX}
-                      y="50%"
+                      y={Math.round(Math.max(70, Math.ceil(fontSize * 1.6)) / 2)}
                       textAnchor={previewTextAnchor}
-                      dominantBaseline="middle"
+                      dominantBaseline="central"
                       style={previewTextStyle}
                       fill="#FFFFFF"
                       filter={`url(#${previewStrokeFilterId}-hormozi)`}
@@ -915,9 +915,9 @@ export function SettingsSectionFont({
                   <text
                     id="hormozi-main-text"
                     x={previewTextX}
-                    y="50%"
+                    y={Math.round(Math.max(70, Math.ceil(fontSize * 1.6)) / 2)}
                     textAnchor={previewTextAnchor}
-                    dominantBaseline="middle"
+                    dominantBaseline="central"
                     style={previewTextStyle}
                     fill={fontColor}
                   >{previewText}</text>
