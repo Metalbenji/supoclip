@@ -3061,6 +3061,7 @@ def create_assemblyai_subtitles(
     if not highlight_color:
         highlight_color = _resolve_karaoke_highlight_color(str(style["font_color"]))
     dim_unhighlighted = bool(style.get("dim_unhighlighted", True))
+    line_height = float(style.get("line_height", 1.2))
     subtitle_position = style.get("position", 75)
     # Accept both numeric (percentage) and legacy string values.
     if isinstance(subtitle_position, (int, float)):
@@ -3132,7 +3133,7 @@ def create_assemblyai_subtitles(
         # stack slides as a unit — creating a slot-machine / conveyor
         # belt effect where the highlight contrast is always visible.
         # ═══════════════════════════════════════════════════════════════════
-        ROW_SPACING = int(final_font_size * lineHeight * 0.95)
+        ROW_SPACING = int(final_font_size * line_height * 0.95)
         SLIDE_OFFSET = int(final_font_size * 0.9)
         PAD_SECONDS = 0.30
 
@@ -3329,7 +3330,7 @@ def create_assemblyai_subtitles(
 
         # Calculate total bar height
         num_lines = max(1, len(word_groups))
-        _bar_row_spacing = int(final_font_size * lineHeight * 0.95)
+        _bar_row_spacing = int(final_font_size * line_height * 0.95)
         bar_height = int(line_box_height * num_lines + _bar_row_spacing * max(0, num_lines - 1))
         bar_y = max(0, base_y)
 
