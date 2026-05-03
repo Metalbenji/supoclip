@@ -67,6 +67,7 @@ interface SettingsSectionFontProps {
 
 const SWATCH_COLORS = ["#FFFFFF", "#000000", "#FFD700", "#FF6B6B", "#4ECDC4", "#45B7D1"];
 const PREVIEW_TEXT = "Your subtitle will look like this";
+const SCROLL_PREVIEW_WORDS = ["before", "current", "after"];
 
 function applyTextTransform(text: string, mode: TextTransformOption): string {
   if (mode === "uppercase") {
@@ -632,41 +633,67 @@ export function SettingsSectionFont({
         <div className="p-6 bg-black rounded-lg min-h-[120px] flex items-center overflow-hidden">
           <div className="relative w-full">
             {animation === "vertical_scroll" ? (
-              /* Animated preview — slides in from above with fade */
+              /* ═══════════════════════════════════════════════════════════
+                 Vertical Scroll preview — 3 stacked words cycling through
+                 Top/bottom dimmed, middle highlighted, scrolls up per beat
+                 ═══════════════════════════════════════════════════════════ */
               <div
-                className="w-full"
-                style={{
-                  animation: "subtitleScrollIn 1.8s cubic-bezier(0.22, 0.61, 0.36, 1) infinite",
-                }}
+                className="w-full flex flex-col items-center justify-center"
+                style={{ height: Math.max(100, previewSvgHeight + 40) }}
               >
-                <svg className="block w-full overflow-visible" height={previewSvgHeight} role="img" aria-label={previewText}>
-                  <defs>
-                    {shadowOpacity > 0 && (
-                      <filter id={`${previewShadowFilterId}-anim`} x="-50%" y="-50%" width="200%" height="200%" colorInterpolationFilters="sRGB">
-                        <feOffset in="SourceAlpha" dx={shadowOffsetX} dy={shadowOffsetY} result="shadow-offset" />
-                        <feGaussianBlur in="shadow-offset" stdDeviation={previewShadowStdDeviation} result="shadow-blur" />
-                        <feFlood floodColor={shadowColor} floodOpacity={shadowOpacity} result="shadow-color" />
-                        <feComposite in="shadow-color" in2="shadow-blur" operator="in" result="shadow-only" />
-                      </filter>
-                    )}
-                    {strokeWidth > 0 && (
-                      <filter id={`${previewStrokeFilterId}-anim`} x="-50%" y="-50%" width="200%" height="200%" colorInterpolationFilters="sRGB">
-                        <feMorphology in="SourceAlpha" operator="dilate" radius={strokeWidth} result="stroke-expanded" />
-                        <feComposite in="stroke-expanded" in2="SourceAlpha" operator="out" result="stroke-outer" />
-                        <feFlood floodColor={strokeColor} result="stroke-color" />
-                        <feComposite in="stroke-color" in2="stroke-outer" operator="in" result="stroke-only" />
-                        <feGaussianBlur in="stroke-only" stdDeviation={previewStrokeStdDeviation} result="stroke-final" />
-                      </filter>
-                    )}
-                  </defs>
-                  {shadowOpacity > 0 && (
-                    <text aria-hidden x={previewTextX} y="50%" textAnchor={previewTextAnchor} dominantBaseline="middle" style={previewTextStyle} fill="#FFFFFF" filter={`url(#${previewShadowFilterId}-anim)`}>{previewText}</text>
-                  )}
-                  {strokeWidth > 0 && (
-                    <text aria-hidden x={previewTextX} y="50%" textAnchor={previewTextAnchor} dominantBaseline="middle" style={previewTextStyle} fill="#FFFFFF" filter={`url(#${previewStrokeFilterId}-anim)`}>{previewText}</text>
-                  )}
-                  <text x={previewTextX} y="50%" textAnchor={previewTextAnchor} dominantBaseline="middle" style={previewTextStyle} fill={fontColor}>{previewText}</text>
-                </svg>
+                {SCROLL_PREVIEW_WORDS.map((word, i) => {
+                  const isHighlighted = i === 1;
+                  const rowOpacity = isHighlighted ? 1.0 : 0.4;
+                  const rowColor = isHighlighted ? highlightColor : fontColor;
+                  return (
+                    <div
+                      key={i}
+                      className="flex items-center justify-center"
+                      style={{
+                        opacity: rowOpacity,
+                        animation: isHighlighted
+                          ? "scrollRowHighlight 1.8s cubic-bezier(0.22, 0.61, 0.36, 1) infinite"
+                          : "none",
+                        lineHeight: 1,
+                        marginBottom: i < SCROLL_PREVIEW_WORDS.length - 1 ? 4 : 0,
+                      }}
+                    >
+                      <svg
+                        className="block overflow-visible"
+                        height={previewSvgHeight}
+                        role="img"
+                        aria-label={word}
+                      >
+                        <defs>
+                          {shadowOpacity > 0 && (
+                            <filter id={`${previewShadowFilterId}-scroll-${i}`} x="-50%" y="-50%" width="200%" height="200%" colorInterpolationFilters="sRGB">
+                              <feOffset in="SourceAlpha" dx={shadowOffsetX} dy={shadowOffsetY} result="shadow-offset" />
+                              <feGaussianBlur in="shadow-offset" stdDeviation={previewShadowStdDeviation} result="shadow-blur" />
+                              <feFlood floodColor={shadowColor} floodOpacity={shadowOpacity} result="shadow-color" />
+                              <feComposite in="shadow-color" in2="shadow-blur" operator="in" result="shadow-only" />
+                            </filter>
+                          )}
+                          {strokeWidth > 0 && (
+                            <filter id={`${previewStrokeFilterId}-scroll-${i}`} x="-50%" y="-50%" width="200%" height="200%" colorInterpolationFilters="sRGB">
+                              <feMorphology in="SourceAlpha" operator="dilate" radius={strokeWidth} result="stroke-expanded" />
+                              <feComposite in="stroke-expanded" in2="SourceAlpha" operator="out" result="stroke-outer" />
+                              <feFlood floodColor={strokeColor} result="stroke-color" />
+                              <feComposite in="stroke-color" in2="stroke-outer" operator="in" result="stroke-only" />
+                              <feGaussianBlur in="stroke-only" stdDeviation={previewStrokeStdDeviation} result="stroke-final" />
+                            </filter>
+                          )}
+                        </defs>
+                        {shadowOpacity > 0 && (
+                          <text aria-hidden x={previewTextX} y="50%" textAnchor={previewTextAnchor} dominantBaseline="middle" style={previewTextStyle} fill="#FFFFFF" filter={`url(#${previewShadowFilterId}-scroll-${i})`}>{word}</text>
+                        )}
+                        {strokeWidth > 0 && (
+                          <text aria-hidden x={previewTextX} y="50%" textAnchor={previewTextAnchor} dominantBaseline="middle" style={previewTextStyle} fill="#FFFFFF" filter={`url(#${previewStrokeFilterId}-scroll-${i})`}>{word}</text>
+                        )}
+                        <text x={previewTextX} y="50%" textAnchor={previewTextAnchor} dominantBaseline="middle" style={previewTextStyle} fill={rowColor}>{word}</text>
+                      </svg>
+                    </div>
+                  );
+                })}
               </div>
             ) : (
               /* Static preview */
@@ -742,6 +769,11 @@ export function SettingsSectionFont({
               @keyframes subtitleScrollIn {
                 0% { transform: translateY(-100%); opacity: 0; }
                 25% { opacity: 1; }
+                100% { transform: translateY(0); opacity: 1; }
+              }
+              @keyframes scrollRowHighlight {
+                0% { transform: translateY(100%); opacity: 0; }
+                30% { transform: translateY(0); opacity: 1; }
                 100% { transform: translateY(0); opacity: 1; }
               }
             `}</style>

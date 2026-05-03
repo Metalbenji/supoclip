@@ -2996,153 +2996,312 @@ def create_assemblyai_subtitles(
         position_percent = 75.0
     subtitle_animation = str(style.get("animation", "none"))
 
-    words_per_subtitle = 3
-    for i in range(0, len(relevant_words), words_per_subtitle):
-        word_group = relevant_words[i:i + words_per_subtitle]
-        if not word_group:
+    # ── Pre-process all words into display text + timings ──────────────
+    display_words_all: List[str] = []
+    word_timings_all: List[Tuple[float, float]] = []
+    for word in relevant_words:
+        transformed = _apply_text_transform(str(word["text"]), text_transform)
+        transformed = _apply_letter_spacing(transformed, letter_spacing)
+        if not transformed.strip():
             continue
-
-        segment_start = float(word_group[0]["start"])
-        segment_end = float(word_group[-1]["end"])
-        segment_duration = segment_end - segment_start
-        if segment_duration < 0.1:
+        ws = float(word["start"])
+        we = float(word["end"])
+        if we <= ws:
             continue
+        display_words_all.append(transformed)
+        word_timings_all.append((ws, we))
 
-        display_words: List[str] = []
-        word_timings: List[Tuple[float, float]] = []
-        for word in word_group:
-            transformed = _apply_text_transform(str(word["text"]), text_transform)
-            transformed = _apply_letter_spacing(transformed, letter_spacing)
-            if not transformed.strip():
-                continue
-            word_start = float(word["start"])
-            word_end = float(word["end"])
-            if word_end <= word_start:
-                continue
-            display_words.append(transformed)
-            word_timings.append((word_start, word_end))
+    if not display_words_all:
+        logger.warning("No displayable words after transform")
+        return []
 
-        if not display_words:
-            continue
+    # ── Measure word dimensions ─────────────────────────────────────────
+    word_sizes_all = [_measure_label_text(w, processor.font_path, final_font_size) for w in display_words_all]
+    word_widths_all = [s[0] for s in word_sizes_all]
+    word_heights_all = [s[1] for s in word_sizes_all]
+    text_height = max([final_font_size] + word_heights_all)
 
-        space_width, _ = _measure_label_text(" ", processor.font_path, final_font_size)
-        space_width = max(1, space_width)
-        word_sizes = [_measure_label_text(word_text, processor.font_path, final_font_size) for word_text in display_words]
-        word_widths = [size[0] for size in word_sizes]
-        word_heights = [size[1] for size in word_sizes]
-        total_width = sum(word_widths) + (space_width * max(0, len(display_words) - 1))
-        text_height = max([final_font_size] + word_heights)
-        top_effect_padding, bottom_effect_padding = _compute_vertical_effect_padding(
-            final_font_size,
-            stroke_width,
-            stroke_blur,
-            shadow_blur,
-            shadow_offset_y,
-        )
-        line_box_height = (
-            text_height
-            + (KARAOKE_WORD_VERTICAL_PADDING_PX * 2)
-            + top_effect_padding
-            + bottom_effect_padding
-        )
+    top_effect_padding, bottom_effect_padding = _compute_vertical_effect_padding(
+        final_font_size, stroke_width, stroke_blur, shadow_blur, shadow_offset_y,
+    )
+    line_box_height = (
+        text_height
+        + (KARAOKE_WORD_VERTICAL_PADDING_PX * 2)
+        + top_effect_padding
+        + bottom_effect_padding
+    )
 
-        horizontal_padding = int(video_width * 0.04)
-        if text_align == "left":
-            line_start_x = horizontal_padding
-        elif text_align == "right":
-            line_start_x = video_width - horizontal_padding - total_width
-        else:
-            line_start_x = (video_width - total_width) // 2
-        max_line_start = max(0, video_width - total_width)
-        line_start_x = max(0, min(int(line_start_x), max_line_start))
+    # ── Resolve vertical position ────────────────────────────────────────
+    target_y_ratio = position_percent / 100.0
 
-        # Resolve vertical position based on subtitle_position percentage.
-        target_y_ratio = position_percent / 100.0
-
+    # For vertical scroll the position anchors the CENTER of the 3-row stack.
+    # The stack is 3 * line_box_height; we want its vertical center at position_percent.
+    if subtitle_animation == "vertical_scroll":
+        stack_height = line_box_height * 3
+        base_y = int(video_height * target_y_ratio - stack_height // 2)
+    else:
         base_y = int(video_height * target_y_ratio - line_box_height // 2)
-        max_y = max(0, video_height - line_box_height)
-        base_y = max(0, min(base_y, max_y))
+    max_y = max(0, video_height - line_box_height)
+    base_y = max(0, min(base_y, max_y))
 
-        # Vertical scroll: each word group slides down from above.
-        animated_y_start = None
-        if subtitle_animation == "vertical_scroll":
-            # Start position: ~35% of video height above the target — slides in
-            # from near the top for a dramatic entrance effect.
-            animated_y_start = max(0, base_y - int(video_height * 0.35))
+    # ── Choose rendering path ───────────────────────────────────────────
+    if subtitle_animation == "vertical_scroll":
+        # ═══════════════════════════════════════════════════════════════════
+        # VERTICAL SCROLL: 3 words stacked — prev (dimmed) / current (highlight) / next (dimmed)
+        # Each word "becomes current" for its spoken duration.  When the next word
+        # starts the stack scrolls up so the old current shifts to dimmed-top and
+        # the new word fades in as dimmed-bottom before becoming highlighted.
+        # ═══════════════════════════════════════════════════════════════════
+        SCROLL_ANIM_DURATION = 0.40          # seconds for the slide transition
+        LINE_SPACING = line_box_height        # vertical gap between stacked rows
+        DIMMED_OPACITY = 0.40                # opacity for prev/next rows
 
-        current_x = line_start_x
-        for word_index, (word_text, (word_start, word_end), word_width) in enumerate(
-            zip(display_words, word_timings, word_widths)
+        for idx, (word_text, (word_start, word_end)) in enumerate(
+            zip(display_words_all, word_timings_all)
         ):
-            word_box_width = max(1, word_width + (KARAOKE_WORD_HORIZONTAL_PADDING_PX * 2))
-            word_box_x = current_x - KARAOKE_WORD_HORIZONTAL_PADDING_PX
-            word_box_max_x = max(0, video_width - word_box_width)
-            word_box_x = max(0, min(word_box_x, word_box_max_x))
-            base_layers = _build_styled_word_layers(
-                text=word_text,
-                font_path=processor.font_path,
-                font_size=final_font_size,
-                fill_color=str(style["font_color"]),
-                stroke_color=str(style["stroke_color"]),
-                stroke_width=stroke_width,
-                stroke_blur=stroke_blur,
-                shadow_color=shadow_color,
-                shadow_opacity=shadow_opacity,
-                shadow_blur=shadow_blur,
-                shadow_offset_x=shadow_offset_x,
-                shadow_offset_y=shadow_offset_y,
-                font_weight=font_weight,
-                start=segment_start,
-                duration=segment_duration,
-                base_x=word_box_x,
-                base_y=base_y,
-                box_width=word_box_width,
-                box_height=line_box_height,
-                max_x=word_box_max_x,
-                max_y=max_y,
-                opacity_scale=0.52 if dim_unhighlighted else 1.0,
-                animated_y_start=animated_y_start,
-            )
-            subtitle_clips.extend(base_layers)
+            word_width = word_widths_all[idx]
 
-            if word_index < len(word_timings) - 1:
-                next_word_start = float(word_timings[word_index + 1][0])
-                highlight_end = max(word_end, next_word_start)
+            # When does this word stop being highlighted?
+            if idx < len(word_timings_all) - 1:
+                highlight_end = float(word_timings_all[idx + 1][0])
             else:
-                highlight_end = max(word_end, segment_end)
+                highlight_end = word_end
             highlight_duration = max(0.01, highlight_end - word_start)
-            highlight_layers = _build_styled_word_layers(
-                text=word_text,
-                font_path=processor.font_path,
-                font_size=final_font_size,
-                fill_color=highlight_color,
-                stroke_color=str(style["stroke_color"]),
-                stroke_width=stroke_width,
-                stroke_blur=stroke_blur,
-                shadow_color=shadow_color,
-                shadow_opacity=shadow_opacity,
-                shadow_blur=shadow_blur,
-                shadow_offset_x=shadow_offset_x,
-                shadow_offset_y=shadow_offset_y,
-                font_weight=font_weight,
-                start=word_start,
-                duration=highlight_duration,
-                base_x=word_box_x,
-                base_y=base_y,
-                box_width=word_box_width,
-                box_height=line_box_height,
-                max_x=word_box_max_x,
-                max_y=max_y,
-                opacity_scale=1.0,
-                # Highlight slides in together with the dimmed base text
-                # for a cohesive animation. Since both use the same start/end
-                # positions and the animation completes in ~0.45s, the visual
-                # result is the entire subtitle group sliding in as one unit.
-                animated_y_start=animated_y_start,
-            )
-            subtitle_clips.extend(highlight_layers)
 
-            current_x += word_width + space_width
+            # ── Determine the 3-row window around this word ─────────────
+            # row -1: previous word (dimmed, top)
+            # row  0: current word  (highlighted, middle)
+            # row +1: next word     (dimmed, bottom)
+            row_contexts = []   # (display_text, row_offset, is_highlight)
+
+            # Previous word (row above)
+            if idx > 0:
+                row_contexts.append((display_words_all[idx - 1], -1, False))
+
+            # Current word (center, highlighted)
+            row_contexts.append((word_text, 0, True))
+
+            # Next word (row below)
+            if idx < len(display_words_all) - 1:
+                row_contexts.append((display_words_all[idx + 1], 1, False))
+
+            # ── Render each row in the stack ────────────────────────────
+            for ctx_text, row_offset, is_highlight in row_contexts:
+                ctx_idx = idx + row_offset
+                ctx_word_width = word_widths_all[ctx_idx]
+
+                word_box_width = max(1, ctx_word_width + (KARAOKE_WORD_HORIZONTAL_PADDING_PX * 2))
+
+                # Horizontal centering per word
+                if text_align == "left":
+                    word_box_x = int(video_width * 0.04)
+                elif text_align == "right":
+                    word_box_x = video_width - int(video_width * 0.04) - word_box_width
+                else:
+                    word_box_x = (video_width - word_box_width) // 2
+                word_box_max_x = max(0, video_width - word_box_width)
+                word_box_x = max(0, min(int(word_box_x), word_box_max_x))
+
+                # Vertical position: row -1 is above, row 0 is center, row +1 is below
+                row_y = base_y + (row_offset * LINE_SPACING)
+                row_y = max(0, min(row_y, max_y))
+
+                # ── Scroll animation Y ───────────────────────────────────
+                # When this word first appears as context (prev/next), the
+                # stack needs to scroll.  New bottom rows slide up from below,
+                # the whole stack shifts up by one line_box_height.
+                # We animate the Y position of each row's clip.
+                if is_highlight:
+                    # Highlighted row: visible from word_start, stays until highlight_end
+                    # If it was the bottom row in the previous step it scrolls up
+                    anim_y_start = None
+                    if idx > 0 and row_offset == 0:
+                        # This word was previously the "next" (bottom) row.
+                        # It should slide from the bottom position to center.
+                        prev_bottom_y = base_y + LINE_SPACING  # where it was as "next"
+                        anim_y_start = prev_bottom_y
+                    clip_start_time = word_start
+                    clip_duration = highlight_duration
+                else:
+                    # Dimmed context row (prev or next)
+                    # The dimmed row for word[idx] exists from when word[idx] starts
+                    # being highlighted until the next transition.
+                    anim_y_start = None
+                    if row_offset == -1 and idx > 0:
+                        # Previous word row: it was the highlighted row before,
+                        # now it scrolls up from center to top position.
+                        prev_center_y = base_y  # where it was as highlighted
+                        anim_y_start = prev_center_y
+                    elif row_offset == 1:
+                        # Next word row: slides in from below bottom.
+                        anim_y_start = base_y + LINE_SPACING * 2
+
+                    clip_start_time = word_start
+                    # Dimmed row stays visible until the next word's highlight starts
+                    if idx < len(word_timings_all) - 1:
+                        clip_end_time = float(word_timings_all[idx + 1][0])
+                    else:
+                        clip_end_time = word_end
+                    clip_duration = max(0.01, clip_end_time - clip_start_time)
+
+                # ── Build dimmed base layer ─────────────────────────────
+                base_layers = _build_styled_word_layers(
+                    text=ctx_text,
+                    font_path=processor.font_path,
+                    font_size=final_font_size,
+                    fill_color=str(style["font_color"]),
+                    stroke_color=str(style["stroke_color"]),
+                    stroke_width=stroke_width,
+                    stroke_blur=stroke_blur,
+                    shadow_color=shadow_color,
+                    shadow_opacity=shadow_opacity,
+                    shadow_blur=shadow_blur,
+                    shadow_offset_x=shadow_offset_x,
+                    shadow_offset_y=shadow_offset_y,
+                    font_weight=font_weight,
+                    start=clip_start_time,
+                    duration=clip_duration,
+                    base_x=word_box_x,
+                    base_y=row_y,
+                    box_width=word_box_width,
+                    box_height=line_box_height,
+                    max_x=word_box_max_x,
+                    max_y=max_y,
+                    opacity_scale=DIMMED_OPACITY if dim_unhighlighted else 1.0,
+                    animated_y_start=anim_y_start,
+                )
+                subtitle_clips.extend(base_layers)
+
+                # ── Build highlight layer (only for the current/center word) ─
+                if is_highlight:
+                    hl_layers = _build_styled_word_layers(
+                        text=ctx_text,
+                        font_path=processor.font_path,
+                        font_size=final_font_size,
+                        fill_color=highlight_color,
+                        stroke_color=str(style["stroke_color"]),
+                        stroke_width=stroke_width,
+                        stroke_blur=stroke_blur,
+                        shadow_color=shadow_color,
+                        shadow_opacity=shadow_opacity,
+                        shadow_blur=shadow_blur,
+                        shadow_offset_x=shadow_offset_x,
+                        shadow_offset_y=shadow_offset_y,
+                        font_weight=font_weight,
+                        start=clip_start_time,
+                        duration=clip_duration,
+                        base_x=word_box_x,
+                        base_y=row_y,
+                        box_width=word_box_width,
+                        box_height=line_box_height,
+                        max_x=word_box_max_x,
+                        max_y=max_y,
+                        opacity_scale=1.0,
+                        animated_y_start=anim_y_start,
+                    )
+                    subtitle_clips.extend(hl_layers)
+
+    else:
+        # ═══════════════════════════════════════════════════════════════════
+        # STANDARD KARAOKE: 3 words per line, horizontal layout
+        # ═══════════════════════════════════════════════════════════════════
+        words_per_subtitle = 3
+        for i in range(0, len(display_words_all), words_per_subtitle):
+            word_group_words = display_words_all[i:i + words_per_subtitle]
+            word_group_timings = word_timings_all[i:i + words_per_subtitle]
+            word_group_widths = word_widths_all[i:i + words_per_subtitle]
+            if not word_group_words:
+                continue
+
+            segment_start = float(word_group_timings[0][0])
+            segment_end = float(word_group_timings[-1][1])
+            segment_duration = segment_end - segment_start
+            if segment_duration < 0.1:
+                continue
+
+            space_width, _ = _measure_label_text(" ", processor.font_path, final_font_size)
+            space_width = max(1, space_width)
+            total_width = sum(word_group_widths) + (space_width * max(0, len(word_group_words) - 1))
+
+            horizontal_padding = int(video_width * 0.04)
+            if text_align == "left":
+                line_start_x = horizontal_padding
+            elif text_align == "right":
+                line_start_x = video_width - horizontal_padding - total_width
+            else:
+                line_start_x = (video_width - total_width) // 2
+            max_line_start = max(0, video_width - total_width)
+            line_start_x = max(0, min(int(line_start_x), max_line_start))
+
+            current_x = line_start_x
+            for word_index, (w_text, (w_start, w_end), w_width) in enumerate(
+                zip(word_group_words, word_group_timings, word_group_widths)
+            ):
+                word_box_width = max(1, w_width + (KARAOKE_WORD_HORIZONTAL_PADDING_PX * 2))
+                word_box_x = current_x - KARAOKE_WORD_HORIZONTAL_PADDING_PX
+                word_box_max_x = max(0, video_width - word_box_width)
+                word_box_x = max(0, min(word_box_x, word_box_max_x))
+                base_layers = _build_styled_word_layers(
+                    text=w_text,
+                    font_path=processor.font_path,
+                    font_size=final_font_size,
+                    fill_color=str(style["font_color"]),
+                    stroke_color=str(style["stroke_color"]),
+                    stroke_width=stroke_width,
+                    stroke_blur=stroke_blur,
+                    shadow_color=shadow_color,
+                    shadow_opacity=shadow_opacity,
+                    shadow_blur=shadow_blur,
+                    shadow_offset_x=shadow_offset_x,
+                    shadow_offset_y=shadow_offset_y,
+                    font_weight=font_weight,
+                    start=segment_start,
+                    duration=segment_duration,
+                    base_x=word_box_x,
+                    base_y=base_y,
+                    box_width=word_box_width,
+                    box_height=line_box_height,
+                    max_x=word_box_max_x,
+                    max_y=max_y,
+                    opacity_scale=0.52 if dim_unhighlighted else 1.0,
+                    animated_y_start=None,
+                )
+                subtitle_clips.extend(base_layers)
+
+                if word_index < len(word_group_timings) - 1:
+                    next_word_start = float(word_group_timings[word_index + 1][0])
+                    highlight_end = max(w_end, next_word_start)
+                else:
+                    highlight_end = max(w_end, segment_end)
+                highlight_duration = max(0.01, highlight_end - w_start)
+                highlight_layers = _build_styled_word_layers(
+                    text=w_text,
+                    font_path=processor.font_path,
+                    font_size=final_font_size,
+                    fill_color=highlight_color,
+                    stroke_color=str(style["stroke_color"]),
+                    stroke_width=stroke_width,
+                    stroke_blur=stroke_blur,
+                    shadow_color=shadow_color,
+                    shadow_opacity=shadow_opacity,
+                    shadow_blur=shadow_blur,
+                    shadow_offset_x=shadow_offset_x,
+                    shadow_offset_y=shadow_offset_y,
+                    font_weight=font_weight,
+                    start=w_start,
+                    duration=highlight_duration,
+                    base_x=word_box_x,
+                    base_y=base_y,
+                    box_width=word_box_width,
+                    box_height=line_box_height,
+                    max_x=word_box_max_x,
+                    max_y=max_y,
+                    opacity_scale=1.0,
+                    animated_y_start=None,
+                )
+                subtitle_clips.extend(highlight_layers)
+
+                current_x += w_width + space_width
 
     logger.info(f"Created {len(subtitle_clips)} subtitle elements from cached transcript data")
     return subtitle_clips
