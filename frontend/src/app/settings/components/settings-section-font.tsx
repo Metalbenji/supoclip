@@ -140,11 +140,10 @@ function KaraokePreview({
     ? `${shadowOffsetX}px ${shadowOffsetY}px ${shadowBlur}px rgba(0,0,0,${shadowOpacity})`
     : "none";
 
-  // SVG style with stroke, shadow, and paint-order so fill renders on top of stroke
-  const baseSvgStyle: CSSProperties = {
+  // Style with shadow applied via CSS (SVG text-shadow works in modern browsers)
+  const shadowStyle: CSSProperties = {
     ...previewTextStyle,
     textShadow,
-    paintOrder: strokeWidth > 0 ? "stroke" : undefined,
   };
 
   useEffect(() => {
@@ -237,17 +236,30 @@ function KaraokePreview({
           </clipPath>
         </defs>
 
-        {/* Base text in fontColor with native stroke (paint-order renders fill on top) and CSS text-shadow */}
+        {/* Stroke layer: fill=none so only the outline shows */}
+        {strokeWidth > 0 && (
+          <text
+            aria-hidden
+            x={previewTextX}
+            y="50%"
+            textAnchor={previewTextAnchor}
+            dominantBaseline="middle"
+            style={shadowStyle}
+            fill="none"
+            stroke={strokeColor}
+            strokeWidth={strokeWidth * 2}
+          >{previewText}</text>
+        )}
+
+        {/* Base text: solid fill in fontColor, no stroke */}
         <text
           id="karaoke-base"
           x={previewTextX}
           y="50%"
           textAnchor={previewTextAnchor}
           dominantBaseline="middle"
-          style={baseSvgStyle}
+          style={shadowStyle}
           fill={fontColor}
-          stroke={strokeWidth > 0 ? strokeColor : "none"}
-          strokeWidth={strokeWidth}
         >{previewText}</text>
 
         {/* Dim overlay — semi-transparent black to dim non-highlighted words */}
@@ -263,17 +275,31 @@ function KaraokePreview({
           opacity={dimUnhighlighted ? "0.65" : "0"}
         >{previewText}</text>
 
-        {/* Highlighted word — same text, same position, clipped to current word only */}
+        {/* Stroke layer for highlight: clipped same as highlight fill */}
+        {strokeWidth > 0 && (
+          <text
+            aria-hidden
+            x={previewTextX}
+            y="50%"
+            textAnchor={previewTextAnchor}
+            dominantBaseline="middle"
+            style={shadowStyle}
+            fill="none"
+            stroke={strokeColor}
+            strokeWidth={strokeWidth * 2}
+            clipPath={`url(#karaoke-clip-${uid})`}
+          >{previewText}</text>
+        )}
+
+        {/* Highlighted word — solid fill, clipped to current word only */}
         <text
           id="karaoke-highlight"
           x={previewTextX}
           y="50%"
           textAnchor={previewTextAnchor}
           dominantBaseline="middle"
-          style={baseSvgStyle}
+          style={shadowStyle}
           fill={highlightColor}
-          stroke={strokeWidth > 0 ? strokeColor : "none"}
-          strokeWidth={strokeWidth}
           clipPath={`url(#karaoke-clip-${uid})`}
         >{previewText}</text>
       </svg>
