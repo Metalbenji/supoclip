@@ -64,7 +64,6 @@ services:
     container_name: supoclip-dev-worker
     image: supoclip-dev-worker:latest
     platform: linux/amd64
-    gpus: all
     build:
       context: ./backend
       dockerfile: Dockerfile
