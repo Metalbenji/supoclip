@@ -99,20 +99,17 @@ function KaraokePreview({
   fontSize,
   highlightColor,
   fontColor,
-  shadowOpacity,
-  shadowOffsetX,
-  shadowOffsetY,
-  previewShadowStdDeviation,
-  previewShadowFilterId,
-  strokeWidth,
-  strokeColor,
-  previewStrokeStdDeviation,
-  previewStrokeFilterId,
   dimUnhighlighted,
   letterSpacing,
   textTransform,
   fontFamily,
   fontWeight,
+  strokeColor,
+  strokeWidth,
+  shadowBlur,
+  shadowOffsetX,
+  shadowOffsetY,
+  shadowOpacity,
 }: {
   previewText: string;
   previewTextStyle: CSSProperties;
@@ -121,25 +118,34 @@ function KaraokePreview({
   fontSize: number;
   highlightColor: string;
   fontColor: string;
-  shadowOpacity: number;
-  shadowOffsetX: number;
-  shadowOffsetY: number;
-  previewShadowStdDeviation: number;
-  previewShadowFilterId: string;
-  strokeWidth: number;
-  strokeColor: string;
-  previewStrokeStdDeviation: number;
-  previewStrokeFilterId: string;
   dimUnhighlighted: boolean;
   letterSpacing: number;
   textTransform: string;
   fontFamily: string;
   fontWeight: number;
+  strokeColor: string;
+  strokeWidth: number;
+  shadowBlur: number;
+  shadowOffsetX: number;
+  shadowOffsetY: number;
+  shadowOpacity: number;
 }) {
   const containerRef = useRef<HTMLDivElement>(null);
   const wordHoldMs = 700;
   const previewSvgHeight = Math.max(70, Math.ceil(fontSize * 1.6));
   const uid = useId().replace(/:/g, "");
+
+  // Build CSS text-shadow string for drop shadow
+  const textShadow = shadowOpacity > 0
+    ? `${shadowOffsetX}px ${shadowOffsetY}px ${shadowBlur}px rgba(0,0,0,${shadowOpacity})`
+    : "none";
+
+  // SVG style with stroke, shadow, and paint-order so fill renders on top of stroke
+  const baseSvgStyle: CSSProperties = {
+    ...previewTextStyle,
+    textShadow,
+    paintOrder: strokeWidth > 0 ? "stroke" : undefined,
+  };
 
   useEffect(() => {
     const container = containerRef.current;
@@ -229,64 +235,19 @@ function KaraokePreview({
           <clipPath id={`karaoke-clip-${uid}`}>
             <rect id="karaoke-clip-rect" x="0" y="0" width="0" height={previewSvgHeight} />
           </clipPath>
-          {shadowOpacity > 0 && (
-            <filter id={previewShadowFilterId} x="-50%" y="-50%" width="200%" height="200%" colorInterpolationFilters="sRGB">
-              <feOffset in="SourceAlpha" dx={shadowOffsetX} dy={shadowOffsetY} result="shadow-offset" />
-              <feGaussianBlur in="shadow-offset" stdDeviation={previewShadowStdDeviation} result="shadow-blur" />
-              <feFlood floodColor="#000000" floodOpacity={shadowOpacity} result="shadow-color" />
-              <feComposite in="shadow-color" in2="shadow-blur" operator="in" result="shadow-only" />
-            </filter>
-          )}
-          {strokeWidth > 0 && (
-            <filter id={previewStrokeFilterId} x="-50%" y="-50%" width="200%" height="200%" colorInterpolationFilters="sRGB">
-              <feMorphology in="SourceAlpha" operator="dilate" radius={strokeWidth} result="stroke-expanded" />
-              <feComposite in="stroke-expanded" in2="SourceAlpha" operator="out" result="stroke-outer" />
-              <feFlood floodColor={strokeColor} result="stroke-color" />
-              <feComposite in="stroke-color" in2="stroke-outer" operator="in" result="stroke-only" />
-              <feGaussianBlur in="stroke-only" stdDeviation={previewStrokeStdDeviation} result="stroke-final" />
-            </filter>
-          )}
         </defs>
 
-        {/* Shadow for base text */}
-        {shadowOpacity > 0 && (
-          <text
-            id="karaoke-base-shadow"
-            aria-hidden
-            x={previewTextX}
-            y="50%"
-            textAnchor={previewTextAnchor}
-            dominantBaseline="middle"
-            style={previewTextStyle}
-            fill="#FFFFFF"
-            filter={`url(#${previewShadowFilterId})`}
-          >{previewText}</text>
-        )}
-
-        {/* Stroke for base text */}
-        {strokeWidth > 0 && (
-          <text
-            id="karaoke-base-stroke"
-            aria-hidden
-            x={previewTextX}
-            y="50%"
-            textAnchor={previewTextAnchor}
-            dominantBaseline="middle"
-            style={previewTextStyle}
-            fill="#FFFFFF"
-            filter={`url(#${previewStrokeFilterId})`}
-          >{previewText}</text>
-        )}
-
-        {/* Base text in fontColor */}
+        {/* Base text in fontColor with native stroke (paint-order renders fill on top) and CSS text-shadow */}
         <text
           id="karaoke-base"
           x={previewTextX}
           y="50%"
           textAnchor={previewTextAnchor}
           dominantBaseline="middle"
-          style={previewTextStyle}
+          style={baseSvgStyle}
           fill={fontColor}
+          stroke={strokeWidth > 0 ? strokeColor : "none"}
+          strokeWidth={strokeWidth}
         >{previewText}</text>
 
         {/* Dim overlay — semi-transparent black to dim non-highlighted words */}
@@ -309,8 +270,10 @@ function KaraokePreview({
           y="50%"
           textAnchor={previewTextAnchor}
           dominantBaseline="middle"
-          style={previewTextStyle}
+          style={baseSvgStyle}
           fill={highlightColor}
+          stroke={strokeWidth > 0 ? strokeColor : "none"}
+          strokeWidth={strokeWidth}
           clipPath={`url(#karaoke-clip-${uid})`}
         >{previewText}</text>
       </svg>
@@ -1351,20 +1314,17 @@ export function SettingsSectionFont({
                 fontSize={fontSize}
                 highlightColor={highlightColor}
                 fontColor={fontColor}
-                shadowOpacity={shadowOpacity}
-                shadowOffsetX={shadowOffsetX}
-                shadowOffsetY={shadowOffsetY}
-                previewShadowStdDeviation={previewShadowStdDeviation}
-                previewShadowFilterId={previewShadowFilterId}
-                strokeWidth={strokeWidth}
-                strokeColor={strokeColor}
-                previewStrokeStdDeviation={previewStrokeStdDeviation}
-                previewStrokeFilterId={previewStrokeFilterId}
                 dimUnhighlighted={dimUnhighlighted}
                 letterSpacing={letterSpacing}
                 textTransform={textTransform}
                 fontFamily={fontFamily}
                 fontWeight={fontWeight}
+                strokeColor={strokeColor}
+                strokeWidth={strokeWidth}
+                shadowBlur={shadowBlur}
+                shadowOffsetX={shadowOffsetX}
+                shadowOffsetY={shadowOffsetY}
+                shadowOpacity={shadowOpacity}
               />
             )}
             <style>{`
