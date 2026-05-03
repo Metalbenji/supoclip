@@ -98,7 +98,7 @@ def normalize_subtitle_style(raw: Optional[Dict[str, Any]]) -> Dict[str, Any]:
     if isinstance(font_family, str) and font_family.strip():
         normalized["font_family"] = font_family.strip()
 
-    normalized["font_size"] = _normalize_int(source.get("font_size"), DEFAULT_SUBTITLE_STYLE["font_size"], 24, 48, 1)
+    normalized["font_size"] = _normalize_int(source.get("font_size"), DEFAULT_SUBTITLE_STYLE["font_size"], 12, 128, 1)
     normalized["font_color"] = _normalize_hex_color(source.get("font_color"), DEFAULT_SUBTITLE_STYLE["font_color"])
     normalized["highlight_color"] = _normalize_hex_color(
         source.get("highlight_color"),
