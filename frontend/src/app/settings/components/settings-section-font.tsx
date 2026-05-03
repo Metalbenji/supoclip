@@ -109,6 +109,10 @@ function KaraokePreview({
   previewStrokeStdDeviation,
   previewStrokeFilterId,
   dimUnhighlighted,
+  letterSpacing,
+  textTransform,
+  fontFamily,
+  fontWeight,
 }: {
   previewText: string;
   previewTextStyle: CSSProperties;
@@ -127,6 +131,10 @@ function KaraokePreview({
   previewStrokeStdDeviation: number;
   previewStrokeFilterId: string;
   dimUnhighlighted: boolean;
+  letterSpacing: number;
+  textTransform: string;
+  fontFamily: string;
+  fontWeight: number;
 }) {
   const containerRef = useRef<HTMLDivElement>(null);
   const wordHoldMs = 700;
@@ -363,6 +371,10 @@ function VTTPreview({
   previewTextAnchor,
   fontSize,
   dimUnhighlighted,
+  letterSpacing,
+  textTransform,
+  fontFamily,
+  fontWeight,
 }: {
   previewText: string;
   previewTextStyle: CSSProperties;
@@ -370,6 +382,10 @@ function VTTPreview({
   previewTextAnchor: "start" | "middle" | "end";
   fontSize: number;
   dimUnhighlighted: boolean;
+  letterSpacing: number;
+  textTransform: string;
+  fontFamily: string;
+  fontWeight: number;
 }) {
   const containerRef = useRef<HTMLDivElement>(null);
   const uid = useId().replace(/:/g, "");
@@ -1272,6 +1288,10 @@ export function SettingsSectionFont({
                 previewTextAnchor={previewTextAnchor}
                 fontSize={fontSize}
                 dimUnhighlighted={dimUnhighlighted}
+                letterSpacing={letterSpacing}
+                textTransform={textTransform}
+                fontFamily={fontFamily}
+                fontWeight={fontWeight}
               />
             ) : animation === "hormozi" ? (
               /* ═══════════════════════════════════════════════════════════
@@ -1382,6 +1402,10 @@ export function SettingsSectionFont({
                 previewStrokeStdDeviation={previewStrokeStdDeviation}
                 previewStrokeFilterId={previewStrokeFilterId}
                 dimUnhighlighted={dimUnhighlighted}
+                letterSpacing={letterSpacing}
+                textTransform={textTransform}
+                fontFamily={fontFamily}
+                fontWeight={fontWeight}
               />
             )}
             <style>{`
