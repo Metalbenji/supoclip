@@ -106,10 +106,6 @@ function KaraokePreview({
   fontWeight,
   strokeColor,
   strokeWidth,
-  shadowBlur,
-  shadowOffsetX,
-  shadowOffsetY,
-  shadowOpacity,
 }: {
   previewText: string;
   previewTextStyle: CSSProperties;
@@ -125,26 +121,11 @@ function KaraokePreview({
   fontWeight: number;
   strokeColor: string;
   strokeWidth: number;
-  shadowBlur: number;
-  shadowOffsetX: number;
-  shadowOffsetY: number;
-  shadowOpacity: number;
 }) {
   const containerRef = useRef<HTMLDivElement>(null);
   const wordHoldMs = 700;
   const previewSvgHeight = Math.max(70, Math.ceil(fontSize * 1.6));
   const uid = useId().replace(/:/g, "");
-
-  // Build CSS text-shadow string for drop shadow
-  const textShadow = shadowOpacity > 0
-    ? `${shadowOffsetX}px ${shadowOffsetY}px ${shadowBlur}px rgba(0,0,0,${shadowOpacity})`
-    : "none";
-
-  // Style with shadow applied via CSS (SVG text-shadow works in modern browsers)
-  const shadowStyle: CSSProperties = {
-    ...previewTextStyle,
-    textShadow,
-  };
 
   useEffect(() => {
     const container = containerRef.current;
@@ -154,8 +135,6 @@ function KaraokePreview({
     const baseText = container.querySelector<SVGTextElement>("text#karaoke-base");
     // Clip rect that reveals only the current word on the highlight overlay
     const clipRect = container.querySelector<SVGRectElement>("rect#karaoke-clip-rect");
-    // Dim overlay (covers all text with reduced opacity)
-    const dimOverlay = container.querySelector<SVGTextElement>("text#karaoke-dim");
 
     if (!baseText || !clipRect) return;
 
@@ -189,11 +168,6 @@ function KaraokePreview({
         clipRect.setAttribute("y", String(Math.round(startExt.y - 4)));
         clipRect.setAttribute("width", String(Math.round(endExt.x + endExt.width - startExt.x + 4)));
         clipRect.setAttribute("height", String(Math.round(startExt.height + 8)));
-
-        // Show dim overlay when dimming
-        if (dimOverlay) {
-          dimOverlay.setAttribute("opacity", dimUnhighlighted ? "1" : "0");
-        }
       } catch {
         clipRect.setAttribute("width", "0");
       }
@@ -244,35 +218,23 @@ function KaraokePreview({
             y="50%"
             textAnchor={previewTextAnchor}
             dominantBaseline="middle"
-            style={shadowStyle}
+            style={previewTextStyle}
             fill="none"
             stroke={strokeColor}
             strokeWidth={strokeWidth * 2}
           >{previewText}</text>
         )}
 
-        {/* Base text: solid fill in fontColor, no stroke */}
+        {/* Base text: solid fill in fontColor, dimmed via opacity when dimUnhighlighted */}
         <text
           id="karaoke-base"
           x={previewTextX}
           y="50%"
           textAnchor={previewTextAnchor}
           dominantBaseline="middle"
-          style={shadowStyle}
-          fill={fontColor}
-        >{previewText}</text>
-
-        {/* Dim overlay — semi-transparent black to dim non-highlighted words */}
-        <text
-          id="karaoke-dim"
-          aria-hidden
-          x={previewTextX}
-          y="50%"
-          textAnchor={previewTextAnchor}
-          dominantBaseline="middle"
           style={previewTextStyle}
-          fill="#000000"
-          opacity={dimUnhighlighted ? "0.65" : "0"}
+          fill={fontColor}
+          opacity={dimUnhighlighted ? "0.35" : "1"}
         >{previewText}</text>
 
         {/* Stroke layer for highlight: clipped same as highlight fill */}
@@ -283,7 +245,7 @@ function KaraokePreview({
             y="50%"
             textAnchor={previewTextAnchor}
             dominantBaseline="middle"
-            style={shadowStyle}
+            style={previewTextStyle}
             fill="none"
             stroke={strokeColor}
             strokeWidth={strokeWidth * 2}
@@ -291,14 +253,14 @@ function KaraokePreview({
           >{previewText}</text>
         )}
 
-        {/* Highlighted word — solid fill, clipped to current word only */}
+        {/* Highlighted word — solid fill at full opacity, clipped to current word only */}
         <text
           id="karaoke-highlight"
           x={previewTextX}
           y="50%"
           textAnchor={previewTextAnchor}
           dominantBaseline="middle"
-          style={shadowStyle}
+          style={previewTextStyle}
           fill={highlightColor}
           clipPath={`url(#karaoke-clip-${uid})`}
         >{previewText}</text>
@@ -1347,10 +1309,6 @@ export function SettingsSectionFont({
                 fontWeight={fontWeight}
                 strokeColor={strokeColor}
                 strokeWidth={strokeWidth}
-                shadowBlur={shadowBlur}
-                shadowOffsetX={shadowOffsetX}
-                shadowOffsetY={shadowOffsetY}
-                shadowOpacity={shadowOpacity}
               />
             )}
             <style>{`
