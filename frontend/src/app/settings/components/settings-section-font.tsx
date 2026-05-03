@@ -180,20 +180,17 @@ function KaraokePreview({
 
       try {
         const startExt = baseText.getExtentOfChar(startChar);
-        const endExt = baseText.getExtentOfChar(Math.max(startChar, endChar - 1));
 
         const textX = startExt.x;
-        // Vertical center of the character, matching dominantBaseline="middle"
-        const textY = startExt.y + startExt.height / 2;
         const wordStr = previewText.slice(startChar, endChar);
 
-        // Position all highlight layers at exact word position
+        // Position all highlight layers at exact word X position only.
+        // Y and dominant-baseline stay as set in JSX (y="50%", dominantBaseline="middle")
+        // matching the base text — getExtentOfChar Y is unreliable across browsers.
         const layers = [highlightText, shadowHighlight, strokeHighlight].filter(Boolean);
         for (const el of layers) {
           el!.textContent = wordStr;
           el!.setAttribute("x", String(Math.round(textX)));
-          el!.setAttribute("y", String(Math.round(textY)));
-          el!.setAttribute("dominant-baseline", "middle");
           el!.setAttribute("text-anchor", "start");
           el!.setAttribute("opacity", "1");
         }
@@ -427,11 +424,7 @@ function VTTPreview({
         const startExt = baseText.getExtentOfChar(startChar);
         const endExt = baseText.getExtentOfChar(Math.max(startChar, endChar - 1));
 
-        // Position highlight text at same vertical center
-        highlightText.setAttribute("y", String(Math.round(startExt.y + startExt.height / 2)));
-        highlightText.setAttribute("dominant-baseline", "middle");
-
-        // Position highlight text using absolute coordinates
+        // Only set X — Y and dominant-baseline stay as set in JSX
         const wordStr = previewText.slice(startChar, endChar);
         highlightText.setAttribute("text-anchor", "start");
         highlightText.setAttribute("x", String(Math.round(startExt.x)));
