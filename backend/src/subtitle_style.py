@@ -11,6 +11,9 @@ TEXT_ALIGN_OPTIONS = {"left", "center", "right"}
 SUBTITLE_POSITION_OPTIONS = {"bottom", "center", "top"}
 SUBTITLE_ANIMATION_OPTIONS = {"none", "vertical_scroll"}
 
+# Position can be a string ("top", "center", "bottom") or a number (10-90 representing %).
+_POSITION_STRING_MAP = {"top": 15, "center": 45, "bottom": 75}
+
 DEFAULT_SUBTITLE_STYLE: Dict[str, Any] = {
     "font_family": "TikTokSans-Regular",
     "font_size": 24,
@@ -30,7 +33,7 @@ DEFAULT_SUBTITLE_STYLE: Dict[str, Any] = {
     "shadow_offset_x": 0,
     "shadow_offset_y": 2,
     "dim_unhighlighted": True,
-    "position": "bottom",
+    "position": 75,
     "animation": "none",
 }
 
@@ -143,8 +146,10 @@ def normalize_subtitle_style(raw: Optional[Dict[str, Any]]) -> Dict[str, Any]:
         normalized["dim_unhighlighted"] = dim_unhighlighted.strip().lower() in ("true", "1", "yes")
 
     position = source.get("position")
-    if isinstance(position, str) and position.strip().lower() in SUBTITLE_POSITION_OPTIONS:
-        normalized["position"] = position.strip().lower()
+    if isinstance(position, (int, float)):
+        normalized["position"] = int(_clamp(float(position), 5, 95))
+    elif isinstance(position, str) and position.strip().lower() in SUBTITLE_POSITION_OPTIONS:
+        normalized["position"] = _POSITION_STRING_MAP[position.strip().lower()]
 
     animation = source.get("animation")
     if isinstance(animation, str) and animation.strip().lower() in SUBTITLE_ANIMATION_OPTIONS:

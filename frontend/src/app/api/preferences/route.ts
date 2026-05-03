@@ -353,8 +353,9 @@ export async function GET() {
           : null,
       aiProvider: user.default_ai_provider || "openai",
       aiModel: user.default_ai_model || "",
-      position: isSubtitlePosition(user.default_subtitle_position)
-        ? user.default_subtitle_position
+      position: typeof user.default_subtitle_position === "number" ? user.default_subtitle_position
+        : typeof user.default_subtitle_position === "string" && isSubtitlePosition(user.default_subtitle_position)
+          ? ({ "top": 15, "center": 45, "bottom": 75 } as Record<string, number>).get(user.default_subtitle_position, 75)
         : DEFAULT_FONT_STYLE_OPTIONS.position,
       animation: isSubtitleAnimation(user.default_subtitle_animation)
         ? user.default_subtitle_animation
@@ -500,8 +501,10 @@ export async function PATCH(request: NextRequest) {
     if (dimUnhighlighted !== undefined && typeof dimUnhighlighted !== "boolean") {
       return NextResponse.json({ error: "Invalid dimUnhighlighted" }, { status: 400 });
     }
-    if (position !== undefined && !isSubtitlePosition(position)) {
-      return NextResponse.json({ error: "Invalid position (must be bottom, center, or top)" }, { status: 400 });
+    if (position !== undefined && typeof position === "number") {
+      // numeric position (10-90)
+    } else if (position !== undefined && !isSubtitlePosition(position)) {
+      return NextResponse.json({ error: "Invalid position (must be a number from 10 to 90, or bottom, center, top)" }, { status: 400 });
     }
     if (animation !== undefined && !isSubtitleAnimation(animation)) {
       return NextResponse.json({ error: "Invalid animation (must be none or vertical_scroll)" }, { status: 400 });
@@ -912,8 +915,10 @@ export async function PATCH(request: NextRequest) {
           : null,
       aiProvider: updatedUser.default_ai_provider || "openai",
       aiModel: updatedUser.default_ai_model || "",
-      position: isSubtitlePosition(updatedUser.default_subtitle_position)
+      position: typeof updatedUser.default_subtitle_position === "number"
         ? updatedUser.default_subtitle_position
+        : typeof updatedUser.default_subtitle_position === "string" && isSubtitlePosition(updatedUser.default_subtitle_position)
+          ? ({ "top": 15, "center": 45, "bottom": 75 } as Record<string, number>).get(updatedUser.default_subtitle_position, 75)
         : DEFAULT_FONT_STYLE_OPTIONS.position,
       animation: isSubtitleAnimation(updatedUser.default_subtitle_animation)
         ? updatedUser.default_subtitle_animation

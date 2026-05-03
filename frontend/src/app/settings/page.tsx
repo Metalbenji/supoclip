@@ -2050,7 +2050,7 @@ function SettingsPageContent() {
                   setPreferencesDraft((prev) => ({ ...prev, dimUnhighlighted }));
                 }}
                 onPositionChange={(position) => {
-                  setPreferencesDraft((prev) => ({ ...prev, position: position as SubtitlePositionOption }));
+                  setPreferencesDraft((prev) => ({ ...prev, position: typeof position === "number" ? position : Number(position) }));
                 }}
                 onAnimationChange={(animation) => {
                   setPreferencesDraft((prev) => ({ ...prev, animation: animation as SubtitleAnimationOption }));

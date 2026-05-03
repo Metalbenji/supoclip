@@ -2983,9 +2983,16 @@ def create_assemblyai_subtitles(
     if not highlight_color:
         highlight_color = _resolve_karaoke_highlight_color(str(style["font_color"]))
     dim_unhighlighted = bool(style.get("dim_unhighlighted", True))
-    subtitle_position = str(style.get("position", "bottom"))
+    subtitle_position = style.get("position", 75)
+    # Accept both numeric (percentage) and legacy string values.
+    if isinstance(subtitle_position, (int, float)):
+        position_percent = float(max(5, min(95, float(subtitle_position))))
+    elif isinstance(subtitle_position, str):
+        _pos_map = {"top": 15, "center": 45, "bottom": 75}
+        position_percent = float(_pos_map.get(subtitle_position.lower(), 75))
+    else:
+        position_percent = 75.0
     subtitle_animation = str(style.get("animation", "none"))
-    print(f"[SUBTITLE_DEBUG] style resolved: position={subtitle_position} animation={subtitle_animation} keys={list(style.keys())}", flush=True)
 
     words_per_subtitle = 3
     for i in range(0, len(relevant_words), words_per_subtitle):
@@ -3047,13 +3054,8 @@ def create_assemblyai_subtitles(
         max_line_start = max(0, video_width - total_width)
         line_start_x = max(0, min(int(line_start_x), max_line_start))
 
-        # Resolve vertical position based on subtitle_position setting.
-        if subtitle_position == "top":
-            target_y_ratio = 0.15
-        elif subtitle_position == "center":
-            target_y_ratio = 0.45
-        else:
-            target_y_ratio = 0.70
+        # Resolve vertical position based on subtitle_position percentage.
+        target_y_ratio = position_percent / 100.0
 
         base_y = int(video_height * target_y_ratio - line_box_height // 2)
         max_y = max(0, video_height - line_box_height)
@@ -3063,15 +3065,10 @@ def create_assemblyai_subtitles(
         animated_y_start = None
         scroll_fade_scale = None
         if subtitle_animation == "vertical_scroll":
-            # Start position: ~45% of video height above the target (more dramatic)
-            animated_y_start = max(0, base_y - int(video_height * 0.45))
+            # Start position: ~30% of video height above the target
+            animated_y_start = max(0, base_y - int(video_height * 0.30))
             # Apply a gentle fade-in for the first moments
             scroll_fade_scale = 1.0
-            logger.info(
-                "VERTICAL SCROLL enabled for segment %s: base_y=%s y_start=%s video_h=%s",
-                i, base_y, animated_y_start, video_height,
-            )
-            print(f"[SUBTITLE_DEBUG] VERTICAL SCROLL segment {i}: base_y={base_y} y_start={animated_y_start} video_h={video_height}", flush=True)
 
         current_x = line_start_x
         for word_index, (word_text, (word_start, word_end), word_width) in enumerate(

@@ -27,7 +27,7 @@ export interface FontStyleOptions {
   shadowOffsetX: number;
   shadowOffsetY: number;
   dimUnhighlighted: boolean;
-  position: SubtitlePositionOption;
+  position: number;
   animation: SubtitleAnimationOption;
   subtitlePreset: SubtitlePresetId;
 }
@@ -51,7 +51,7 @@ export const DEFAULT_FONT_STYLE_OPTIONS: FontStyleOptions = {
   shadowOffsetX: 0,
   shadowOffsetY: 2,
   dimUnhighlighted: true,
-  position: "bottom",
+  position: 75,
   animation: "none",
   subtitlePreset: "classic",
 };
@@ -88,7 +88,7 @@ export const SUBTITLE_PRESETS: ReadonlyArray<SubtitlePreset> = [
       shadowOffsetX: 0,
       shadowOffsetY: 2,
       dimUnhighlighted: true,
-      position: "bottom",
+      position: 75,
       animation: "none",
     },
   },
@@ -110,7 +110,7 @@ export const SUBTITLE_PRESETS: ReadonlyArray<SubtitlePreset> = [
       shadowOffsetX: 0,
       shadowOffsetY: 3,
       dimUnhighlighted: true,
-      position: "center",
+      position: 50,
       animation: "none",
     },
   },
@@ -130,7 +130,7 @@ export const SUBTITLE_PRESETS: ReadonlyArray<SubtitlePreset> = [
       shadowOffsetX: 0,
       shadowOffsetY: 1,
       dimUnhighlighted: false,
-      position: "bottom",
+      position: 75,
       animation: "none",
     },
   },
@@ -151,7 +151,7 @@ export const SUBTITLE_PRESETS: ReadonlyArray<SubtitlePreset> = [
       shadowOffsetX: 0,
       shadowOffsetY: 2,
       dimUnhighlighted: true,
-      position: "center",
+      position: 45,
       animation: "vertical_scroll",
     },
   },
@@ -318,7 +318,8 @@ export function normalizeFontStyleOptions(
     shadowOffsetX: normalizeShadowOffset(raw?.shadowOffsetX),
     shadowOffsetY: normalizeShadowOffset(raw?.shadowOffsetY),
     dimUnhighlighted: typeof raw?.dimUnhighlighted === "boolean" ? raw.dimUnhighlighted : DEFAULT_FONT_STYLE_OPTIONS.dimUnhighlighted,
-    position: isSubtitlePosition(raw?.position) ? raw.position : DEFAULT_FONT_STYLE_OPTIONS.position,
+    position: typeof raw?.position === "number" ? Math.max(5, Math.min(95, Math.round(raw.position)))
+      : DEFAULT_FONT_STYLE_OPTIONS.position,
     animation: isSubtitleAnimation(raw?.animation) ? raw.animation : DEFAULT_FONT_STYLE_OPTIONS.animation,
     subtitlePreset: isSubtitlePreset(raw?.subtitlePreset) ? raw.subtitlePreset : DEFAULT_FONT_STYLE_OPTIONS.subtitlePreset,
   };

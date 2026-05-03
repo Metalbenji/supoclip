@@ -6,13 +6,11 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Slider } from "@/components/ui/slider";
 import {
   SUBTITLE_ANIMATION_OPTIONS,
-  SUBTITLE_POSITION_OPTIONS,
   SUBTITLE_PRESETS,
   TEXT_ALIGN_OPTIONS,
   TEXT_TRANSFORM_OPTIONS,
   type SubtitleAnimationOption,
   type SubtitlePresetId,
-  type SubtitlePositionOption,
   type TextAlignOption,
   type TextTransformOption,
 } from "@/lib/font-style-options";
@@ -38,8 +36,7 @@ interface SettingsSectionFontProps {
   shadowOffsetX: number;
   shadowOffsetY: number;
   dimUnhighlighted: boolean;
-  position: SubtitlePositionOption;
-  animation: SubtitleAnimationOption;
+  position: number;
   subtitlePreset: SubtitlePresetId;
   isUploadingFont: boolean;
   fontUploadMessage: string | null;
@@ -62,7 +59,7 @@ interface SettingsSectionFontProps {
   onShadowOffsetXChange: (offset: number) => void;
   onShadowOffsetYChange: (offset: number) => void;
   onDimUnhighlightedChange: (value: boolean) => void;
-  onPositionChange: (value: SubtitlePositionOption) => void;
+  onPositionChange: (value: number) => void;
   onAnimationChange: (value: SubtitleAnimationOption) => void;
   onSubtitlePresetChange: (presetId: SubtitlePresetId) => void;
   onFontUpload: (event: ChangeEvent<HTMLInputElement>) => void;
@@ -187,26 +184,24 @@ export function SettingsSectionFont({
         })()}
       </div>
 
-      {/* Position and Animation */}
-      <div className="grid gap-4 sm:grid-cols-2 pt-1">
+      {/* Position slider and Animation dropdown */}
+      <div className="grid gap-4 sm:grid-cols-2">
         <div className="space-y-2">
-          <Label className="text-sm font-medium text-black">Position</Label>
-          <Select
-            value={position}
-            onValueChange={(value) => onPositionChange(value as SubtitlePositionOption)}
-            disabled={isSaving || isUploadingFont}
-          >
-            <SelectTrigger className="w-full">
-              <SelectValue placeholder="Select position" />
-            </SelectTrigger>
-            <SelectContent>
-              {SUBTITLE_POSITION_OPTIONS.map((option) => (
-                <SelectItem key={option} value={option}>
-                  {option.charAt(0).toUpperCase() + option.slice(1).replace("_", " ")}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
+          <Label className="text-sm font-medium text-black">Position: {position}%</Label>
+          <div className="px-2 pt-5">
+            <Slider
+              value={[position]}
+              onValueChange={(value) => onPositionChange(value[0])}
+              min={10}
+              max={90}
+              step={1}
+              disabled={isSaving || isUploadingFont}
+              className="w-full"
+            />
+          </div>
+          <p className="text-xs text-gray-500">
+            {position <= 25 ? "Top" : position <= 60 ? "Center" : "Bottom"} — vertical placement of subtitles
+          </p>
         </div>
 
         <div className="space-y-2">
@@ -633,8 +628,8 @@ export function SettingsSectionFont({
       </div>
 
       <div className="space-y-2">
-        <Label className="text-sm font-medium text-black">Preview</Label>
-        <div className="p-6 bg-black rounded-lg min-h-[120px] flex items-center">
+        <Label className="text-sm font-medium text-black">Preview {animation !== "none" ? <span className="text-xs text-gray-400 font-normal">(animated)</span> : null}</Label>
+        <div className="p-6 bg-black rounded-lg min-h-[120px] flex items-center overflow-hidden">
           <div className="relative w-full">
             <svg
               className="block w-full overflow-visible"
@@ -703,6 +698,52 @@ export function SettingsSectionFont({
                 {previewText}
               </text>
             </svg>
+            {animation === "vertical_scroll" && (
+              <div
+                className="absolute inset-0 flex items-center"
+                style={{
+                  animation: "subtitleScrollIn 1.8s cubic-bezier(0.25, 0.46, 0.45, 0.94) infinite",
+                }}
+              >
+                <div className="w-full">
+                  <svg className="block w-full overflow-visible" height={previewSvgHeight} role="img" aria-hidden="true">
+                    <defs>
+                      {shadowOpacity > 0 && (
+                        <filter id={`${previewShadowFilterId}-anim`} x="-50%" y="-50%" width="200%" height="200%" colorInterpolationFilters="sRGB">
+                          <feOffset in="SourceAlpha" dx={shadowOffsetX} dy={shadowOffsetY} result="shadow-offset" />
+                          <feGaussianBlur in="shadow-offset" stdDeviation={previewShadowStdDeviation} result="shadow-blur" />
+                          <feFlood floodColor={shadowColor} floodOpacity={shadowOpacity} result="shadow-color" />
+                          <feComposite in="shadow-color" in2="shadow-blur" operator="in" result="shadow-only" />
+                        </filter>
+                      )}
+                      {strokeWidth > 0 && (
+                        <filter id={`${previewStrokeFilterId}-anim`} x="-50%" y="-50%" width="200%" height="200%" colorInterpolationFilters="sRGB">
+                          <feMorphology in="SourceAlpha" operator="dilate" radius={strokeWidth} result="stroke-expanded" />
+                          <feComposite in="stroke-expanded" in2="SourceAlpha" operator="out" result="stroke-outer" />
+                          <feFlood floodColor={strokeColor} result="stroke-color" />
+                          <feComposite in="stroke-color" in2="stroke-outer" operator="in" result="stroke-only" />
+                          <feGaussianBlur in="stroke-only" stdDeviation={previewStrokeStdDeviation} result="stroke-final" />
+                        </filter>
+                      )}
+                    </defs>
+                    {shadowOpacity > 0 && (
+                      <text aria-hidden x={previewTextX} y="50%" textAnchor={previewTextAnchor} dominantBaseline="middle" style={previewTextStyle} fill="#FFFFFF" filter={`url(#${previewShadowFilterId}-anim)`}>{previewText}</text>
+                    )}
+                    {strokeWidth > 0 && (
+                      <text aria-hidden x={previewTextX} y="50%" textAnchor={previewTextAnchor} dominantBaseline="middle" style={previewTextStyle} fill="#FFFFFF" filter={`url(#${previewStrokeFilterId}-anim)`}>{previewText}</text>
+                    )}
+                    <text x={previewTextX} y="50%" textAnchor={previewTextAnchor} dominantBaseline="middle" style={previewTextStyle} fill={fontColor}>{previewText}</text>
+                  </svg>
+                </div>
+              </div>
+            )}
+            <style>{`
+              @keyframes subtitleScrollIn {
+                0% { transform: translateY(-100%); opacity: 0; }
+                15% { opacity: 1; }
+                100% { transform: translateY(0); opacity: 1; }
+              }
+            `}</style>
           </div>
         </div>
       </div>
