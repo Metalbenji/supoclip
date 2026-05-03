@@ -192,7 +192,7 @@ function KaraokePreview({
   }, [
     previewText, fontSize, letterSpacing, textTransform, fontFamily, fontWeight,
     previewTextAnchor, previewTextX, dimUnhighlighted, highlightColor,
-    shadowOpacity, strokeWidth, wordHoldMs,
+    strokeWidth, wordHoldMs,
   ]);
 
   return (
