@@ -2650,6 +2650,38 @@ def _resolve_karaoke_highlight_color(base_color: str) -> str:
 KARAOKE_WORD_HORIZONTAL_PADDING_PX = 12
 KARAOKE_WORD_VERTICAL_PADDING_PX = 6
 KARAOKE_TIMING_SHIFT_SECONDS = 0.0
+# Maximum words per subtitle line — acts as an upper bound even when space allows.
+MAX_WORDS_PER_LINE = 6
+
+
+def _group_words_into_lines(
+    word_widths: List[int],
+    space_width: int,
+    available_width: int,
+    max_words: int = MAX_WORDS_PER_LINE,
+) -> List[List[int]]:
+    """Greedy word-wrap: pack as many words as fit per line, up to *max_words*.
+
+    Returns a list of index-groups.  Each group is a list of indices into
+    *word_widths*.
+    """
+    if not word_widths or available_width <= 0:
+        return []
+    groups: List[List[int]] = []
+    current_group: List[int] = []
+    current_width = 0
+    for idx, w in enumerate(word_widths):
+        extra = w if not current_group else space_width + w
+        if current_group and (current_width + extra > available_width or len(current_group) >= max_words):
+            groups.append(current_group)
+            current_group = [idx]
+            current_width = w
+        else:
+            current_group.append(idx)
+            current_width += extra
+    if current_group:
+        groups.append(current_group)
+    return groups
 
 
 def _compute_vertical_effect_padding(
@@ -3001,7 +3033,7 @@ def create_assemblyai_subtitles(
     subtitle_clips: List[TextClip] = []
     processor = VideoProcessor(style["font_family"], style["font_size"], style["font_color"])
 
-    calculated_font_size = max(24, min(48, int(style["font_size"] * (video_width / 640) * 1.15)))
+    calculated_font_size = max(16, int(style["font_size"] * (video_width / 640) * 1.15))
     final_font_size = calculated_font_size
     base_stroke_width = max(0, int(style["stroke_width"]))
     if style["font_size"] > 0:
@@ -3203,11 +3235,16 @@ def create_assemblyai_subtitles(
         _hl_g = int(_hl_hex[2:4], 16)
         _hl_b = int(_hl_hex[4:6], 16)
 
-        words_per_subtitle = 3
-        for i in range(0, len(display_words_all), words_per_subtitle):
-            word_group_words = display_words_all[i:i + words_per_subtitle]
-            word_group_timings = word_timings_all[i:i + words_per_subtitle]
-            word_group_widths = word_widths_all[i:i + words_per_subtitle]
+        horizontal_padding = int(video_width * 0.04)
+        available_width = video_width - horizontal_padding * 2
+        space_width, _ = _measure_label_text(" ", processor.font_path, final_font_size)
+        space_width = max(1, space_width)
+
+        word_groups = _group_words_into_lines(word_widths_all, space_width, available_width)
+        for group_indices in word_groups:
+            word_group_words = [display_words_all[i] for i in group_indices]
+            word_group_timings = [word_timings_all[i] for i in group_indices]
+            word_group_widths = [word_widths_all[i] for i in group_indices]
             if not word_group_words:
                 continue
 
@@ -3217,11 +3254,8 @@ def create_assemblyai_subtitles(
             if segment_duration < 0.1:
                 continue
 
-            space_width, _ = _measure_label_text(" ", processor.font_path, final_font_size)
-            space_width = max(1, space_width)
             total_width = sum(word_group_widths) + (space_width * max(0, len(word_group_words) - 1))
 
-            horizontal_padding = int(video_width * 0.04)
             if text_align == "left":
                 line_start_x = horizontal_padding
             elif text_align == "right":
@@ -3293,13 +3327,18 @@ def create_assemblyai_subtitles(
 
     else:
         # ═══════════════════════════════════════════════════════════════════
-        # STANDARD KARAOKE: 3 words per line, horizontal layout
+        # STANDARD KARAOKE: dynamic words-per-line based on available width
         # ═══════════════════════════════════════════════════════════════════
-        words_per_subtitle = 3
-        for i in range(0, len(display_words_all), words_per_subtitle):
-            word_group_words = display_words_all[i:i + words_per_subtitle]
-            word_group_timings = word_timings_all[i:i + words_per_subtitle]
-            word_group_widths = word_widths_all[i:i + words_per_subtitle]
+        horizontal_padding = int(video_width * 0.04)
+        available_width = video_width - horizontal_padding * 2
+        space_width, _ = _measure_label_text(" ", processor.font_path, final_font_size)
+        space_width = max(1, space_width)
+
+        word_groups = _group_words_into_lines(word_widths_all, space_width, available_width)
+        for group_indices in word_groups:
+            word_group_words = [display_words_all[i] for i in group_indices]
+            word_group_timings = [word_timings_all[i] for i in group_indices]
+            word_group_widths = [word_widths_all[i] for i in group_indices]
             if not word_group_words:
                 continue
 
@@ -3309,11 +3348,8 @@ def create_assemblyai_subtitles(
             if segment_duration < 0.1:
                 continue
 
-            space_width, _ = _measure_label_text(" ", processor.font_path, final_font_size)
-            space_width = max(1, space_width)
             total_width = sum(word_group_widths) + (space_width * max(0, len(word_group_words) - 1))
 
-            horizontal_padding = int(video_width * 0.04)
             if text_align == "left":
                 line_start_x = horizontal_padding
             elif text_align == "right":
