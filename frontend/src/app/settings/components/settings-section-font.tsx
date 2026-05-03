@@ -67,7 +67,7 @@ interface SettingsSectionFontProps {
 
 const SWATCH_COLORS = ["#FFFFFF", "#000000", "#FFD700", "#FF6B6B", "#4ECDC4", "#45B7D1"];
 const PREVIEW_TEXT = "Your subtitle will look like this";
-const SCROLL_PREVIEW_WORDS = ["Families", "Bedtime", "Birthdays", "Careers", "Childhood", "Memories"];
+const SCROLL_PREVIEW_WORDS = ["This", "subtitle", "will", "look", "amazing", "right"];
 
 function applyTextTransform(text: string, mode: TextTransformOption): string {
   if (mode === "uppercase") {
@@ -643,8 +643,8 @@ export function SettingsSectionFont({
                 style={{ height: Math.max(80, previewSvgHeight + 20) }}
               >
                 {SCROLL_PREVIEW_WORDS.map((word, i) => {
-                  const delay = 0.8 + i * 0.6;
-                  const totalDuration = 0.9;
+                  const delay = 1.2 + i * 1.0;
+                  const totalDuration = 1.6;
                   return (
                     <div
                       key={i}
