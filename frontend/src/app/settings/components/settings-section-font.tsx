@@ -182,8 +182,9 @@ function KaraokePreview({
         const startExt = baseText.getExtentOfChar(startChar);
         const endExt = baseText.getExtentOfChar(Math.max(startChar, endChar - 1));
 
-        const textY = startExt.y;
         const textX = startExt.x;
+        // Vertical center of the character, matching dominantBaseline="middle"
+        const textY = startExt.y + startExt.height / 2;
         const wordStr = previewText.slice(startChar, endChar);
 
         // Position all highlight layers at exact word position
@@ -192,7 +193,7 @@ function KaraokePreview({
           el!.textContent = wordStr;
           el!.setAttribute("x", String(Math.round(textX)));
           el!.setAttribute("y", String(Math.round(textY)));
-          el!.setAttribute("dominant-baseline", "auto");
+          el!.setAttribute("dominant-baseline", "middle");
           el!.setAttribute("text-anchor", "start");
           el!.setAttribute("opacity", "1");
         }
@@ -426,9 +427,9 @@ function VTTPreview({
         const startExt = baseText.getExtentOfChar(startChar);
         const endExt = baseText.getExtentOfChar(Math.max(startChar, endChar - 1));
 
-        // Position highlight text at same baseline
-        highlightText.setAttribute("y", String(startExt.y));
-        highlightText.setAttribute("dominant-baseline", "auto");
+        // Position highlight text at same vertical center
+        highlightText.setAttribute("y", String(Math.round(startExt.y + startExt.height / 2)));
+        highlightText.setAttribute("dominant-baseline", "middle");
 
         // Position highlight text using absolute coordinates
         const wordStr = previewText.slice(startChar, endChar);
