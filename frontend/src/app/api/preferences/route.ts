@@ -755,7 +755,7 @@ export async function PATCH(request: NextRequest) {
         ...(shadowOffsetY !== undefined && { default_shadow_offset_y: normalizeShadowOffset(shadowOffsetY) }),
         ...(dimUnhighlighted !== undefined && { default_dim_unhighlighted: dimUnhighlighted }),
         ...(transitionsEnabled !== undefined && { default_transitions_enabled: transitionsEnabled }),
-        ...(position !== undefined && { default_subtitle_position: position }),
+        ...(position !== undefined && { default_subtitle_position: typeof position === "number" ? String(position) : position }),
         ...(animation !== undefined && { default_subtitle_animation: animation }),
         ...(reviewBeforeRenderEnabled !== undefined && {
           default_review_before_render_enabled: reviewBeforeRenderEnabled,
