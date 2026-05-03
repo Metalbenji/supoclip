@@ -5,6 +5,8 @@
 CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
 
 -- Users table (compatible with Prisma schema)
+-- NOTE: This MUST stay in sync with frontend/prisma/schema.prisma model User.
+-- If you add a column to the Prisma schema, add it here too.
 CREATE TABLE users (
     id VARCHAR(36) PRIMARY KEY DEFAULT uuid_generate_v4()::text,
     name VARCHAR(255) NOT NULL,
@@ -13,6 +15,7 @@ CREATE TABLE users (
     image VARCHAR(500),
     "createdAt" TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
     "updatedAt" TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    -- Additional fields for backend compatibility
     first_name VARCHAR(100),
     last_name VARCHAR(100),
     password_hash VARCHAR(255),
@@ -20,21 +23,51 @@ CREATE TABLE users (
     default_font_family VARCHAR(100) DEFAULT 'TikTokSans-Regular',
     default_font_size INTEGER DEFAULT 24,
     default_font_color VARCHAR(7) DEFAULT '#FFFFFF',
+    default_highlight_color VARCHAR(7) DEFAULT '#FDE047',
     default_font_weight INTEGER DEFAULT 600,
     default_line_height DOUBLE PRECISION DEFAULT 1.4,
     default_letter_spacing INTEGER DEFAULT 0,
-    default_text_transform VARCHAR(20) DEFAULT 'none' CHECK (default_text_transform IN ('none', 'uppercase', 'lowercase', 'capitalize')),
-    default_text_align VARCHAR(10) DEFAULT 'center' CHECK (default_text_align IN ('left', 'center', 'right')),
+    default_text_transform VARCHAR(20) DEFAULT 'none',
+    default_text_align VARCHAR(10) DEFAULT 'center',
     default_stroke_color VARCHAR(7) DEFAULT '#000000',
     default_stroke_width INTEGER DEFAULT 2,
+    default_stroke_blur DOUBLE PRECISION DEFAULT 0.6,
     default_shadow_color VARCHAR(7) DEFAULT '#000000',
     default_shadow_opacity DOUBLE PRECISION DEFAULT 0.5,
     default_shadow_blur INTEGER DEFAULT 2,
     default_shadow_offset_x INTEGER DEFAULT 0,
     default_shadow_offset_y INTEGER DEFAULT 2,
-    default_dim_unhighlighted BOOLEAN NOT NULL DEFAULT true,
-    default_review_before_render_enabled BOOLEAN NOT NULL DEFAULT true,
-    default_timeline_editor_enabled BOOLEAN NOT NULL DEFAULT true,
+    default_dim_unhighlighted BOOLEAN DEFAULT true,
+    default_transitions_enabled BOOLEAN DEFAULT false,
+    default_subtitle_position VARCHAR(16) DEFAULT 'bottom',
+    default_subtitle_animation VARCHAR(24) DEFAULT 'none',
+    default_review_before_render_enabled BOOLEAN DEFAULT true,
+    default_timeline_editor_enabled BOOLEAN DEFAULT true,
+    -- Processing & workflow defaults
+    default_processing_profile VARCHAR(32) DEFAULT 'balanced',
+    default_workflow_source VARCHAR(16) DEFAULT 'built_in',
+    default_saved_workflow_id VARCHAR(36),
+    default_review_auto_select_strong_face_enabled BOOLEAN DEFAULT false,
+    default_review_auto_select_strong_face_min_score_percent INTEGER DEFAULT 85,
+    -- Framing / face detection defaults
+    default_framing_mode VARCHAR(32) DEFAULT 'auto',
+    default_face_detection_mode VARCHAR(20) DEFAULT 'balanced',
+    default_fallback_crop_position VARCHAR(20) DEFAULT 'center',
+    default_face_anchor_profile VARCHAR(24) DEFAULT 'auto',
+    default_output_aspect_ratio VARCHAR(12) DEFAULT '9:16',
+    -- Transcription / whisper defaults
+    default_transcription_provider VARCHAR(20) DEFAULT 'local',
+    default_whisper_chunking_enabled BOOLEAN DEFAULT true,
+    default_whisper_chunk_duration_seconds INTEGER DEFAULT 1200,
+    default_whisper_chunk_overlap_seconds INTEGER DEFAULT 8,
+    default_task_timeout_seconds INTEGER DEFAULT 21600,
+    default_whisper_model_size VARCHAR(20) DEFAULT 'medium',
+    default_whisper_device VARCHAR(20) DEFAULT 'auto',
+    default_whisper_gpu_index INTEGER,
+    -- AI defaults
+    default_ai_provider VARCHAR(20) DEFAULT 'openai',
+    default_ai_model VARCHAR(100),
+    default_zai_key_routing_mode VARCHAR(20) DEFAULT 'auto',
     -- Optional user-managed API secret (encrypted)
     assembly_api_key_encrypted TEXT,
     openai_api_key_encrypted TEXT,
