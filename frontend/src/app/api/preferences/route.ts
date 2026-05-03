@@ -438,8 +438,8 @@ export async function PATCH(request: NextRequest) {
     if (fontFamily !== undefined && typeof fontFamily !== "string") {
       return NextResponse.json({ error: "Invalid fontFamily" }, { status: 400 });
     }
-    if (fontSize !== undefined && !isNumberInRange(fontSize, 24, 48)) {
-      return NextResponse.json({ error: "Invalid fontSize (must be between 24 and 48)" }, { status: 400 });
+    if (fontSize !== undefined && !isNumberInRange(fontSize, 12, 128)) {
+      return NextResponse.json({ error: "Invalid fontSize (must be between 12 and 128)" }, { status: 400 });
     }
     if (fontColor !== undefined && !isHexColor(fontColor)) {
       return NextResponse.json({ error: "Invalid fontColor (must be hex format like #FFFFFF)" }, { status: 400 });
