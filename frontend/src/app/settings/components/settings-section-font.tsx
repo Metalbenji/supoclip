@@ -86,6 +86,272 @@ function formatTextOption(option: string): string {
 }
 
 /* ═══════════════════════════════════════════════════════════════════════
+   Karaoke Preview — word-by-word highlight for Classic / Minimal
+   Renders base text in fontColor, then JS cycles through each word
+   overlaying it in highlightColor using getExtentOfChar. When
+   dimUnhighlighted is on, un-highlighted words dim to ~35% opacity.
+   ═══════════════════════════════════════════════════════════════════════ */
+function KaraokePreview({
+  previewText,
+  previewTextStyle,
+  previewTextX,
+  previewTextAnchor,
+  fontSize,
+  highlightColor,
+  fontColor,
+  shadowOpacity,
+  shadowOffsetX,
+  shadowOffsetY,
+  previewShadowStdDeviation,
+  previewShadowFilterId,
+  strokeWidth,
+  strokeColor,
+  previewStrokeStdDeviation,
+  previewStrokeFilterId,
+  dimUnhighlighted,
+}: {
+  previewText: string;
+  previewTextStyle: CSSProperties;
+  previewTextX: string;
+  previewTextAnchor: "start" | "middle" | "end";
+  fontSize: number;
+  highlightColor: string;
+  fontColor: string;
+  shadowOpacity: number;
+  shadowOffsetX: number;
+  shadowOffsetY: number;
+  previewShadowStdDeviation: number;
+  previewShadowFilterId: string;
+  strokeWidth: number;
+  strokeColor: string;
+  previewStrokeStdDeviation: number;
+  previewStrokeFilterId: string;
+  dimUnhighlighted: boolean;
+}) {
+  const containerRef = useRef<HTMLDivElement>(null);
+  const wordHoldMs = 700;
+  const previewSvgHeight = Math.max(70, Math.ceil(fontSize * 1.6));
+
+  useEffect(() => {
+    const container = containerRef.current;
+    if (!container) return;
+
+    // Base text for getExtentOfChar measurements
+    const baseText = container.querySelector<SVGTextElement>("text#karaoke-base");
+    // Highlight overlay
+    const highlightText = container.querySelector<SVGTextElement>("text#karaoke-highlight");
+    // Shadow overlay for highlight
+    const shadowHighlight = container.querySelector<SVGTextElement>("text#karaoke-shadow-highlight");
+    // Stroke overlay for highlight
+    const strokeHighlight = container.querySelector<SVGTextElement>("text#karaoke-stroke-highlight");
+    // Dim overlay (covers all text with reduced opacity)
+    const dimOverlay = container.querySelector<SVGTextElement>("text#karaoke-dim");
+
+    if (!baseText || !highlightText) return;
+
+    const words = previewText.split(" ").filter(Boolean);
+    if (words.length === 0) return;
+
+    let cancelled = false;
+    let wordIdx = 0;
+
+    function getWordRanges(): [number, number][] {
+      const ranges: [number, number][] = [];
+      let charIdx = 0;
+      for (const word of words) {
+        ranges.push([charIdx, charIdx + word.length]);
+        charIdx += word.length + 1;
+      }
+      return ranges;
+    }
+
+    function showWord(idx: number) {
+      const ranges = getWordRanges();
+      if (idx >= ranges.length) return;
+      const [startChar, endChar] = ranges[idx];
+
+      try {
+        const startExt = baseText.getExtentOfChar(startChar);
+        const endExt = baseText.getExtentOfChar(Math.max(startChar, endChar - 1));
+
+        const textY = startExt.y;
+        const textX = startExt.x;
+        const wordStr = previewText.slice(startChar, endChar);
+
+        // Position all highlight layers at exact word position
+        const layers = [highlightText, shadowHighlight, strokeHighlight].filter(Boolean);
+        for (const el of layers) {
+          el!.textContent = wordStr;
+          el!.setAttribute("x", String(Math.round(textX)));
+          el!.setAttribute("y", String(Math.round(textY)));
+          el!.setAttribute("dominant-baseline", "auto");
+          el!.setAttribute("text-anchor", "start");
+          el!.setAttribute("opacity", "1");
+        }
+
+        // Show dim overlay when dimming
+        if (dimOverlay) {
+          dimOverlay.setAttribute("opacity", dimUnhighlighted ? "1" : "0");
+        }
+      } catch {
+        highlightText.setAttribute("opacity", "0");
+      }
+    }
+
+    const timer = setTimeout(() => {
+      showWord(0);
+      wordIdx = 1;
+      function tick() {
+        if (cancelled) return;
+        showWord(wordIdx % words.length);
+        wordIdx++;
+        setTimeout(() => tick(), wordHoldMs);
+      }
+      tick();
+    }, 500);
+
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
+  }, [
+    previewText, fontSize, letterSpacing, textTransform, fontFamily, fontWeight,
+    previewTextAnchor, previewTextX, dimUnhighlighted, highlightColor,
+    shadowOpacity, strokeWidth, wordHoldMs,
+  ]);
+
+  return (
+    <div ref={containerRef} className="w-full overflow-visible" style={{ height: previewSvgHeight + 16 }}>
+      <svg
+        className="block w-full overflow-visible"
+        width="100%"
+        height={previewSvgHeight}
+        role="img"
+        aria-label="karaoke preview"
+      >
+        <defs>
+          {shadowOpacity > 0 && (
+            <filter id={previewShadowFilterId} x="-50%" y="-50%" width="200%" height="200%" colorInterpolationFilters="sRGB">
+              <feOffset in="SourceAlpha" dx={shadowOffsetX} dy={shadowOffsetY} result="shadow-offset" />
+              <feGaussianBlur in="shadow-offset" stdDeviation={previewShadowStdDeviation} result="shadow-blur" />
+              <feFlood floodColor="#000000" floodOpacity={shadowOpacity} result="shadow-color" />
+              <feComposite in="shadow-color" in2="shadow-blur" operator="in" result="shadow-only" />
+            </filter>
+          )}
+          {strokeWidth > 0 && (
+            <filter id={previewStrokeFilterId} x="-50%" y="-50%" width="200%" height="200%" colorInterpolationFilters="sRGB">
+              <feMorphology in="SourceAlpha" operator="dilate" radius={strokeWidth} result="stroke-expanded" />
+              <feComposite in="stroke-expanded" in2="SourceAlpha" operator="out" result="stroke-outer" />
+              <feFlood floodColor={strokeColor} result="stroke-color" />
+              <feComposite in="stroke-color" in2="stroke-outer" operator="in" result="stroke-only" />
+              <feGaussianBlur in="stroke-only" stdDeviation={previewStrokeStdDeviation} result="stroke-final" />
+            </filter>
+          )}
+        </defs>
+
+        {/* Shadow for base text */}
+        {shadowOpacity > 0 && (
+          <text
+            id="karaoke-base-shadow"
+            aria-hidden
+            x={previewTextX}
+            y="50%"
+            textAnchor={previewTextAnchor}
+            dominantBaseline="middle"
+            style={previewTextStyle}
+            fill="#FFFFFF"
+            filter={`url(#${previewShadowFilterId})`}
+          >{previewText}</text>
+        )}
+
+        {/* Stroke for base text */}
+        {strokeWidth > 0 && (
+          <text
+            id="karaoke-base-stroke"
+            aria-hidden
+            x={previewTextX}
+            y="50%"
+            textAnchor={previewTextAnchor}
+            dominantBaseline="middle"
+            style={previewTextStyle}
+            fill="#FFFFFF"
+            filter={`url(#${previewStrokeFilterId})`}
+          >{previewText}</text>
+        )}
+
+        {/* Base text in fontColor */}
+        <text
+          id="karaoke-base"
+          x={previewTextX}
+          y="50%"
+          textAnchor={previewTextAnchor}
+          dominantBaseline="middle"
+          style={previewTextStyle}
+          fill={fontColor}
+        >{previewText}</text>
+
+        {/* Dim overlay — semi-transparent black to dim non-highlighted words */}
+        <text
+          id="karaoke-dim"
+          aria-hidden
+          x={previewTextX}
+          y="50%"
+          textAnchor={previewTextAnchor}
+          dominantBaseline="middle"
+          style={previewTextStyle}
+          fill="#000000"
+          opacity={dimUnhighlighted ? "0.65" : "0"}
+        >{previewText}</text>
+
+        {/* Shadow for highlighted word (positioned by JS) */}
+        {shadowOpacity > 0 && (
+          <text
+            id="karaoke-shadow-highlight"
+            aria-hidden
+            x={previewTextX}
+            y="50%"
+            textAnchor={previewTextAnchor}
+            dominantBaseline="middle"
+            style={previewTextStyle}
+            fill="#FFFFFF"
+            filter={`url(#${previewShadowFilterId})`}
+            opacity="0"
+          />
+        )}
+
+        {/* Stroke for highlighted word (positioned by JS) */}
+        {strokeWidth > 0 && (
+          <text
+            id="karaoke-stroke-highlight"
+            aria-hidden
+            x={previewTextX}
+            y="50%"
+            textAnchor={previewTextAnchor}
+            dominantBaseline="middle"
+            style={previewTextStyle}
+            fill="#FFFFFF"
+            filter={`url(#${previewStrokeFilterId})`}
+            opacity="0"
+          />
+        )}
+
+        {/* Highlighted word in highlightColor (positioned by JS) */}
+        <text
+          id="karaoke-highlight"
+          x={previewTextX}
+          y="50%"
+          textAnchor={previewTextAnchor}
+          dominantBaseline="middle"
+          style={previewTextStyle}
+          fill={highlightColor}
+          opacity="0"
+        />
+      </svg>
+    </div>
+  );
+}
+
+/* ═══════════════════════════════════════════════════════════════════════
    Video Through Text Preview
    Shows a black bar with text cutouts revealing an animated gradient
    (simulating video). JS cycles through words to show karaoke effect.
@@ -1092,74 +1358,31 @@ export function SettingsSectionFont({
                 </svg>
               </div>
             ) : (
-              /* Static preview */
-              <svg
-                className="block w-full overflow-visible"
-                height={previewSvgHeight}
-                role="img"
-                aria-label={previewText}
-              >
-                <defs>
-                  {shadowOpacity > 0 && (
-                    <filter id={previewShadowFilterId} x="-50%" y="-50%" width="200%" height="200%" colorInterpolationFilters="sRGB">
-                      <feOffset in="SourceAlpha" dx={shadowOffsetX} dy={shadowOffsetY} result="shadow-offset" />
-                      <feGaussianBlur in="shadow-offset" stdDeviation={previewShadowStdDeviation} result="shadow-blur" />
-                      <feFlood floodColor={shadowColor} floodOpacity={shadowOpacity} result="shadow-color" />
-                      <feComposite in="shadow-color" in2="shadow-blur" operator="in" result="shadow-only" />
-                    </filter>
-                  )}
-                  {strokeWidth > 0 && (
-                    <filter id={previewStrokeFilterId} x="-50%" y="-50%" width="200%" height="200%" colorInterpolationFilters="sRGB">
-                      <feMorphology in="SourceAlpha" operator="dilate" radius={strokeWidth} result="stroke-expanded" />
-                      <feComposite in="stroke-expanded" in2="SourceAlpha" operator="out" result="stroke-outer" />
-                      <feFlood floodColor={strokeColor} result="stroke-color" />
-                      <feComposite in="stroke-color" in2="stroke-outer" operator="in" result="stroke-only" />
-                      <feGaussianBlur in="stroke-only" stdDeviation={previewStrokeStdDeviation} result="stroke-final" />
-                    </filter>
-                  )}
-                </defs>
-
-                {shadowOpacity > 0 && (
-                  <text
-                    aria-hidden
-                    x={previewTextX}
-                    y="50%"
-                    textAnchor={previewTextAnchor}
-                    dominantBaseline="middle"
-                    style={previewTextStyle}
-                    fill="#FFFFFF"
-                    filter={`url(#${previewShadowFilterId})`}
-                  >
-                    {previewText}
-                  </text>
-                )}
-
-                {strokeWidth > 0 && (
-                  <text
-                    aria-hidden
-                    x={previewTextX}
-                    y="50%"
-                    textAnchor={previewTextAnchor}
-                    dominantBaseline="middle"
-                    style={previewTextStyle}
-                    fill="#FFFFFF"
-                    filter={`url(#${previewStrokeFilterId})`}
-                  >
-                    {previewText}
-                  </text>
-                )}
-
-                <text
-                  x={previewTextX}
-                  y="50%"
-                  textAnchor={previewTextAnchor}
-                  dominantBaseline="middle"
-                  style={previewTextStyle}
-                  fill={fontColor}
-                >
-                  {previewText}
-                </text>
-              </svg>
+              /* ═══════════════════════════════════════════════════════════
+                 Karaoke preview — word-by-word highlight (Classic / Minimal)
+                 Base text in fontColor. JS cycles through words, overlaying
+                 each word in highlightColor using getExtentOfChar. When
+                 dimUnhighlighted is on, non-highlighted words dim.
+                 ═══════════════════════════════════════════════════════════ */
+              <KaraokePreview
+                previewText={previewText}
+                previewTextStyle={previewTextStyle}
+                previewTextX={previewTextX}
+                previewTextAnchor={previewTextAnchor}
+                fontSize={fontSize}
+                highlightColor={highlightColor}
+                fontColor={fontColor}
+                shadowOpacity={shadowOpacity}
+                shadowOffsetX={shadowOffsetX}
+                shadowOffsetY={shadowOffsetY}
+                previewShadowStdDeviation={previewShadowStdDeviation}
+                previewShadowFilterId={previewShadowFilterId}
+                strokeWidth={strokeWidth}
+                strokeColor={strokeColor}
+                previewStrokeStdDeviation={previewStrokeStdDeviation}
+                previewStrokeFilterId={previewStrokeFilterId}
+                dimUnhighlighted={dimUnhighlighted}
+              />
             )}
             <style>{`
               @keyframes subtitleScrollIn {
