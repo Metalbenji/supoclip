@@ -139,6 +139,7 @@ function KaraokePreview({
   const containerRef = useRef<HTMLDivElement>(null);
   const wordHoldMs = 700;
   const previewSvgHeight = Math.max(70, Math.ceil(fontSize * 1.6));
+  const uid = useId().replace(/:/g, "");
 
   useEffect(() => {
     const container = containerRef.current;
@@ -146,16 +147,12 @@ function KaraokePreview({
 
     // Base text for getExtentOfChar measurements
     const baseText = container.querySelector<SVGTextElement>("text#karaoke-base");
-    // Highlight overlay
-    const highlightText = container.querySelector<SVGTextElement>("text#karaoke-highlight");
-    // Shadow overlay for highlight
-    const shadowHighlight = container.querySelector<SVGTextElement>("text#karaoke-shadow-highlight");
-    // Stroke overlay for highlight
-    const strokeHighlight = container.querySelector<SVGTextElement>("text#karaoke-stroke-highlight");
+    // Clip rect that reveals only the current word on the highlight overlay
+    const clipRect = container.querySelector<SVGRectElement>("rect#karaoke-clip-rect");
     // Dim overlay (covers all text with reduced opacity)
     const dimOverlay = container.querySelector<SVGTextElement>("text#karaoke-dim");
 
-    if (!baseText || !highlightText) return;
+    if (!baseText || !clipRect) return;
 
     const words = previewText.split(" ").filter(Boolean);
     if (words.length === 0) return;
@@ -180,27 +177,20 @@ function KaraokePreview({
 
       try {
         const startExt = baseText.getExtentOfChar(startChar);
+        const endExt = baseText.getExtentOfChar(Math.max(startChar, endChar - 1));
 
-        const textX = startExt.x;
-        const wordStr = previewText.slice(startChar, endChar);
-
-        // Position all highlight layers at exact word X position only.
-        // Y and dominant-baseline stay as set in JSX (y="50%", dominantBaseline="middle")
-        // matching the base text — getExtentOfChar Y is unreliable across browsers.
-        const layers = [highlightText, shadowHighlight, strokeHighlight].filter(Boolean);
-        for (const el of layers) {
-          el!.textContent = wordStr;
-          el!.setAttribute("x", String(Math.round(textX)));
-          el!.setAttribute("text-anchor", "start");
-          el!.setAttribute("opacity", "1");
-        }
+        // Position clip rect over the current word
+        clipRect.setAttribute("x", String(Math.round(startExt.x)));
+        clipRect.setAttribute("y", String(Math.round(startExt.y - 4)));
+        clipRect.setAttribute("width", String(Math.round(endExt.x + endExt.width - startExt.x + 4)));
+        clipRect.setAttribute("height", String(Math.round(startExt.height + 8)));
 
         // Show dim overlay when dimming
         if (dimOverlay) {
           dimOverlay.setAttribute("opacity", dimUnhighlighted ? "1" : "0");
         }
       } catch {
-        highlightText.setAttribute("opacity", "0");
+        clipRect.setAttribute("width", "0");
       }
     }
 
@@ -236,6 +226,9 @@ function KaraokePreview({
         aria-label="karaoke preview"
       >
         <defs>
+          <clipPath id={`karaoke-clip-${uid}`}>
+            <rect id="karaoke-clip-rect" x="0" y="0" width="0" height={previewSvgHeight} />
+          </clipPath>
           {shadowOpacity > 0 && (
             <filter id={previewShadowFilterId} x="-50%" y="-50%" width="200%" height="200%" colorInterpolationFilters="sRGB">
               <feOffset in="SourceAlpha" dx={shadowOffsetX} dy={shadowOffsetY} result="shadow-offset" />
@@ -309,39 +302,7 @@ function KaraokePreview({
           opacity={dimUnhighlighted ? "0.65" : "0"}
         >{previewText}</text>
 
-        {/* Shadow for highlighted word (positioned by JS) */}
-        {shadowOpacity > 0 && (
-          <text
-            id="karaoke-shadow-highlight"
-            aria-hidden
-            x={previewTextX}
-            y="50%"
-            textAnchor={previewTextAnchor}
-            dominantBaseline="middle"
-            style={previewTextStyle}
-            fill="#FFFFFF"
-            filter={`url(#${previewShadowFilterId})`}
-            opacity="0"
-          />
-        )}
-
-        {/* Stroke for highlighted word (positioned by JS) */}
-        {strokeWidth > 0 && (
-          <text
-            id="karaoke-stroke-highlight"
-            aria-hidden
-            x={previewTextX}
-            y="50%"
-            textAnchor={previewTextAnchor}
-            dominantBaseline="middle"
-            style={previewTextStyle}
-            fill="#FFFFFF"
-            filter={`url(#${previewStrokeFilterId})`}
-            opacity="0"
-          />
-        )}
-
-        {/* Highlighted word in highlightColor (positioned by JS) */}
+        {/* Highlighted word — same text, same position, clipped to current word only */}
         <text
           id="karaoke-highlight"
           x={previewTextX}
@@ -350,8 +311,8 @@ function KaraokePreview({
           dominantBaseline="middle"
           style={previewTextStyle}
           fill={highlightColor}
-          opacity="0"
-        />
+          clipPath={`url(#karaoke-clip-${uid})`}
+        >{previewText}</text>
       </svg>
     </div>
   );
@@ -398,7 +359,9 @@ function VTTPreview({
     const highlightText = container.querySelector<SVGTextElement>("text#vtt-highlight");
     // The base text for getExtentOfChar measurements
     const baseText = container.querySelector<SVGTextElement>("text#vtt-base");
-    if (!highlightText || !baseText) return;
+    // Clip rect for revealing current word
+    const clipRect = container.querySelector<SVGRectElement>("rect#vtt-clip-rect");
+    if (!highlightText || !baseText || !clipRect) return;
 
     const words = previewText.split(" ").filter(Boolean);
     if (words.length === 0) return;
@@ -424,13 +387,11 @@ function VTTPreview({
         const startExt = baseText.getExtentOfChar(startChar);
         const endExt = baseText.getExtentOfChar(Math.max(startChar, endChar - 1));
 
-        // Only set X — Y and dominant-baseline stay as set in JSX
-        const wordStr = previewText.slice(startChar, endChar);
-        highlightText.setAttribute("text-anchor", "start");
-        highlightText.setAttribute("x", String(Math.round(startExt.x)));
-
-        highlightText.textContent = wordStr;
-        highlightText.setAttribute("fill", `url(#${gradId})`);
+        // Position clip rect over the current word
+        clipRect.setAttribute("x", String(Math.round(startExt.x)));
+        clipRect.setAttribute("y", String(Math.round(startExt.y - 4)));
+        clipRect.setAttribute("width", String(Math.round(endExt.x + endExt.width - startExt.x + 4)));
+        clipRect.setAttribute("height", String(Math.round(startExt.height + 8)));
         highlightText.setAttribute("opacity", "1");
       } catch {
         highlightText.setAttribute("opacity", "0");
@@ -471,6 +432,9 @@ function VTTPreview({
         aria-label="video through text preview"
       >
         <defs>
+          <clipPath id={`vtt-clip-${uid}`}>
+            <rect id="vtt-clip-rect" x="0" y="0" width="0" height={svgH} />
+          </clipPath>
           {/* Animated gradient simulating video behind text */}
           <linearGradient id={gradId} x1="0%" y1="0%" x2="100%" y2="100%">
             <stop offset="0%" stopColor="#FF6B6B">
@@ -496,7 +460,7 @@ function VTTPreview({
           style={previewTextStyle}
           fill={dimUnhighlighted ? "#1a1a1a" : "#555555"}
         >{previewText}</text>
-        {/* Highlight overlay — gradient fill positioned by JS */}
+        {/* Highlight overlay — same text, same position, clipped to current word */}
         <text
           id="vtt-highlight"
           x={previewTextX}
@@ -505,8 +469,9 @@ function VTTPreview({
           dominantBaseline="central"
           style={previewTextStyle}
           fill={`url(#${gradId})`}
+          clipPath={`url(#vtt-clip-${uid})`}
           opacity="0"
-        />
+        >{previewText}</text>
       </svg>
     </div>
   );
