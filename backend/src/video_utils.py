@@ -27,7 +27,7 @@ import cv2
 if Path("/usr/bin/ffmpeg").exists():
     os.environ.setdefault("IMAGEIO_FFMPEG_EXE", "/usr/bin/ffmpeg")
 
-from moviepy import VideoFileClip, CompositeVideoClip, TextClip, ColorClip
+from moviepy import VideoFileClip, CompositeVideoClip, TextClip, ColorClip, VideoClip
 
 try:
     import assemblyai as aai
@@ -2945,8 +2945,14 @@ def create_assemblyai_subtitles(
     font_color: str = "#FFFFFF",
     subtitle_style: Optional[Dict[str, Any]] = None,
     word_timings_override: Optional[List[Dict[str, Any]]] = None,
-) -> List[TextClip]:
-    """Create subtitles using cached word timings."""
+    base_clip: Optional[VideoClip] = None,
+) -> List[VideoClip]:
+    """Create subtitles using cached word timings.
+    
+    Args:
+        base_clip: Optional pre-cropped video clip. Required for effects like
+            video_through_text that need to sample from the final rendered video.
+    """
     video_path = Path(video_path)
     style = normalize_subtitle_style(subtitle_style)
     style["font_family"] = font_family or style["font_family"]
@@ -3030,7 +3036,7 @@ def create_assemblyai_subtitles(
 
     # Group words into short subtitle segments for readability, then animate
     # each word by overlaying a timed highlight on top of a persistent base line.
-    subtitle_clips: List[TextClip] = []
+    subtitle_clips: List[VideoClip] = []
     processor = VideoProcessor(style["font_family"], style["font_size"], style["font_color"])
 
     calculated_font_size = max(16, int(style["font_size"] * (video_width / 640) * 1.15))
@@ -3304,6 +3310,132 @@ def create_assemblyai_subtitles(
                     wheel_hold_fraction=hold_fraction,
                 )
                 subtitle_clips.extend(next_layers)
+
+    elif subtitle_animation == "video_through_text":
+        # ═══════════════════════════════════════════════════════════════════
+        # VIDEO THROUGH TEXT — black bar with video visible through text
+        # A full-width black bar spans the screen. Subtitle text is rendered
+        # as white on transparent, then used as a mask so the underlying
+        # video shows through the letter shapes. For karaoke, only the
+        # current word reveals the video; other words stay opaque black.
+        # ═══════════════════════════════════════════════════════════════════
+
+        horizontal_padding = int(video_width * 0.04)
+        available_width = video_width - horizontal_padding * 2
+        space_width, _ = _measure_label_text(" ", processor.font_path, final_font_size)
+        space_width = max(1, space_width)
+
+        word_groups = _group_words_into_lines(word_widths_all, space_width, available_width)
+
+        # Calculate total bar height
+        num_lines = max(1, len(word_groups))
+        _bar_row_spacing = int(final_font_size * lineHeight * 0.95)
+        bar_height = int(line_box_height * num_lines + _bar_row_spacing * max(0, num_lines - 1))
+        bar_y = max(0, base_y)
+
+        # Full-duration black bar behind everything
+        if relevant_words:
+            _bar_start = float(relevant_words[0]["start"]) - 0.3
+            _bar_end = float(relevant_words[-1]["end"]) + 0.3
+        else:
+            _bar_start = 0.0
+            _bar_end = 0.1
+        _bar_duration = max(0.1, _bar_end - _bar_start)
+
+        black_bar = (
+            ColorClip(size=(video_width, bar_height), color=(0, 0, 0))
+            .with_start(_bar_start)
+            .with_duration(_bar_duration)
+            .with_position(("center", bar_y))
+        )
+        subtitle_clips.append(black_bar)
+
+        # We need the cropped video as source for the video-through-text mask.
+        # base_clip is the same cropped_clip used in the final composition,
+        # so pixel positions align exactly.
+        if base_clip is None:
+            logger.warning("video_through_text requires base_clip but it was not provided")
+        else:
+            for line_idx, group_indices in enumerate(word_groups):
+                group_words = [display_words_all[i] for i in group_indices]
+                group_timings = [word_timings_all[i] for i in group_indices]
+                group_widths = [word_widths_all[i] for i in group_indices]
+                if not group_words:
+                    continue
+
+                segment_start = float(group_timings[0][0])
+                segment_end = float(group_timings[-1][1])
+                segment_duration = max(0.1, segment_end - segment_start)
+
+                total_width = sum(group_widths) + (space_width * max(0, len(group_words) - 1))
+                if text_align == "left":
+                    line_start_x = horizontal_padding
+                elif text_align == "right":
+                    line_start_x = video_width - horizontal_padding - total_width
+                else:
+                    line_start_x = (video_width - total_width) // 2
+
+                line_y = bar_y + line_idx * (line_box_height + _bar_row_spacing)
+
+                # Render each word in this group
+                word_x = line_start_x
+                for word_local_idx, (word_text, (ws, we), ww) in enumerate(
+                    zip(group_words, group_timings, group_widths)
+                ):
+                    word_box_width = max(1, ww + (KARAOKE_WORD_HORIZONTAL_PADDING_PX * 2))
+
+                    # ── Create white text on transparent black as a mask ──
+                    try:
+                        mask_clip = TextClip(
+                            text=word_text,
+                            font=processor.font_path,
+                            font_size=final_font_size,
+                            color="white",
+                            stroke_color=None,
+                            stroke_width=0,
+                            method="label",
+                        )
+                    except Exception:
+                        word_x += ww + space_width
+                        continue
+
+                    try:
+                        # Crop the base video to just this word's bounding box.
+                        # base_clip has dimensions video_width x video_height,
+                        # so positions are in the same coordinate space.
+                        word_abs_x = word_x + KARAOKE_WORD_HORIZONTAL_PADDING_PX
+                        word_abs_y = line_y
+
+                        crop_x1 = max(0, word_abs_x)
+                        crop_y1 = max(0, word_abs_y)
+                        crop_x2 = min(video_width, crop_x1 + word_box_width)
+                        crop_y2 = min(video_height, crop_y1 + line_box_height)
+                        crop_w = crop_x2 - crop_x1
+                        crop_h = crop_y2 - crop_y1
+
+                        if crop_w > 0 and crop_h > 0:
+                            # Sub-clip matching this word's timing, then crop spatial region
+                            video_crop = (
+                                base_clip
+                                .subclipped(segment_start, segment_start + segment_duration)
+                                .cropped(x1=crop_x1, y1=crop_y1, x2=crop_x2, y2=crop_y2)
+                                .resized((word_box_width, line_box_height))
+                            )
+
+                            # Apply text as mask — video shows through text shape only
+                            video_masked = video_crop.with_mask(mask_clip)
+                            video_layer = video_masked.with_position((word_x, line_y))
+                            subtitle_clips.append(video_layer)
+                    except Exception as e:
+                        logger.warning(f"video_through_text crop failed for '{word_text}': {e}")
+
+                    # Cleanup mask clip
+                    try:
+                        mask_clip.close()
+                    except Exception:
+                        pass
+
+                    word_x += ww + space_width
 
     elif subtitle_animation == "hormozi":
         # ═══════════════════════════════════════════════════════════════════
@@ -3709,6 +3841,7 @@ def create_optimized_clip(
                 font_color,
                 subtitle_style=subtitle_style,
                 word_timings_override=subtitle_word_timings,
+                base_clip=cropped_clip,
             )
             final_clips.extend(subtitle_clips)
 

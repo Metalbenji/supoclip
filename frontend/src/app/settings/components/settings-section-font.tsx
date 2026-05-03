@@ -11,6 +11,7 @@ import {
   type SubtitlePresetId,
   type TextAlignOption,
   type TextTransformOption,
+  type SubtitleAnimationOption,
 } from "@/lib/font-style-options";
 
 interface SettingsSectionFontProps {
@@ -35,6 +36,7 @@ interface SettingsSectionFontProps {
   shadowOffsetY: number;
   dimUnhighlighted: boolean;
   position: number;
+  animation: SubtitleAnimationOption;
   subtitlePreset: SubtitlePresetId;
   isUploadingFont: boolean;
   fontUploadMessage: string | null;
@@ -81,6 +83,157 @@ function applyTextTransform(text: string, mode: TextTransformOption): string {
 
 function formatTextOption(option: string): string {
   return option.charAt(0).toUpperCase() + option.slice(1);
+}
+
+/* ═══════════════════════════════════════════════════════════════════════
+   Video Through Text Preview
+   Shows a black bar with text cutouts revealing an animated gradient
+   (simulating video). JS cycles through words to show karaoke effect.
+   ═══════════════════════════════════════════════════════════════════════ */
+function VTTPreview({
+  previewText,
+  previewTextStyle,
+  previewTextX,
+  previewTextAnchor,
+  fontSize,
+  dimUnhighlighted,
+}: {
+  previewText: string;
+  previewTextStyle: CSSProperties;
+  previewTextX: string;
+  previewTextAnchor: "start" | "middle" | "end";
+  fontSize: number;
+  dimUnhighlighted: boolean;
+}) {
+  const containerRef = useRef<HTMLDivElement>(null);
+  const uid = useId().replace(/:/g, "");
+  const gradId = `vtt-grad-${uid}`;
+  const wordHoldMs = 700;
+
+  useEffect(() => {
+    const container = containerRef.current;
+    if (!container) return;
+
+    // The highlight overlay text element
+    const highlightText = container.querySelector<SVGTextElement>("text#vtt-highlight");
+    // The base text for getExtentOfChar measurements
+    const baseText = container.querySelector<SVGTextElement>("text#vtt-base");
+    if (!highlightText || !baseText) return;
+
+    const words = previewText.split(" ").filter(Boolean);
+    if (words.length === 0) return;
+
+    let cancelled = false;
+    let wordIdx = 0;
+
+    function getWordRanges(): [number, number][] {
+      const ranges: [number, number][] = [];
+      let charIdx = 0;
+      for (const word of words) {
+        ranges.push([charIdx, charIdx + word.length]);
+        charIdx += word.length + 1;
+      }
+      return ranges;
+    }
+
+    function showWord(idx: number) {
+      const ranges = getWordRanges();
+      if (idx >= ranges.length) return;
+      const [startChar, endChar] = ranges[idx];
+      try {
+        const startExt = baseText.getExtentOfChar(startChar);
+        const endExt = baseText.getExtentOfChar(Math.max(startChar, endChar - 1));
+
+        // Position highlight text at same baseline
+        highlightText.setAttribute("y", String(startExt.y));
+        highlightText.setAttribute("dominant-baseline", "auto");
+
+        // Position highlight text using absolute coordinates
+        const wordStr = previewText.slice(startChar, endChar);
+        highlightText.setAttribute("text-anchor", "start");
+        highlightText.setAttribute("x", String(Math.round(startExt.x)));
+
+        highlightText.textContent = wordStr;
+        highlightText.setAttribute("fill", `url(#${gradId})`);
+        highlightText.setAttribute("opacity", "1");
+      } catch {
+        highlightText.setAttribute("opacity", "0");
+      }
+    }
+
+    const timer = setTimeout(() => {
+      showWord(0);
+      wordIdx = 1;
+      function tick() {
+        if (cancelled) return;
+        showWord(wordIdx % words.length);
+        wordIdx++;
+        setTimeout(() => tick(), wordHoldMs);
+      }
+      tick();
+    }, 500);
+
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
+  }, [previewText, fontSize, letterSpacing, textTransform, fontFamily, fontWeight, previewTextAnchor, previewTextX, dimUnhighlighted, gradId, wordHoldMs]);
+
+  const svgH = Math.max(70, Math.ceil(fontSize * 1.6));
+
+  return (
+    <div
+      ref={containerRef}
+      className="w-full"
+      style={{ height: svgH + 16 }}
+    >
+      <svg
+        className="block w-full overflow-visible"
+        width="100%"
+        height={svgH}
+        role="img"
+        aria-label="video through text preview"
+      >
+        <defs>
+          {/* Animated gradient simulating video behind text */}
+          <linearGradient id={gradId} x1="0%" y1="0%" x2="100%" y2="100%">
+            <stop offset="0%" stopColor="#FF6B6B">
+              <animate attributeName="stop-color" values="#FF6B6B;#4ECDC4;#45B7D1;#FDE047;#FF6B6B" dur="4s" repeatCount="indefinite" />
+            </stop>
+            <stop offset="50%" stopColor="#4ECDC4">
+              <animate attributeName="stop-color" values="#4ECDC4;#FDE047;#FF6B6B;#45B7D1;#4ECDC4" dur="4s" repeatCount="indefinite" />
+            </stop>
+            <stop offset="100%" stopColor="#45B7D1">
+              <animate attributeName="stop-color" values="#45B7D1;#FF6B6B;#4ECDC4;#FDE047;#45B7D1" dur="4s" repeatCount="indefinite" />
+            </stop>
+          </linearGradient>
+        </defs>
+        {/* Black bar background */}
+        <rect x="0" y="0" width="100%" height={svgH} fill="#000000" rx="4" />
+        {/* Base text layer — dark on black bar, barely visible */}
+        <text
+          id="vtt-base"
+          x={previewTextX}
+          y={Math.round(svgH / 2)}
+          textAnchor={previewTextAnchor}
+          dominantBaseline="central"
+          style={previewTextStyle}
+          fill={dimUnhighlighted ? "#1a1a1a" : "#555555"}
+        >{previewText}</text>
+        {/* Highlight overlay — gradient fill positioned by JS */}
+        <text
+          id="vtt-highlight"
+          x={previewTextX}
+          y={Math.round(svgH / 2)}
+          textAnchor={previewTextAnchor}
+          dominantBaseline="central"
+          style={previewTextStyle}
+          fill={`url(#${gradId})`}
+          opacity="0"
+        />
+      </svg>
+    </div>
+  );
 }
 
 export function SettingsSectionFont({
@@ -839,6 +992,21 @@ export function SettingsSectionFont({
                   </g>
                 </svg>
               </div>
+            ) : animation === "video_through_text" ? (
+              /* ═══════════════════════════════════════════════════════════
+                 Video Through Text preview — black bar with text cutouts
+                 A black bar with an animated gradient behind the text to
+                 simulate video bleeding through. JS cycles highlight across
+                 words one at a time (karaoke style).
+                 ═══════════════════════════════════════════════════════════ */
+              <VTTPreview
+                previewText={previewText}
+                previewTextStyle={previewTextStyle}
+                previewTextX={previewTextX}
+                previewTextAnchor={previewTextAnchor}
+                fontSize={fontSize}
+                dimUnhighlighted={dimUnhighlighted}
+              />
             ) : animation === "hormozi" ? (
               /* ═══════════════════════════════════════════════════════════
                  Hormozi preview — yellow box behind each word
