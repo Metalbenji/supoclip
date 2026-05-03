@@ -367,8 +367,8 @@ export function SettingsSectionFont({
           <Slider
             value={[fontSize]}
             onValueChange={(value) => onFontSizeChange(value[0])}
-            max={48}
-            min={24}
+            max={128}
+            min={12}
             step={1}
             disabled={isSaving || isUploadingFont}
             className="w-full"

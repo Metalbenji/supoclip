@@ -258,7 +258,7 @@ export function isSubtitlePreset(value: unknown): value is SubtitlePresetId {
 }
 
 export function normalizeFontSize(size: number): number {
-  return normalizeInteger(size, DEFAULT_FONT_STYLE_OPTIONS.fontSize, 24, 48, 1);
+  return normalizeInteger(size, DEFAULT_FONT_STYLE_OPTIONS.fontSize, 12, 128, 1);
 }
 
 export function normalizeFontWeight(weight: unknown): number {
