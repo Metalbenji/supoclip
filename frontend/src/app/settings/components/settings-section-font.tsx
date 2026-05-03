@@ -246,9 +246,12 @@ export function SettingsSectionFont({
       try {
         const startExt = textEl.getExtentOfChar(startChar);
         const endExt = textEl.getExtentOfChar(Math.max(startChar, endChar - 1));
+        const padY = Math.max(4, fontSize * 0.15);
         const x = startExt.x - padX;
         const w = (endExt.x + endExt.width) - startExt.x + padX * 2;
-        return { x, w };
+        const y = startExt.y - padY;
+        const h = startExt.height + padY * 2;
+        return { x, y, w, h };
       } catch {
         return null;
       }
@@ -260,7 +263,9 @@ export function SettingsSectionFont({
       const wb = getWordBox(wordIdx % words.length);
       if (wb) {
         box.setAttribute("x", String(wb.x));
+        box.setAttribute("y", String(wb.y));
         box.setAttribute("width", String(wb.w));
+        box.setAttribute("height", String(wb.h));
         box.setAttribute("opacity", "1");
       }
       wordIdx++;
@@ -853,14 +858,14 @@ export function SettingsSectionFont({
                   <rect
                     id="hormozi-highlight-box"
                     x="0"
-                    y="50%"
+                    y="0"
                     width="0"
                     height={fontSize * 1.3}
                     rx={Math.max(4, fontSize * 0.06)}
                     ry={Math.max(4, fontSize * 0.06)}
                     fill={highlightColor}
                     opacity={0}
-                    style={{ transform: "translate(0, -50%)", transition: "all 150ms ease" }}
+                    style={{ transition: "all 150ms ease" }}
                   />
                   {shadowOpacity > 0 && (
                     <text
