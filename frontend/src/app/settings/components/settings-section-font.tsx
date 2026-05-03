@@ -1,4 +1,4 @@
-import { useId, type ChangeEvent, type CSSProperties } from "react";
+import { useId, useEffect, useRef, type ChangeEvent, type CSSProperties } from "react";
 import { Palette, Type } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -152,6 +152,59 @@ export function SettingsSectionFont({
   const previewSvgHeight = Math.max(70, Math.ceil(fontSize * lineHeight * 2.2));
   const previewStrokeStdDeviation = Math.max(0, strokeBlur / 2);
   const previewShadowStdDeviation = Math.max(0, shadowBlur / 2);
+
+  // Wheel preview: cycle through words one at a time with slide-in/hold/slide-out
+  const wheelContainerRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (animation !== "vertical_scroll") return;
+    const container = wheelContainerRef.current;
+    if (!container) return;
+    const texts = container.querySelectorAll<SVGTextElement>("text[id='wheel-preview-text']");
+    if (texts.length === 0) return;
+
+    let idx = 0;
+    let cancelled = false;
+    const SLIDE_IN = 400;   // ms
+    const HOLD = 800;       // ms
+    const SLIDE_OUT = 400;  // ms
+
+    function tick() {
+      if (cancelled) return;
+      const word = SCROLL_PREVIEW_WORDS[idx];
+      for (const el of texts) el.textContent = word;
+
+      // Slide in from above
+      container.style.transition = `transform ${SLIDE_IN}ms cubic-bezier(0.22, 0.61, 0.36, 1), opacity ${SLIDE_IN}ms ease`;
+      container.style.transform = "translateY(0)";
+      container.style.opacity = "1";
+
+      // After slide-in + hold, slide out below
+      setTimeout(() => {
+        if (cancelled) return;
+        container.style.transition = `transform ${SLIDE_OUT}ms ease-in, opacity ${SLIDE_OUT}ms ease`;
+        container.style.transform = "translateY(30px)";
+        container.style.opacity = "0";
+
+        // After slide-out, reset above and show next word
+        setTimeout(() => {
+          if (cancelled) return;
+          container.style.transition = "none";
+          container.style.transform = "translateY(-30px)";
+          idx = (idx + 1) % SCROLL_PREVIEW_WORDS.length;
+          // Small pause before next word slides in
+          setTimeout(() => tick(), 200);
+        }, SLIDE_OUT + 50);
+      }, SLIDE_IN + HOLD);
+    }
+
+    // Start above (invisible)
+    container.style.transition = "none";
+    container.style.transform = "translateY(-30px)";
+    container.style.opacity = "0";
+    setTimeout(() => tick(), 300);
+
+    return () => { cancelled = true; };
+  }, [animation]);
 
   return (
     <div className="space-y-6">
@@ -639,56 +692,56 @@ export function SettingsSectionFont({
                  then slides out below.  All absolutely positioned on same spot.
                  ═══════════════════════════════════════════════════════════ */
               <div
+                ref={wheelContainerRef}
                 className="w-full relative overflow-hidden"
-                style={{ height: Math.max(80, previewSvgHeight + 20) }}
+                style={{ height: Math.max(80, previewSvgHeight + 20), transform: "translateY(-30px)", opacity: 0 }}
               >
-                {SCROLL_PREVIEW_WORDS.map((word, i) => {
-                  const delay = 1.2 + i * 1.0;
-                  const totalDuration = 1.6;
-                  return (
-                    <div
-                      key={i}
-                      className="absolute inset-0 flex items-center justify-center"
-                      style={{
-                        animation: `wheelSpin ${totalDuration}s ease-in-out ${delay}s infinite`,
-                      }}
+                {/* Single slot — content swapped by JS timer */}
+                <div className="absolute inset-0 flex items-center justify-center">
+                  <svg
+                    className="block overflow-visible"
+                    height={previewSvgHeight}
+                    role="img"
+                    aria-label="wheel preview"
+                  >
+                    <defs>
+                      {shadowOpacity > 0 && (
+                        <filter id={`${previewShadowFilterId}-wheel`} x="-50%" y="-50%" width="200%" height="200%" colorInterpolationFilters="sRGB">
+                          <feOffset in="SourceAlpha" dx={shadowOffsetX} dy={shadowOffsetY} result="shadow-offset" />
+                          <feGaussianBlur in="shadow-offset" stdDeviation={previewShadowStdDeviation} result="shadow-blur" />
+                          <feFlood floodColor={shadowColor} floodOpacity={shadowOpacity} result="shadow-color" />
+                          <feComposite in="shadow-color" in2="shadow-blur" operator="in" result="shadow-only" />
+                        </filter>
+                      )}
+                      {strokeWidth > 0 && (
+                        <filter id={`${previewStrokeFilterId}-wheel`} x="-50%" y="-50%" width="200%" height="200%" colorInterpolationFilters="sRGB">
+                          <feMorphology in="SourceAlpha" operator="dilate" radius={strokeWidth} result="stroke-expanded" />
+                          <feComposite in="stroke-expanded" in2="SourceAlpha" operator="out" result="stroke-outer" />
+                          <feFlood floodColor={strokeColor} result="stroke-color" />
+                          <feComposite in="stroke-color" in2="stroke-outer" operator="in" result="stroke-only" />
+                          <feGaussianBlur in="stroke-only" stdDeviation={previewStrokeStdDeviation} result="stroke-final" />
+                        </filter>
+                      )}
+                    </defs>
+                    {shadowOpacity > 0 && (
+                      <text aria-hidden x={previewTextX} y="50%" textAnchor={previewTextAnchor} dominantBaseline="middle" style={previewTextStyle} fill="#FFFFFF" filter={`url(#${previewShadowFilterId}-wheel)`}>{SCROLL_PREVIEW_WORDS[0]}</text>
+                    )}
+                    {strokeWidth > 0 && (
+                      <text aria-hidden x={previewTextX} y="50%" textAnchor={previewTextAnchor} dominantBaseline="middle" style={previewTextStyle} fill="#FFFFFF" filter={`url(#${previewStrokeFilterId}-wheel)`}>{SCROLL_PREVIEW_WORDS[0]}</text>
+                    )}
+                    <text
+                      id="wheel-preview-text"
+                      x={previewTextX}
+                      y="50%"
+                      textAnchor={previewTextAnchor}
+                      dominantBaseline="middle"
+                      style={previewTextStyle}
+                      fill={highlightColor}
                     >
-                      <svg
-                        className="block overflow-visible"
-                        height={previewSvgHeight}
-                        role="img"
-                        aria-label={word}
-                      >
-                        <defs>
-                          {shadowOpacity > 0 && (
-                            <filter id={`${previewShadowFilterId}-wheel-${i}`} x="-50%" y="-50%" width="200%" height="200%" colorInterpolationFilters="sRGB">
-                              <feOffset in="SourceAlpha" dx={shadowOffsetX} dy={shadowOffsetY} result="shadow-offset" />
-                              <feGaussianBlur in="shadow-offset" stdDeviation={previewShadowStdDeviation} result="shadow-blur" />
-                              <feFlood floodColor={shadowColor} floodOpacity={shadowOpacity} result="shadow-color" />
-                              <feComposite in="shadow-color" in2="shadow-blur" operator="in" result="shadow-only" />
-                            </filter>
-                          )}
-                          {strokeWidth > 0 && (
-                            <filter id={`${previewStrokeFilterId}-wheel-${i}`} x="-50%" y="-50%" width="200%" height="200%" colorInterpolationFilters="sRGB">
-                              <feMorphology in="SourceAlpha" operator="dilate" radius={strokeWidth} result="stroke-expanded" />
-                              <feComposite in="stroke-expanded" in2="SourceAlpha" operator="out" result="stroke-outer" />
-                              <feFlood floodColor={strokeColor} result="stroke-color" />
-                              <feComposite in="stroke-color" in2="stroke-outer" operator="in" result="stroke-only" />
-                              <feGaussianBlur in="stroke-only" stdDeviation={previewStrokeStdDeviation} result="stroke-final" />
-                            </filter>
-                          )}
-                        </defs>
-                        {shadowOpacity > 0 && (
-                          <text aria-hidden x={previewTextX} y="50%" textAnchor={previewTextAnchor} dominantBaseline="middle" style={previewTextStyle} fill="#FFFFFF" filter={`url(#${previewShadowFilterId}-wheel-${i})`}>{word}</text>
-                        )}
-                        {strokeWidth > 0 && (
-                          <text aria-hidden x={previewTextX} y="50%" textAnchor={previewTextAnchor} dominantBaseline="middle" style={previewTextStyle} fill="#FFFFFF" filter={`url(#${previewStrokeFilterId}-wheel-${i})`}>{word}</text>
-                        )}
-                        <text x={previewTextX} y="50%" textAnchor={previewTextAnchor} dominantBaseline="middle" style={previewTextStyle} fill={highlightColor}>{word}</text>
-                      </svg>
-                    </div>
-                  );
-                })}
+                      {SCROLL_PREVIEW_WORDS[0]}
+                    </text>
+                  </svg>
+                </div>
               </div>
             ) : (
               /* Static preview */
