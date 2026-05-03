@@ -2722,6 +2722,8 @@ def _build_styled_word_layers(
     max_y: int,
     opacity_scale: float = 1.0,
     animated_y_start: Optional[int] = None,
+    wheel_slide_offset: Optional[int] = None,
+    wheel_hold_fraction: float = 0.5,
 ) -> List[TextClip]:
     if not text or duration <= 0 or box_width <= 0 or box_height <= 0:
         return []
@@ -2733,7 +2735,43 @@ def _build_styled_word_layers(
     # NOTE: MoviePy v2 calls self.pos(ct) where ct = t - self.start (clip-local
     # time starting at 0). So the lambda receives t=0 when the clip first appears.
     _is_animated = animated_y_start is not None and duration > 0
-    if _is_animated:
+    _is_wheel = wheel_slide_offset is not None and duration > 0
+    if _is_wheel:
+        # ── Wheel mode: slide in from above → hold at center → slide out below ──
+        _y_center = base_y
+        _y_offset = wheel_slide_offset
+        _hold_frac = max(0.1, min(0.9, wheel_hold_fraction))
+        _in_dur = duration * (1.0 - _hold_frac) / 2.0   # first half of non-hold time
+        _out_dur = _in_dur                                # symmetric
+
+        def _pos_fn(x: int, y: int):
+            """Wheel position: slide-in → hold → slide-out.
+
+            ``t`` is clip-local time.  Phase 1 (0→in_dur): slides from
+            center-offset above down to center.  Phase 2 (in_dur→duration-out_dur):
+                holds at center.  Phase 3 (duration-out_dur→duration): slides from
+            center down to center+offset below.
+            """
+            _t = max(0.0, min(float(t), float(duration)))
+            if _t <= _in_dur:
+                # Slide in from above
+                progress = min(1.0, _t / _in_dur) if _in_dur > 0 else 1.0
+                eased = 1.0 - (1.0 - progress) ** 3  # cubic ease-out
+                cy = int(_y_center - _y_offset + _y_offset * eased)
+            elif _t <= duration - _out_dur:
+                # Hold at center
+                cy = _y_center
+            else:
+                # Slide out below
+                out_t = _t - (duration - _out_dur)
+                progress = min(1.0, out_t / _out_dur) if _out_dur > 0 else 1.0
+                eased = progress ** 3  # cubic ease-in
+                cy = int(_y_center + _y_offset * eased)
+            return (x, max(0, min(cy, max_y)))
+
+        def _layer_pos(x: int, y: int):
+            return _pos_fn(max(0, min(x, max_x)), max(0, min(y, max_y)))
+    elif _is_animated:
         _y_from = animated_y_start
         _y_to = base_y
         # Fixed short duration for snappy, consistent animation.
@@ -3048,173 +3086,106 @@ def create_assemblyai_subtitles(
     if subtitle_animation == "vertical_scroll":
         # ═══════════════════════════════════════════════════════════════════
         # VERTICAL SCROLL — WHEEL STYLE
-        # 3 words stacked tightly.  Layout (top → bottom):
-        #   TOP:    next word     (dimmed)
-        #   CENTER: current word  (highlighted)
-        #   BOTTOM: previous word (dimmed)
+        # Each word independently slides down from above, pauses at center
+        # (highlighted), then slides out below.  All words are positioned at
+        # the same spot so they overlap — the staggered timing creates the
+        # rolling wheel effect.
         #
-        # When the next word starts being spoken the wheel scrolls DOWN —
-        # the old current drops to bottom, the next rolls from top into
-        # centre, and a brand-new next word appears at the top.
+        # Like a slot-machine / conveyor belt of words.
         # ═══════════════════════════════════════════════════════════════════
-        # Tight spacing: rows almost overlap for that wheel/drum look
-        LINE_SPACING = max(int(line_box_height * 0.75), line_box_height - 8)
-        DIMMED_OPACITY = 0.35
+        SLIDE_OFFSET = int(final_font_size * 0.85)  # pixels above/below center
+        PAD_SECONDS = 0.30                          # slide-in/out time on each side
 
         for idx, (word_text, (word_start, word_end)) in enumerate(
             zip(display_words_all, word_timings_all)
         ):
             word_width = word_widths_all[idx]
 
-            # When does this word stop being highlighted?
-            if idx < len(word_timings_all) - 1:
-                highlight_end = float(word_timings_all[idx + 1][0])
+            # Extend clip so the slide-in starts before word and slide-out
+            # finishes after word.  The word is "held" at center during
+            # its spoken duration.
+            clip_start = max(0.0, word_start - PAD_SECONDS)
+            clip_end = word_end + PAD_SECONDS
+            # Last word: hold a bit longer before sliding out
+            if idx == len(display_words_all) - 1:
+                clip_end = word_end + PAD_SECONDS * 1.5
+            clip_duration = max(0.1, clip_end - clip_start)
+
+            # hold_fraction: what fraction of clip_duration is the "hold at center"
+            hold_duration = word_end - word_start
+            hold_fraction = hold_duration / clip_duration if clip_duration > 0 else 0.5
+
+            word_box_width = max(1, word_width + (KARAOKE_WORD_HORIZONTAL_PADDING_PX * 2))
+
+            # Horizontal centering per word
+            if text_align == "left":
+                word_box_x = int(video_width * 0.04)
+            elif text_align == "right":
+                word_box_x = video_width - int(video_width * 0.04) - word_box_width
             else:
-                highlight_end = word_end
-            highlight_duration = max(0.01, highlight_end - word_start)
+                word_box_x = (video_width - word_box_width) // 2
+            word_box_max_x = max(0, video_width - word_box_width)
+            word_box_x = max(0, min(int(word_box_x), word_box_max_x))
 
-            # ── 3-row window ────────────────────────────────────────────
-            # row -1 (TOP):    next word     (dimmed)
-            # row  0 (CENTER): current word  (highlighted)
-            # row +1 (BOTTOM): previous word (dimmed)
-            row_contexts: List[Tuple[str, int, bool]] = []
+            # ── Dimmed base layer (full clip, always visible) ──────────
+            base_layers = _build_styled_word_layers(
+                text=word_text,
+                font_path=processor.font_path,
+                font_size=final_font_size,
+                fill_color=str(style["font_color"]),
+                stroke_color=str(style["stroke_color"]),
+                stroke_width=stroke_width,
+                stroke_blur=stroke_blur,
+                shadow_color=shadow_color,
+                shadow_opacity=shadow_opacity,
+                shadow_blur=shadow_blur,
+                shadow_offset_x=shadow_offset_x,
+                shadow_offset_y=shadow_offset_y,
+                font_weight=font_weight,
+                start=clip_start,
+                duration=clip_duration,
+                base_x=word_box_x,
+                base_y=base_y,
+                box_width=word_box_width,
+                box_height=line_box_height,
+                max_x=word_box_max_x,
+                max_y=max_y,
+                opacity_scale=0.35 if dim_unhighlighted else 1.0,
+                animated_y_start=None,
+                wheel_slide_offset=SLIDE_OFFSET,
+                wheel_hold_fraction=hold_fraction,
+            )
+            subtitle_clips.extend(base_layers)
 
-            # Next word — top of stack
-            if idx < len(display_words_all) - 1:
-                row_contexts.append((display_words_all[idx + 1], -1, False))
-
-            # Current word — center, highlighted
-            row_contexts.append((word_text, 0, True))
-
-            # Previous word — bottom of stack
-            if idx > 0:
-                row_contexts.append((display_words_all[idx - 1], 1, False))
-
-            # ── Render each row ─────────────────────────────────────────
-            for ctx_text, row_offset, is_highlight in row_contexts:
-                ctx_idx = idx + (row_offset * -1) if row_offset != 0 else idx  # -1→next(idx+1), +1→prev(idx-1)
-                ctx_word_width = word_widths_all[ctx_idx]
-
-                word_box_width = max(1, ctx_word_width + (KARAOKE_WORD_HORIZONTAL_PADDING_PX * 2))
-
-                # Horizontal centering per word
-                if text_align == "left":
-                    word_box_x = int(video_width * 0.04)
-                elif text_align == "right":
-                    word_box_x = video_width - int(video_width * 0.04) - word_box_width
-                else:
-                    word_box_x = (video_width - word_box_width) // 2
-                word_box_max_x = max(0, video_width - word_box_width)
-                word_box_x = max(0, min(int(word_box_x), word_box_max_x))
-
-                # Vertical position: row -1 = above, row 0 = center, row +1 = below
-                row_y = base_y + (row_offset * LINE_SPACING)
-                row_y = max(0, min(row_y, max_y))
-
-                # ── Wheel scroll animation ──────────────────────────────
-                # The wheel scrolls DOWN: new words enter from TOP, old words
-                # exit at BOTTOM.
-                #
-                # For the CURRENT (highlighted) word:
-                #   It was previously the "next" row (top).  Now it slides
-                #   DOWN from the top position into center.
-                #
-                # For the PREVIOUS word (bottom, dimmed):
-                #   It was previously the "current" (center).  Now it slides
-                #   DOWN from center to the bottom.
-                #
-                # For the NEXT word (top, dimmed):
-                #   It's brand new — slides DOWN into the top position from
-                #   further above.
-                anim_y_start = None
-
-                if is_highlight:
-                    # Highlighted center word
-                    clip_start_time = word_start
-                    clip_duration = highlight_duration
-                    if idx > 0:
-                        # Was previously the "next" (top row).  Scroll DOWN
-                        # from top into center.
-                        anim_y_start = base_y - LINE_SPACING
-                elif row_offset == -1:
-                    # Next word (top, dimmed)
-                    clip_start_time = word_start
-                    if idx < len(word_timings_all) - 1:
-                        clip_end_time = float(word_timings_all[idx + 1][0])
-                    else:
-                        clip_end_time = word_end
-                    clip_duration = max(0.01, clip_end_time - clip_start_time)
-                    # Brand-new word sliding in from above the top
-                    anim_y_start = base_y - LINE_SPACING * 2
-                else:
-                    # Previous word (bottom, dimmed)
-                    clip_start_time = word_start
-                    if idx < len(word_timings_all) - 1:
-                        clip_end_time = float(word_timings_all[idx + 1][0])
-                    else:
-                        clip_end_time = word_end
-                    clip_duration = max(0.01, clip_end_time - clip_start_time)
-                    if idx > 0:
-                        # Was previously the highlighted (center) word.
-                        # Scroll DOWN from center to bottom.
-                        anim_y_start = base_y
-
-                # ── Build dimmed base layer ─────────────────────────────
-                base_layers = _build_styled_word_layers(
-                    text=ctx_text,
-                    font_path=processor.font_path,
-                    font_size=final_font_size,
-                    fill_color=str(style["font_color"]),
-                    stroke_color=str(style["stroke_color"]),
-                    stroke_width=stroke_width,
-                    stroke_blur=stroke_blur,
-                    shadow_color=shadow_color,
-                    shadow_opacity=shadow_opacity,
-                    shadow_blur=shadow_blur,
-                    shadow_offset_x=shadow_offset_x,
-                    shadow_offset_y=shadow_offset_y,
-                    font_weight=font_weight,
-                    start=clip_start_time,
-                    duration=clip_duration,
-                    base_x=word_box_x,
-                    base_y=row_y,
-                    box_width=word_box_width,
-                    box_height=line_box_height,
-                    max_x=word_box_max_x,
-                    max_y=max_y,
-                    opacity_scale=DIMMED_OPACITY if dim_unhighlighted else 1.0,
-                    animated_y_start=anim_y_start,
-                )
-                subtitle_clips.extend(base_layers)
-
-                # ── Build highlight layer (center word only) ────────────
-                if is_highlight:
-                    hl_layers = _build_styled_word_layers(
-                        text=ctx_text,
-                        font_path=processor.font_path,
-                        font_size=final_font_size,
-                        fill_color=highlight_color,
-                        stroke_color=str(style["stroke_color"]),
-                        stroke_width=stroke_width,
-                        stroke_blur=stroke_blur,
-                        shadow_color=shadow_color,
-                        shadow_opacity=shadow_opacity,
-                        shadow_blur=shadow_blur,
-                        shadow_offset_x=shadow_offset_x,
-                        shadow_offset_y=shadow_offset_y,
-                        font_weight=font_weight,
-                        start=clip_start_time,
-                        duration=clip_duration,
-                        base_x=word_box_x,
-                        base_y=row_y,
-                        box_width=word_box_width,
-                        box_height=line_box_height,
-                        max_x=word_box_max_x,
-                        max_y=max_y,
-                        opacity_scale=1.0,
-                        animated_y_start=anim_y_start,
-                    )
-                    subtitle_clips.extend(hl_layers)
+            # ── Highlight layer (only during the spoken hold period) ────
+            highlight_layers = _build_styled_word_layers(
+                text=word_text,
+                font_path=processor.font_path,
+                font_size=final_font_size,
+                fill_color=highlight_color,
+                stroke_color=str(style["stroke_color"]),
+                stroke_width=stroke_width,
+                stroke_blur=stroke_blur,
+                shadow_color=shadow_color,
+                shadow_opacity=shadow_opacity,
+                shadow_blur=shadow_blur,
+                shadow_offset_x=shadow_offset_x,
+                shadow_offset_y=shadow_offset_y,
+                font_weight=font_weight,
+                start=clip_start,
+                duration=clip_duration,
+                base_x=word_box_x,
+                base_y=base_y,
+                box_width=word_box_width,
+                box_height=line_box_height,
+                max_x=word_box_max_x,
+                max_y=max_y,
+                opacity_scale=1.0,
+                animated_y_start=None,
+                wheel_slide_offset=SLIDE_OFFSET,
+                wheel_hold_fraction=hold_fraction,
+            )
+            subtitle_clips.extend(highlight_layers)
 
     else:
         # ═══════════════════════════════════════════════════════════════════
