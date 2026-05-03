@@ -209,84 +209,72 @@ export function SettingsSectionFont({
     return () => { cancelled = true; };
   }, [animation]);
 
-  // Hormozi preview: animate highlight box across each word
+  // Hormozi preview: slide highlight box across words using getExtentOfChar
   useEffect(() => {
     if (animation !== "hormozi") return;
     const container = hormoziContainerRef.current;
     if (!container) return;
-    const box = container.querySelector<SVGRectElement>("rect#hormozi-box");
-    const svg = container.querySelector<SVGSVGElement>("svg");
-    if (!box || !svg) return;
 
-    // Measure each word's x position within the SVG
-    const words = previewText.split(" ");
+    const box = container.querySelector<SVGRectElement>("rect#hormozi-highlight-box");
+    const textEl = container.querySelector<SVGTextElement>("text#hormozi-main-text:not([aria-hidden])");
+    if (!box || !textEl) return;
+
+    const words = previewText.split(" ").filter(Boolean);
     if (words.length === 0) return;
 
     let cancelled = false;
-    const WORD_HOLD = 700; // ms per word
+    const WORD_HOLD = 700;
+    const padX = Math.max(6, fontSize * 0.12);
 
-    function measureWordPositions() {
-      // Use the text element to get character positions
-      const textEl = svg.querySelector<SVGTextElement>("text:not([aria-hidden])");
-      if (!textEl) return [];
-      const positions: { x: number; width: number }[] = [];
-      // Simple estimation: measure each word as a fraction of total
-      try {
-        const totalLen = textEl.getComputedTextLength();
-        const spaceCount = Math.max(0, words.length - 1);
-        const spaceLen = totalLen > 0 ? (spaceCount * fontSize * 0.3) / Math.max(1, totalLen) : 0;
-        let cumWidth = 0;
-        for (const word of words) {
-          const wordLen = totalLen > 0
-            ? (totalLen * (word.length / previewText.length)) - (spaceLen / words.length)
-            : fontSize * word.length;
-          const svgRect = svg.getBoundingClientRect();
-          const textX = previewTextAnchor === "middle" ? svgRect.width / 2
-            : previewTextAnchor === "end" ? svgRect.width * 0.96
-            : svgRect.width * 0.04;
-          let startX: number;
-          if (previewTextAnchor === "middle") {
-            startX = textX - totalLen / 2 + cumWidth;
-          } else if (previewTextAnchor === "end") {
-            startX = textX - totalLen + cumWidth;
-          } else {
-            startX = textX + cumWidth;
-          }
-          positions.push({ x: startX, width: Math.max(wordLen, fontSize * 0.5) });
-          cumWidth += wordLen + fontSize * 0.3;
-        }
-      } catch {
-        // Fallback: equal spacing
-        const totalLen = fontSize * words.join(" ").length;
-        let cumWidth = 0;
-        for (const word of words) {
-          const wordLen = fontSize * word.length;
-          positions.push({ x: cumWidth, width: wordLen });
-          cumWidth += wordLen + fontSize * 0.3;
-        }
+    // Build char index ranges for each word
+    function getWordRanges() {
+      const ranges: [number, number][] = [];
+      let charIdx = 0;
+      for (const word of words) {
+        const start = charIdx;
+        const end = charIdx + word.length;
+        ranges.push([start, end]);
+        charIdx = end + 1; // +1 for space
       }
-      return positions;
+      return ranges;
+    }
+
+    function getWordBox(rangeIdx: number) {
+      const ranges = getWordRanges();
+      if (rangeIdx >= ranges.length) return null;
+      const [startChar, endChar] = ranges[rangeIdx];
+      try {
+        const startExt = textEl.getExtentOfChar(startChar);
+        const endExt = textEl.getExtentOfChar(Math.max(startChar, endChar - 1));
+        const x = startExt.x - padX;
+        const w = (endExt.x + endExt.width) - startExt.x + padX * 2;
+        return { x, w };
+      } catch {
+        return null;
+      }
     }
 
     let wordIdx = 0;
-    const positions = measureWordPositions();
-
-    function highlightWord() {
-      if (cancelled || positions.length === 0) return;
-      const pos = positions[wordIdx % positions.length];
-      box.setAttribute("x", String(pos.x - 6));
-      box.setAttribute("width", String(pos.width + 12));
-      box.setAttribute("opacity", "1");
-      box.style.transition = "all 200ms ease";
-
+    function highlightNext() {
+      if (cancelled) return;
+      const wb = getWordBox(wordIdx % words.length);
+      if (wb) {
+        box.setAttribute("x", String(wb.x));
+        box.setAttribute("width", String(wb.w));
+        box.setAttribute("opacity", "1");
+      }
       wordIdx++;
-      const timer = setTimeout(() => highlightWord(), WORD_HOLD);
-      return () => clearTimeout(timer);
+      setTimeout(() => highlightNext(), WORD_HOLD);
     }
 
-    const startTimer = setTimeout(() => highlightWord(), 500);
-    return () => { cancelled = true; clearTimeout(startTimer); };
-  }, [animation, previewText, fontSize, previewTextAnchor, highlightColor]);
+    // Wait for font rendering
+    const timer = setTimeout(() => {
+      box.setAttribute("opacity", "0");
+      highlightNext();
+    }, 500);
+
+    return () => { cancelled = true; clearTimeout(timer); };
+  }, [animation, previewText, fontSize, letterSpacing, textTransform, fontFamily, fontWeight, previewTextAnchor, previewTextX]);
 
   return (
     <div className="space-y-6">
@@ -827,8 +815,9 @@ export function SettingsSectionFont({
               </div>
             ) : animation === "hormozi" ? (
               /* ═══════════════════════════════════════════════════════════
-                 Hormozi preview — yellow box highlights each word
-                 Text stays white, a colored box slides behind each word
+                 Hormozi preview — yellow box behind each word
+                 Full text rendered normally. JS measures word positions
+                 via getExtentOfChar and sizes/moves a single rect.
                  ═══════════════════════════════════════════════════════════ */
               <div
                 ref={hormoziContainerRef}
@@ -860,26 +849,52 @@ export function SettingsSectionFont({
                       </filter>
                     )}
                   </defs>
-                  {/* Highlight box behind active word */}
+                  {/* Highlight box — positioned by JS */}
                   <rect
-                    id="hormozi-box"
-                    x={previewTextX}
+                    id="hormozi-highlight-box"
+                    x="0"
                     y="50%"
                     width="0"
-                    height={previewSvgHeight * 0.7}
-                    rx={4}
-                    ry={4}
+                    height={fontSize * 1.3}
+                    rx={Math.max(4, fontSize * 0.06)}
+                    ry={Math.max(4, fontSize * 0.06)}
                     fill={highlightColor}
                     opacity={0}
-                    style={{ transform: "translateY(-50%)" }}
+                    style={{ transform: "translate(0, -50%)", transition: "all 150ms ease" }}
                   />
                   {shadowOpacity > 0 && (
-                    <text aria-hidden x={previewTextX} y="50%" textAnchor={previewTextAnchor} dominantBaseline="middle" style={previewTextStyle} fill="#FFFFFF" filter={`url(#${previewShadowFilterId}-hormozi)`}>{previewText}</text>
+                    <text
+                      id="hormozi-main-text"
+                      x={previewTextX}
+                      y="50%"
+                      textAnchor={previewTextAnchor}
+                      dominantBaseline="middle"
+                      style={previewTextStyle}
+                      fill="#FFFFFF"
+                      filter={`url(#${previewShadowFilterId}-hormozi)`}
+                    >{previewText}</text>
                   )}
                   {strokeWidth > 0 && (
-                    <text aria-hidden x={previewTextX} y="50%" textAnchor={previewTextAnchor} dominantBaseline="middle" style={previewTextStyle} fill="#FFFFFF" filter={`url(#${previewStrokeFilterId}-hormozi)`}>{previewText}</text>
+                    <text
+                      aria-hidden
+                      x={previewTextX}
+                      y="50%"
+                      textAnchor={previewTextAnchor}
+                      dominantBaseline="middle"
+                      style={previewTextStyle}
+                      fill="#FFFFFF"
+                      filter={`url(#${previewStrokeFilterId}-hormozi)`}
+                    >{previewText}</text>
                   )}
-                  <text x={previewTextX} y="50%" textAnchor={previewTextAnchor} dominantBaseline="middle" style={previewTextStyle} fill={fontColor}>{previewText}</text>
+                  <text
+                    id="hormozi-main-text"
+                    x={previewTextX}
+                    y="50%"
+                    textAnchor={previewTextAnchor}
+                    dominantBaseline="middle"
+                    style={previewTextStyle}
+                    fill={fontColor}
+                  >{previewText}</text>
                 </svg>
               </div>
             ) : (
