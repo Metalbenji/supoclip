@@ -1,41 +1,29 @@
-import { betterAuth } from "better-auth";
-import { prismaAdapter } from "better-auth/adapters/prisma";
-import { nextCookies } from "better-auth/next-js";
-import prisma from "./prisma";
+// Auth bypassed for single-user setup — no sign-in required.
 
-const baseURL =
-  process.env.BETTER_AUTH_URL ||
-  process.env.NEXT_PUBLIC_APP_URL ||
-  "http://localhost:3000";
+const _bypassUser = {
+  id: "00000000-0000-0000-0000-000000000001",
+  name: "Admin",
+  email: "admin@localhost",
+  emailVerified: true,
+  image: null,
+  createdAt: new Date(),
+  updatedAt: new Date(),
+  first_name: null,
+  last_name: null,
+};
 
-const trustedOrigins = new Set<string>([
-  baseURL,
-  "http://localhost:3000",
-  "http://127.0.0.1:3000",
-  "http://[::1]:3000",
-]);
-
-const extraTrustedOrigins = (process.env.BETTER_AUTH_TRUSTED_ORIGINS || "")
-  .split(",")
-  .map((origin) => origin.trim())
-  .filter(Boolean);
-
-for (const origin of extraTrustedOrigins) {
-  trustedOrigins.add(origin);
-}
-
-export const auth = betterAuth({
-  baseURL,
-  trustedOrigins: [...trustedOrigins],
-  database: prismaAdapter(prisma, {
-    provider: "postgresql",
-  }),
-  emailAndPassword: {
-    enabled: true,
+export const auth = {
+  api: {
+    getSession: async () => ({
+      session: { token: "bypass", userId: _bypassUser.id },
+      user: _bypassUser,
+    }),
+    // Stub any other methods that might be called
+    signIn: { email: async () => ({}), social: async () => ({}) },
+    signUp: { email: async () => ({}) },
+    signOut: async () => ({}),
   },
-  plugins: [
-    nextCookies(), // Enable Next.js cookie handling
-  ],
-});
+  $Infer: { Session: {} as any },
+} as any;
 
-export type Session = typeof auth.$Infer.Session;
+export type Session = any;
