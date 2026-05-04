@@ -3460,8 +3460,10 @@ def create_assemblyai_subtitles(
         # standard karaoke, but highlighting is a colored rectangle behind
         # the active word rather than a fill-color overlay.
         # ═══════════════════════════════════════════════════════════════════
-        BOX_PADDING_X = int(final_font_size * 0.15)
-        BOX_PADDING_Y = int(final_font_size * 0.12)
+        # Highlight box padding must match the text box padding so the
+        # box aligns exactly with the word text behind it.
+        BOX_PADDING_X = KARAOKE_WORD_HORIZONTAL_PADDING_PX
+        BOX_PADDING_Y = int(final_font_size * 0.08)
 
         # Convert highlight hex to RGB tuple for ColorClip
         _hl_hex = highlight_color.lstrip("#")
@@ -3499,7 +3501,10 @@ def create_assemblyai_subtitles(
             max_line_start = max(0, video_width - total_width)
             line_start_x = max(0, min(int(line_start_x), max_line_start))
 
-            # Render ALL words as white text (full segment duration)
+            # Render ALL words as white text with yellow highlight boxes.
+            # Boxes must be added to subtitle_clips BEFORE the corresponding
+            # text so the text renders on top of the box (moviepy layers
+            # back-to-front in list order).
             current_x = line_start_x
             for word_index, (w_text, w_width) in enumerate(
                 zip(word_group_words, word_group_widths)
@@ -3509,6 +3514,28 @@ def create_assemblyai_subtitles(
                 word_box_max_x = max(0, video_width - word_box_width)
                 word_box_x = max(0, min(word_box_x, word_box_max_x))
 
+                # ── Highlight BOX behind the active word ─────────
+                w_start = float(word_group_timings[word_index][0])
+                w_end = float(word_group_timings[word_index][1])
+                if word_index < len(word_group_timings) - 1:
+                    box_end = max(w_end, float(word_group_timings[word_index + 1][0]))
+                else:
+                    box_end = max(w_end, segment_end)
+                box_duration = max(0.01, box_end - w_start)
+
+                box_w = w_width + (BOX_PADDING_X * 2)
+                box_h = line_box_height
+                box_x = current_x - BOX_PADDING_X
+                box_y = base_y
+
+                box_clip = (ColorClip(size=(box_w, box_h), color=(_hl_r, _hl_g, _hl_b))
+                            .with_start(w_start)
+                            .with_duration(box_duration)
+                            .with_position((max(0, box_x), max(0, box_y)))
+                            .with_opacity(1.0))
+                subtitle_clips.append(box_clip)
+
+                # ── Text layer on top ─────────
                 text_layers = _build_styled_word_layers(
                     text=w_text,
                     font_path=processor.font_path,
@@ -3535,27 +3562,6 @@ def create_assemblyai_subtitles(
                     animated_y_start=None,
                 )
                 subtitle_clips.extend(text_layers)
-
-                # ── Yellow highlight BOX behind the active word ─────────
-                w_start = float(word_group_timings[word_index][0])
-                w_end = float(word_group_timings[word_index][1])
-                if word_index < len(word_group_timings) - 1:
-                    box_end = max(w_end, float(word_group_timings[word_index + 1][0]))
-                else:
-                    box_end = max(w_end, segment_end)
-                box_duration = max(0.01, box_end - w_start)
-
-                box_w = w_width + (BOX_PADDING_X * 2)
-                box_h = line_box_height + (BOX_PADDING_Y * 2)
-                box_x = current_x - BOX_PADDING_X
-                box_y = base_y - BOX_PADDING_Y
-
-                box_clip = (ColorClip(size=(box_w, box_h), color=(_hl_r, _hl_g, _hl_b))
-                            .with_start(w_start)
-                            .with_duration(box_duration)
-                            .with_position((max(0, box_x), max(0, box_y)))
-                            .with_opacity(1.0))
-                subtitle_clips.append(box_clip)
 
                 current_x += w_width + space_width
 
