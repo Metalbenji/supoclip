@@ -3463,7 +3463,11 @@ def create_assemblyai_subtitles(
         # Highlight box padding must match the text box padding so the
         # box aligns exactly with the word text behind it.
         BOX_PADDING_X = KARAOKE_WORD_HORIZONTAL_PADDING_PX
-        BOX_PADDING_Y = int(final_font_size * 0.08)
+        # Vertical padding for the highlight box around the actual text.
+        # MoviePy's method="caption" vertically centers text within the
+        # clip, so we must account for the centering offset when
+        # positioning the box to wrap tightly around the text.
+        BOX_PADDING_Y = max(4, int(final_font_size * 0.10))
 
         # Convert highlight hex to RGB tuple for ColorClip
         _hl_hex = highlight_color.lstrip("#")
@@ -3523,15 +3527,29 @@ def create_assemblyai_subtitles(
                     box_end = max(w_end, segment_end)
                 box_duration = max(0.01, box_end - w_start)
 
+                # ── Calculate box to wrap tightly around the text ──
+                # MoviePy's caption mode vertically centers text within
+                # the clip of size (word_box_width, line_box_height).
+                # We compute the vertical centering offset so the box
+                # sits around the *actual text* rather than the full clip.
+                _vert_center_offset = max(0, (line_box_height - text_height) // 2)
+
                 box_w = w_width + (BOX_PADDING_X * 2)
-                box_h = line_box_height
+                box_h = text_height + (BOX_PADDING_Y * 2)
                 box_x = current_x - BOX_PADDING_X
-                box_y = base_y
+                # Start the box at the same vertical position as the
+                # centered text, minus a small padding above.
+                box_y = base_y + _vert_center_offset - BOX_PADDING_Y
+                # Apply the same max_y clamping as the text layers.
+                _box_max_y = max(0, video_height - box_h)
+                box_y = max(0, min(box_y, _box_max_y))
+                _box_max_x = max(0, video_width - box_w)
+                box_x = max(0, min(box_x, _box_max_x))
 
                 box_clip = (ColorClip(size=(box_w, box_h), color=(_hl_r, _hl_g, _hl_b))
                             .with_start(w_start)
                             .with_duration(box_duration)
-                            .with_position((max(0, box_x), max(0, box_y)))
+                            .with_position((box_x, box_y))
                             .with_opacity(1.0))
                 subtitle_clips.append(box_clip)
 
