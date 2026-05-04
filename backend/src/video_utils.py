@@ -3402,14 +3402,18 @@ def create_assemblyai_subtitles(
 
                     # ── Create white text on transparent black as a mask ──
                     try:
-                        mask_clip = TextClip(
-                            text=word_text,
-                            font=processor.font_path,
-                            font_size=final_font_size,
-                            color="white",
-                            stroke_color=None,
-                            stroke_width=0,
-                            method="label",
+                        mask_clip = (
+                            TextClip(
+                                text=word_text,
+                                font=processor.font_path,
+                                font_size=final_font_size,
+                                color="white",
+                                stroke_color=None,
+                                stroke_width=0,
+                                method="caption",
+                                size=(word_box_width, line_box_height),
+                            )
+                            .with_duration(segment_duration)
                         )
                     except Exception:
                         word_x += ww + space_width
@@ -3464,10 +3468,11 @@ def create_assemblyai_subtitles(
         # box aligns exactly with the word text behind it.
         BOX_PADDING_X = KARAOKE_WORD_HORIZONTAL_PADDING_PX
         # Vertical padding for the highlight box around the actual text.
-        # MoviePy's method="caption" vertically centers text within the
-        # clip, so we must account for the centering offset when
-        # positioning the box to wrap tightly around the text.
-        BOX_PADDING_Y = max(4, int(final_font_size * 0.10))
+        # Must account for stroke width, stroke blur, descenders, and
+        # the vertical centering offset of MoviePy's caption mode.
+        # Use the same effect padding as line_box_height so the box
+        # fully wraps the rendered text including stroke/blur/descenders.
+        BOX_PADDING_Y = max(KARAOKE_WORD_VERTICAL_PADDING_PX, top_effect_padding, bottom_effect_padding)
 
         # Convert highlight hex to RGB tuple for ColorClip
         _hl_hex = highlight_color.lstrip("#")
