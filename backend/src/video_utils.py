@@ -3457,8 +3457,17 @@ def create_assemblyai_subtitles(
                                 .resized((word_box_width, line_box_height))
                             )
 
-                            # Apply text as mask — video shows through text shape only
-                            video_masked = video_crop.with_mask(mask_clip)
+                            # Apply text as mask — video shows through text shape only.
+                            # CRITICAL: Use mask_clip.mask (the 2D alpha-channel ImageClip)
+                            # rather than mask_clip itself.  A TextClip with transparent=True
+                            # renders HxWx3 RGB frames, which crashes MoviePy's compose_mask()
+                            # when it tries: clip_h, clip_w = clip_mask.shape  → 3 values, not 2.
+                            # The .mask attribute is the proper 2D grayscale mask extracted
+                            # from the alpha channel by ImageClip.__init__.
+                            actual_mask = getattr(mask_clip, "mask", None)
+                            if actual_mask is None:
+                                actual_mask = mask_clip
+                            video_masked = video_crop.with_mask(actual_mask)
                             video_layer = video_masked.with_start(segment_start).with_position((word_x, line_y))
                             subtitle_clips.append(video_layer)
                     except Exception as e:
