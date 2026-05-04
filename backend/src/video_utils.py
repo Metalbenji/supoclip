@@ -3351,7 +3351,7 @@ def create_assemblyai_subtitles(
 
         # Full-duration black bar behind everything
         if relevant_words:
-            _bar_start = float(relevant_words[0]["start"]) - 0.3
+            _bar_start = max(0.0, float(relevant_words[0]["start"]) - 0.3)
             _bar_end = float(relevant_words[-1]["end"]) + 0.3
         else:
             _bar_start = 0.0
@@ -3372,6 +3372,7 @@ def create_assemblyai_subtitles(
         if base_clip is None:
             logger.warning("video_through_text requires base_clip but it was not provided")
         else:
+            _base_duration = getattr(base_clip, 'duration', None) or 0.0
             for line_idx, group_indices in enumerate(word_groups):
                 group_words = [display_words_all[i] for i in group_indices]
                 group_timings = [word_timings_all[i] for i in group_indices]
@@ -3381,7 +3382,16 @@ def create_assemblyai_subtitles(
 
                 segment_start = float(group_timings[0][0])
                 segment_end = float(group_timings[-1][1])
+                # Clamp segment_end so subclipped() never exceeds base_clip duration
+                if _base_duration > 0 and segment_end > _base_duration:
+                    segment_end = _base_duration
                 segment_duration = max(0.1, segment_end - segment_start)
+                if segment_start >= _base_duration > 0:
+                    logger.warning(
+                        "video_through_text: skipping line %d, segment_start=%.2fs >= base_clip duration=%.2fs",
+                        line_idx, segment_start, _base_duration,
+                    )
+                    continue
 
                 total_width = sum(group_widths) + (space_width * max(0, len(group_words) - 1))
                 if text_align == "left":
@@ -3401,6 +3411,7 @@ def create_assemblyai_subtitles(
                     word_box_width = max(1, ww + (KARAOKE_WORD_HORIZONTAL_PADDING_PX * 2))
 
                     # ── Create white text on transparent black as a mask ──
+                    mask_clip = None
                     try:
                         mask_clip = (
                             TextClip(
@@ -3415,10 +3426,14 @@ def create_assemblyai_subtitles(
                             )
                             .with_duration(segment_duration)
                         )
-                    except Exception:
+                    except Exception as te:
+                        logger.warning(
+                            "video_through_text: TextClip failed for word '%s': %s", word_text, te
+                        )
                         word_x += ww + space_width
                         continue
 
+                    video_crop = None
                     try:
                         # Crop the base video to just this word's bounding box.
                         # base_clip has dimensions video_width x video_height,
@@ -3444,16 +3459,21 @@ def create_assemblyai_subtitles(
 
                             # Apply text as mask — video shows through text shape only
                             video_masked = video_crop.with_mask(mask_clip)
-                            video_layer = video_masked.with_position((word_x, line_y))
+                            video_layer = video_masked.with_start(segment_start).with_position((word_x, line_y))
                             subtitle_clips.append(video_layer)
                     except Exception as e:
-                        logger.warning(f"video_through_text crop failed for '{word_text}': {e}")
-
-                    # Cleanup mask clip
-                    try:
-                        mask_clip.close()
-                    except Exception:
-                        pass
+                        logger.warning(
+                            "video_through_text crop/mask failed for '%s' at (%.1fs-%.1fs): %s",
+                            word_text, segment_start, segment_start + segment_duration, e,
+                        )
+                    finally:
+                        # Cleanup intermediate clips to avoid memory buildup
+                        for _clip in (video_crop, mask_clip):
+                            if _clip is not None:
+                                try:
+                                    _clip.close()
+                                except Exception:
+                                    pass
 
                     word_x += ww + space_width
 
@@ -3966,9 +3986,10 @@ def create_optimized_clip(
         return True
 
     except Exception as e:
-        logger.error(f"Failed to create clip: {e}")
+        _anim_label = str(subtitle_style.get("animation", "none")) if isinstance(subtitle_style, dict) else "unknown"
+        logger.error(f"Failed to create clip (animation={_anim_label}): {e}", exc_info=True)
         if error_collector is not None:
-            error_collector.append(str(e))
+            error_collector.append(f"[{_anim_label}] {e}")
         return False
 
 def create_clips_from_segments(
