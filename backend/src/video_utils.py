@@ -3372,10 +3372,15 @@ def create_assemblyai_subtitles(
         # We need the cropped video as source for the video-through-text mask.
         # base_clip is the same cropped_clip used in the final composition,
         # so pixel positions align exactly.
+        # IMPORTANT: Use a copy of base_clip to avoid sharing the underlying
+        # ffmpeg reader with the base video layer in the composite. Without
+        # this, seeking in the copy corrupts the shared reader state, causing
+        # 'NoneType has no attribute stdout' during rendering.
         if base_clip is None:
             logger.warning("video_through_text requires base_clip but it was not provided")
         else:
-            _base_duration = getattr(base_clip, 'duration', None) or 0.0
+            vtt_base_clip = base_clip.copy()
+            _base_duration = getattr(vtt_base_clip, 'duration', None) or 0.0
             for line_idx, group_indices in enumerate(word_groups):
                 group_words = [display_words_all[i] for i in group_indices]
                 group_timings = [word_timings_all[i] for i in group_indices]
@@ -3385,13 +3390,13 @@ def create_assemblyai_subtitles(
 
                 segment_start = float(group_timings[0][0])
                 segment_end = float(group_timings[-1][1])
-                # Clamp segment_end so subclipped() never exceeds base_clip duration
+                # Clamp segment_end so subclipped() never exceeds vtt_base_clip duration
                 if _base_duration > 0 and segment_end > _base_duration:
                     segment_end = _base_duration
                 segment_duration = max(0.1, segment_end - segment_start)
                 if segment_start >= _base_duration > 0:
                     logger.warning(
-                        "video_through_text: skipping line %d, segment_start=%.2fs >= base_clip duration=%.2fs",
+                        "video_through_text: skipping line %d, segment_start=%.2fs >= vtt_base_clip duration=%.2fs",
                         line_idx, segment_start, _base_duration,
                     )
                     continue
@@ -3456,7 +3461,7 @@ def create_assemblyai_subtitles(
 
                     if w_start >= _base_duration:
                         logger.warning(
-                            "video_through_text: skipping word '%s', w_start=%.2fs >= base_clip duration=%.2fs",
+                            "video_through_text: skipping word '%s', w_start=%.2fs >= vtt_base_clip duration=%.2fs",
                             word_text, w_start, _base_duration,
                         )
                         word_x += ww + space_width
@@ -3499,7 +3504,7 @@ def create_assemblyai_subtitles(
                         try:
                             # Sub-clip matching this word's timing, then crop spatial region
                             video_crop = (
-                                base_clip
+                                vtt_base_clip
                                 .subclipped(w_start, w_start + w_duration)
                                 .cropped(x1=crop_x1, y1=crop_y1, x2=crop_x2, y2=crop_y2)
                                 .resized((word_box_width, line_box_height))
@@ -4035,8 +4040,10 @@ def create_optimized_clip(
         return True
 
     except Exception as e:
+        import traceback as _tb
         _anim_label = str(subtitle_style.get("animation", "none")) if isinstance(subtitle_style, dict) else "unknown"
-        logger.error(f"Failed to create clip (animation={_anim_label}): {e}", exc_info=True)
+        _full_trace = _tb.format_exc()
+        logger.error(f"Failed to create clip (animation={_anim_label}): {e}\n{_full_trace}")
         if error_collector is not None:
             error_collector.append(f"[{_anim_label}] {e}")
         return False
