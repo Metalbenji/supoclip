@@ -3435,12 +3435,6 @@ def create_assemblyai_subtitles(
                             "video_through_text: dim TextClip failed for word '%s': %s",
                             word_text, te,
                         )
-                    finally:
-                        if dim_clip is not None:
-                            try:
-                                dim_clip.close()
-                            except Exception:
-                                pass
                     word_x += ww + space_width
 
                 # ── Pass 2: per-word video-through-text layers (karaoke timing) ──
