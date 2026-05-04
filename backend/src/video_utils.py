@@ -3447,13 +3447,22 @@ def create_assemblyai_subtitles(
                     # Per-word duration extends to the next word's start
                     # (or segment_end for the last word) for karaoke effect.
                     w_start = float(ws)
+                    w_start = max(0.0, w_start)
                     if word_local_idx < len(group_timings) - 1:
-                        w_duration = max(0.01, float(group_timings[word_local_idx + 1][0]) - w_start)
+                        w_end = min(_base_duration, float(group_timings[word_local_idx + 1][0]))
                     else:
-                        w_duration = max(0.01, segment_end - w_start)
+                        w_end = min(_base_duration, segment_end)
+                    w_duration = max(0.01, w_end - w_start)
+
+                    if w_start >= _base_duration:
+                        logger.warning(
+                            "video_through_text: skipping word '%s', w_start=%.2fs >= base_clip duration=%.2fs",
+                            word_text, w_start, _base_duration,
+                        )
+                        word_x += ww + space_width
+                        continue
 
                     # ── Create white text on transparent black as a mask ──
-                    mask_clip = None
                     try:
                         mask_clip = (
                             TextClip(
@@ -3476,19 +3485,18 @@ def create_assemblyai_subtitles(
                         word_x += ww + space_width
                         continue
 
-                    video_crop = None
-                    try:
-                        # Crop the base video to just this word's bounding box.
-                        # Use word_x directly (not word_abs_x) so the crop
-                        # aligns 1:1 with the caption-mode TextClip mask.
-                        crop_x1 = max(0, word_x)
-                        crop_y1 = max(0, line_y)
-                        crop_x2 = min(video_width, crop_x1 + word_box_width)
-                        crop_y2 = min(video_height, crop_y1 + line_box_height)
-                        crop_w = crop_x2 - crop_x1
-                        crop_h = crop_y2 - crop_y1
+                    # Crop the base video to just this word's bounding box.
+                    # Use word_x directly (not word_abs_x) so the crop
+                    # aligns 1:1 with the caption-mode TextClip mask.
+                    crop_x1 = max(0, word_x)
+                    crop_y1 = max(0, line_y)
+                    crop_x2 = min(video_width, crop_x1 + word_box_width)
+                    crop_y2 = min(video_height, crop_y1 + line_box_height)
+                    crop_w = crop_x2 - crop_x1
+                    crop_h = crop_y2 - crop_y1
 
-                        if crop_w > 0 and crop_h > 0:
+                    if crop_w > 0 and crop_h > 0:
+                        try:
                             # Sub-clip matching this word's timing, then crop spatial region
                             video_crop = (
                                 base_clip
@@ -3510,19 +3518,11 @@ def create_assemblyai_subtitles(
                             video_masked = video_crop.with_mask(actual_mask)
                             video_layer = video_masked.with_start(w_start).with_position((word_x, line_y))
                             subtitle_clips.append(video_layer)
-                    except Exception as e:
-                        logger.warning(
-                            "video_through_text crop/mask failed for '%s' at (%.1fs-%.1fs): %s",
-                            word_text, w_start, w_start + w_duration, e,
-                        )
-                    finally:
-                        # Cleanup intermediate clips to avoid memory buildup
-                        for _clip in (video_crop, mask_clip):
-                            if _clip is not None:
-                                try:
-                                    _clip.close()
-                                except Exception:
-                                    pass
+                        except Exception as e:
+                            logger.warning(
+                                "video_through_text crop/mask failed for '%s' at (%.1fs-%.1fs): %s",
+                                word_text, w_start, w_start + w_duration, e,
+                            )
 
                     word_x += ww + space_width
 
