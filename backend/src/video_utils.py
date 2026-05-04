@@ -2700,8 +2700,9 @@ def _compute_vertical_effect_padding(
     Returns (top_padding_px, bottom_padding_px).
     """
     # Descenders vary per font; keep a small proportional guard to prevent hard clipping.
-    descender_guard = max(2, int(round(font_size * 0.12)))
-    stroke_guard = max(0, int(round(stroke_width + (stroke_blur * 1.5))))
+    descender_guard = max(4, int(round(font_size * 0.25)))
+    soft_expansion = max(1, int(round(stroke_blur * 2)))
+    stroke_guard = max(0, int(round(stroke_width * 2 + soft_expansion + (stroke_blur * 1.5))))
     shadow_top_guard = max(0, int(round(shadow_blur - shadow_offset_y)))
     shadow_bottom_guard = max(0, int(round(shadow_blur + shadow_offset_y)))
 
@@ -3334,6 +3335,8 @@ def create_assemblyai_subtitles(
         # as white on transparent, then used as a mask so the underlying
         # video shows through the letter shapes. For karaoke, only the
         # current word reveals the video; other words stay opaque black.
+        # Dim white text (opacity 0.35) shows all words for the full
+        # segment duration so the viewer can read ahead.
         # ═══════════════════════════════════════════════════════════════════
 
         horizontal_padding = int(video_width * 0.04)
@@ -3403,12 +3406,57 @@ def create_assemblyai_subtitles(
 
                 line_y = bar_y + line_idx * (line_box_height + _bar_row_spacing)
 
-                # Render each word in this group
+                # ── Pass 1: dim white text for ALL words (full segment duration) ──
+                word_x = line_start_x
+                for word_text, (ws, we), ww in zip(group_words, group_timings, group_widths):
+                    word_box_width = max(1, ww + (KARAOKE_WORD_HORIZONTAL_PADDING_PX * 2))
+                    dim_clip = None
+                    try:
+                        dim_clip = (
+                            TextClip(
+                                text=word_text,
+                                font=processor.font_path,
+                                font_size=final_font_size,
+                                color="white",
+                                stroke_color=None,
+                                stroke_width=0,
+                                method="caption",
+                                size=(word_box_width, line_box_height),
+                                text_align="center",
+                            )
+                            .with_start(segment_start)
+                            .with_duration(segment_duration)
+                            .with_position((word_x, line_y))
+                            .with_opacity(0.35)
+                        )
+                        subtitle_clips.append(dim_clip)
+                    except Exception as te:
+                        logger.warning(
+                            "video_through_text: dim TextClip failed for word '%s': %s",
+                            word_text, te,
+                        )
+                    finally:
+                        if dim_clip is not None:
+                            try:
+                                dim_clip.close()
+                            except Exception:
+                                pass
+                    word_x += ww + space_width
+
+                # ── Pass 2: per-word video-through-text layers (karaoke timing) ──
                 word_x = line_start_x
                 for word_local_idx, (word_text, (ws, we), ww) in enumerate(
                     zip(group_words, group_timings, group_widths)
                 ):
                     word_box_width = max(1, ww + (KARAOKE_WORD_HORIZONTAL_PADDING_PX * 2))
+
+                    # Per-word duration extends to the next word's start
+                    # (or segment_end for the last word) for karaoke effect.
+                    w_start = float(ws)
+                    if word_local_idx < len(group_timings) - 1:
+                        w_duration = max(0.01, float(group_timings[word_local_idx + 1][0]) - w_start)
+                    else:
+                        w_duration = max(0.01, segment_end - w_start)
 
                     # ── Create white text on transparent black as a mask ──
                     mask_clip = None
@@ -3423,8 +3471,9 @@ def create_assemblyai_subtitles(
                                 stroke_width=0,
                                 method="caption",
                                 size=(word_box_width, line_box_height),
+                                text_align="center",
                             )
-                            .with_duration(segment_duration)
+                            .with_duration(w_duration)
                         )
                     except Exception as te:
                         logger.warning(
@@ -3436,13 +3485,10 @@ def create_assemblyai_subtitles(
                     video_crop = None
                     try:
                         # Crop the base video to just this word's bounding box.
-                        # base_clip has dimensions video_width x video_height,
-                        # so positions are in the same coordinate space.
-                        word_abs_x = word_x + KARAOKE_WORD_HORIZONTAL_PADDING_PX
-                        word_abs_y = line_y
-
-                        crop_x1 = max(0, word_abs_x)
-                        crop_y1 = max(0, word_abs_y)
+                        # Use word_x directly (not word_abs_x) so the crop
+                        # aligns 1:1 with the caption-mode TextClip mask.
+                        crop_x1 = max(0, word_x)
+                        crop_y1 = max(0, line_y)
                         crop_x2 = min(video_width, crop_x1 + word_box_width)
                         crop_y2 = min(video_height, crop_y1 + line_box_height)
                         crop_w = crop_x2 - crop_x1
@@ -3452,7 +3498,7 @@ def create_assemblyai_subtitles(
                             # Sub-clip matching this word's timing, then crop spatial region
                             video_crop = (
                                 base_clip
-                                .subclipped(segment_start, segment_start + segment_duration)
+                                .subclipped(w_start, w_start + w_duration)
                                 .cropped(x1=crop_x1, y1=crop_y1, x2=crop_x2, y2=crop_y2)
                                 .resized((word_box_width, line_box_height))
                             )
@@ -3468,12 +3514,12 @@ def create_assemblyai_subtitles(
                             if actual_mask is None:
                                 actual_mask = mask_clip
                             video_masked = video_crop.with_mask(actual_mask)
-                            video_layer = video_masked.with_start(segment_start).with_position((word_x, line_y))
+                            video_layer = video_masked.with_start(w_start).with_position((word_x, line_y))
                             subtitle_clips.append(video_layer)
                     except Exception as e:
                         logger.warning(
                             "video_through_text crop/mask failed for '%s' at (%.1fs-%.1fs): %s",
-                            word_text, segment_start, segment_start + segment_duration, e,
+                            word_text, w_start, w_start + w_duration, e,
                         )
                     finally:
                         # Cleanup intermediate clips to avoid memory buildup
@@ -3501,7 +3547,7 @@ def create_assemblyai_subtitles(
         # the vertical centering offset of MoviePy's caption mode.
         # Use the same effect padding as line_box_height so the box
         # fully wraps the rendered text including stroke/blur/descenders.
-        BOX_PADDING_Y = max(KARAOKE_WORD_VERTICAL_PADDING_PX, top_effect_padding, bottom_effect_padding)
+        BOX_PADDING_Y = max(8, int(final_font_size * 0.18))
 
         # Convert highlight hex to RGB tuple for ColorClip
         _hl_hex = highlight_color.lstrip("#")
