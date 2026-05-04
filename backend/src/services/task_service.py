@@ -2457,7 +2457,22 @@ class TaskService:
         await self.clip_repo.delete_clips_by_task(self.db, task_id)
         clip_ids = await self._persist_generated_clips(task_id, render_result.get("clips") or [])
 
-        completion_message = "Complete!" if clip_ids else "No clips were rendered from selected draft clips."
+        if clip_ids:
+            completion_message = "Complete!"
+        else:
+            # Surface the specific rendering failure reason instead of a generic message.
+            clip_diag = render_result.get("clip_generation_diagnostics") or {}
+            attempted = clip_diag.get("attempted_segments", len(rendered_segments))
+            created = clip_diag.get("created_clips", 0)
+            failure_samples = clip_diag.get("failure_samples") or []
+            if attempted > 0 and failure_samples:
+                sample_error = failure_samples[0].get("error", "unknown error")
+                completion_message = (
+                    f"No clips rendered: all {attempted} clip(s) failed during rendering. "
+                    f"Example error: {sample_error}"
+                )
+            else:
+                completion_message = "No clips were rendered from selected draft clips."
         await self.task_repo.update_task_status(
             self.db,
             task_id,
