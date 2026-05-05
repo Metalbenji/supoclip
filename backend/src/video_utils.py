@@ -3552,8 +3552,19 @@ def create_assemblyai_subtitles(
 
                             # Custom clip that multiplies each video frame by the
                             # mask, so only the text-shaped region is visible.
-                            def _make_masked_frame(t, _vc=video_crop, _m=_mask_float):
+                            _fallback_frame = np.zeros((_exp_h, _exp_w, 3), dtype=np.uint8)
+                            def _make_masked_frame(t, _vc=video_crop, _m=_mask_float, _fb=_fallback_frame):
                                 frame = _vc.get_frame(t)
+                                h, w = frame.shape[:2]
+                                if h == 0 or w == 0:
+                                    return _fb
+                                if h != _m.shape[0] or w != _m.shape[1]:
+                                    _m_resized = np.array(
+                                        __import__("PIL.Image", fromlist=["Image"]).Image.fromarray(
+                                            (_m * 255).astype(np.uint8)
+                                        ).resize((w, h), __import__("PIL.Image", fromlist=["Image"]).Image.LANCZOS)
+                                    ).astype(np.float32) / 255.0
+                                    return (frame * _m_resized[:, :, np.newaxis]).astype(np.uint8)
                                 return (frame * _m[:, :, np.newaxis]).astype(np.uint8)
 
                             video_masked = VideoClip(
