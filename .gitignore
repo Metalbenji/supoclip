@@ -1,14 +1,36 @@
+# Environment files (contain secrets)
+.env
 .env.local
 .env.dev
+
+# OS
 .DS_Store
+Thumbs.db
+
+# Python
 __pycache__
 *.egg-info
+*.pyc
+
+# Logs / temp
 logs/
 temp/
-.env
+
+# Media
 *.m4a
+
+# Backend runtime dirs
 backend/uploads/
+backend/uploads-dev/
 backend/clips/
+backend/clips-dev/
 backend/.cache/
 backend/models/
 backend/.secrets/
+
+# AI agent skills (not part of the app)
+skills/
+
+# Empty / misc
+supoclip/
+download/
