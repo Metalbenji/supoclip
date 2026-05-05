@@ -1045,9 +1045,8 @@ export function SettingsSectionFont({
                       style={{
                         display: "inline-block",
                         color: fontColor,
-                        textShadow: shadowOpacity > 0
-                          ? `${shadowOffsetX}px ${shadowOffsetY}px ${Math.ceil(shadowBlur * 1.5)}px ${shadowColor}`
-                          : "none",
+                        paintOrder: "stroke fill",
+                        textShadow: `${Math.max(shadowOffsetX, 1)}px ${Math.max(shadowOffsetY, 2)}px ${Math.max(Math.ceil(shadowBlur * 1.5), 3)}px ${shadowColor}`,
                         WebkitTextStroke: strokeWidth > 0
                           ? `${strokeWidth}px ${strokeColor}`
                           : "none",
