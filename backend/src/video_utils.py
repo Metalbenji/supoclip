@@ -3434,6 +3434,10 @@ def create_assemblyai_subtitles(
                             .with_position((word_x, line_y))
                             .with_opacity(0.35)
                         )
+                        # Strip the auto-generated .mask so CompositeVideoClip
+                        # does not attempt compose_mask() on these clips, which
+                        # crashes with shape mismatches on edge-case frames.
+                        dim_clip.mask = None
                         subtitle_clips.append(dim_clip)
                     except Exception as te:
                         logger.warning(
@@ -3571,6 +3575,9 @@ def create_assemblyai_subtitles(
                                 make_frame=_make_masked_frame,
                                 duration=w_duration,
                             )
+                            # Prevent CompositeVideoClip from running compose_mask()
+                            # on our custom clip — we handle masking in make_frame.
+                            video_masked.mask = None
                             video_layer = video_masked.with_start(w_start).with_position((word_x, line_y))
                             subtitle_clips.append(video_layer)
                         except Exception as e:
