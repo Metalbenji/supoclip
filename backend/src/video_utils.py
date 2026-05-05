@@ -4037,30 +4037,60 @@ def create_optimized_clip(
         # Compose and encode
         final_clip = CompositeVideoClip(final_clips) if len(final_clips) > 1 else cropped_clip
 
-        # ── Safety: ensure no clip in the composition has a mask that can
-        #    cause shape-mismatch crashes during MoviePy's compose_mask().
-        #    Replace every mask with a no-op (fully opaque) solid white mask
-        #    that always returns 1.0 at any shape.                          ──
-        def _safe_mask(make_frame_fn, _orig_make_frame):
-            """Wrap a make_frame so it never returns a zero-size array."""
-            def _wrapped(t):
-                try:
-                    f = _orig_make_frame(t)
-                    if f is None or f.size == 0:
-                        return np.ones((1, 1), dtype=np.uint8) * 255
-                    return f
-                except Exception:
-                    return np.ones((1, 1), dtype=np.uint8) * 255
-            return _wrapped
-
+        # ── Nuclear safety: wrap EVERY clip and mask so no get_frame can
+        #    ever return a zero-height frame.  MoviePy's compose_mask()
+        #    calls clip.get_frame() and mask.get_frame() internally and
+        #    will crash with a numpy broadcast error if either returns a
+        #    (0, W, C) or (0, W) array.  Wrapping at this level catches
+        #    ALL sources — TextClip, VideoClip, resized subclips, etc.  ──
         if len(final_clips) > 1:
             for _cl in final_clips[1:]:  # skip base cropped_clip at index 0
+                # 1) Wrap the clip's own get_frame AND make_frame to guarantee non-zero size
+                _orig_gf = _cl.get_frame
+                _cl_size = getattr(_cl, "size", None) or (new_width, new_height)
+
+                def _safe_clip_get_frame(t, _orig=_orig_gf, _sz=_cl_size):
+                    try:
+                        f = _orig(t)
+                        if f is not None and hasattr(f, "shape") and f.ndim >= 2 and f.shape[0] > 0 and f.shape[1] > 0:
+                            return f
+                    except Exception:
+                        f = None
+                    # Return a black frame of the clip's declared size
+                    return np.zeros((_sz[1], _sz[0], 3), dtype=np.uint8)
+
+                _cl.get_frame = _safe_clip_get_frame
+
+                # Also wrap make_frame if it exists (MoviePy may use either)
+                if hasattr(_cl, "make_frame") and callable(_cl.make_frame):
+                    _orig_mf = _cl.make_frame
+
+                    def _safe_clip_mf(t, _orig=_orig_mf, _sz=_cl_size):
+                        try:
+                            f = _orig(t)
+                            if f is not None and hasattr(f, "shape") and f.ndim >= 2 and f.shape[0] > 0 and f.shape[1] > 0:
+                                return f
+                        except Exception:
+                            pass
+                        return np.zeros((_sz[1], _sz[0], 3), dtype=np.uint8)
+
+                    _cl.make_frame = _safe_clip_mf
+
+                # 2) Wrap the mask's make_frame (if any) similarly
                 _mask = getattr(_cl, "mask", None)
-                if _mask is not None:
-                    if hasattr(_mask, "make_frame"):
-                        _mask.make_frame = _safe_mask(_mask.make_frame, _mask.make_frame)
-                    else:
-                        _cl.mask = None
+                if _mask is not None and hasattr(_mask, "make_frame"):
+                    _orig_mf = _mask.make_frame
+
+                    def _safe_mask_mf(t, _orig=_orig_mf):
+                        try:
+                            f = _orig(t)
+                            if f is not None and hasattr(f, "shape") and f.size > 0 and f.shape[0] > 0:
+                                return f
+                        except Exception:
+                            pass
+                        return np.ones((1, 1), dtype=np.uint8) * 255
+
+                    _mask.make_frame = _safe_mask_mf
 
         processor = VideoProcessor(font_family, font_size, font_color)
         clip_encoding_candidates = processor.get_clip_render_encoding_candidates()
