@@ -3540,31 +3540,12 @@ def create_assemblyai_subtitles(
                         continue
 
                     try:
-                        letter_clip = (
-                            TextClip(
-                                text=ch,
-                                font=processor.font_path,
-                                font_size=final_font_size,
-                                color=str(style["font_color"]),
-                                stroke_color=str(style["stroke_color"]),
-                                stroke_width=stroke_width,
-                                stroke_blur=stroke_blur,
-                                method="caption",
-                                size=(ch_box_width, line_box_height),
-                                text_align="center",
-                            )
-                            .with_duration(clip_duration)
-                            .with_start(clip_start)
-                        )
+                        # ── Build layered letter clip with shadow, stroke, weight ──
+                        _ly = base_y
+                        _lx = letter_x
 
-                        # Build bounce position function with proper closure
-                        _cap_x = letter_x
-                        _cap_base_y = base_y
-                        _cap_drop_y = base_y - DROP_HEIGHT
-                        _cap_anim_dur = LETTER_ANIM_DUR
-
-                        def _make_pos(__x=_cap_x, __by=_cap_base_y,
-                                       __dy=_cap_drop_y, __ad=_cap_anim_dur):
+                        def _make_letter_pos(__x=_lx, __by=_ly,
+                                              __dy=_ly - DROP_HEIGHT, __ad=LETTER_ANIM_DUR):
                             def _pos_fn(t):
                                 progress = min(1.0, t / __ad) if __ad > 0 else 1.0
                                 eased = _bounce_ease(progress)
@@ -3573,10 +3554,77 @@ def create_assemblyai_subtitles(
                                 return (__x, y)
                             return _pos_fn
 
-                        letter_clip = letter_clip.with_position(_make_pos())
-                        # Strip mask to avoid compose_mask issues
-                        letter_clip.mask = None
-                        subtitle_clips.append(letter_clip)
+                        def _offset_pos(__x=_lx, __by=_ly, __dy=_ly - DROP_HEIGHT,
+                                        __ad=LETTER_ANIM_DUR, ox=0, oy=0):
+                            def _pos_fn(t):
+                                progress = min(1.0, t / __ad) if __ad > 0 else 1.0
+                                eased = _bounce_ease(progress)
+                                y = int(__dy + (__by - __dy) * eased)
+                                y = max(0, min(y, max_y))
+                                return (max(0, min(__x + ox, max_x)), max(0, min(y + oy, max_y)))
+                            return _pos_fn
+
+                        _base_pos = _make_letter_pos()
+
+                        # Helper to create a TextClip for this letter
+                        def _mk_letter(color, sc=None, sw=0):
+                            return TextClip(
+                                text=ch,
+                                font=processor.font_path,
+                                font_size=final_font_size,
+                                color=color,
+                                stroke_color=sc,
+                                stroke_width=sw,
+                                method="caption",
+                                size=(ch_box_width, line_box_height),
+                                text_align="center",
+                            ).with_duration(clip_duration).with_start(clip_start)
+
+                        # 1) Shadow layers
+                        if shadow_opacity > 0:
+                            _shadow_clip = _mk_letter(shadow_color)
+                            _shadow_offsets = _shadow_offsets(shadow_offset_x, shadow_offset_y, shadow_blur)
+                            _per_layer_op = max(0.02, min(1.0, shadow_opacity / max(1, len(_shadow_offsets))))
+                            for ox, oy in _shadow_offsets:
+                                sc = _offset_pos(ox=ox, oy=oy)
+                                sc_layer = _shadow_clip.with_position(sc).with_opacity(_per_layer_op)
+                                sc_layer.mask = None
+                                subtitle_clips.append(sc_layer)
+
+                        # 2) Soft stroke blur layer
+                        if stroke_width > 0 and stroke_blur > 0:
+                            _soft_expansion = max(1, int(round(stroke_blur * 2)))
+                            _soft_sw = stroke_width * 2 + _soft_expansion
+                            _soft_opacity = max(0.18, min(0.7, stroke_blur / 2.5))
+                            _soft_clip = _mk_letter(stroke_color, sc=stroke_color, sw=_soft_sw)
+                            _soft_clip = _soft_clip.with_position(_base_pos).with_opacity(_soft_opacity)
+                            _soft_clip.mask = None
+                            subtitle_clips.append(_soft_clip)
+
+                        # 3) Stroke layer
+                        if stroke_width > 0:
+                            _stroke_clip = _mk_letter(stroke_color, sc=stroke_color, sw=stroke_width * 2)
+                            _stroke_clip = _stroke_clip.with_position(_base_pos).with_opacity(1.0)
+                            _stroke_clip.mask = None
+                            subtitle_clips.append(_stroke_clip)
+
+                        # 4) Font weight layers (extra fill copies at ±1px offsets)
+                        _weight_offsets = []
+                        if font_weight >= 600:
+                            _weight_offsets.append((1, 0))
+                        if font_weight >= 800:
+                            _weight_offsets.extend([(0, 1), (-1, 0)])
+                        _fill_clip = _mk_letter(str(style["font_color"]))
+                        for ox, oy in _weight_offsets:
+                            _wp = _offset_pos(ox=ox, oy=oy)
+                            _wl = _fill_clip.with_position(_wp).with_opacity(0.8)
+                            _wl.mask = None
+                            subtitle_clips.append(_wl)
+
+                        # 5) Main fill layer
+                        _fill_main = _fill_clip.with_position(_base_pos).with_opacity(1.0)
+                        _fill_main.mask = None
+                        subtitle_clips.append(_fill_main)
                     except Exception as le:
                         logger.warning(
                             "dropdown_bounce: letter '%s' failed: %s", ch, le,
