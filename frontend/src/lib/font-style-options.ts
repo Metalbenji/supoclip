@@ -1,7 +1,7 @@
 export const TEXT_TRANSFORM_OPTIONS = ["none", "uppercase", "lowercase", "capitalize"] as const;
 export const TEXT_ALIGN_OPTIONS = ["left", "center", "right"] as const;
 export const SUBTITLE_POSITION_OPTIONS = ["bottom", "center", "top"] as const;
-export const SUBTITLE_ANIMATION_OPTIONS = ["none", "vertical_scroll", "hormozi", "video_through_text", "dropdown_bounce"] as const;
+export const SUBTITLE_ANIMATION_OPTIONS = ["none", "vertical_scroll", "hormozi", "dropdown_bounce"] as const;
 
 export type TextTransformOption = (typeof TEXT_TRANSFORM_OPTIONS)[number];
 export type TextAlignOption = (typeof TEXT_ALIGN_OPTIONS)[number];
@@ -56,7 +56,7 @@ export const DEFAULT_FONT_STYLE_OPTIONS: FontStyleOptions = {
   subtitlePreset: "classic",
 };
 
-export const SUBTITLE_PRESET_IDS = ["classic", "hormozi", "minimal", "vertical_scroll", "video_through_text", "dropdown_bounce"] as const;
+export const SUBTITLE_PRESET_IDS = ["classic", "hormozi", "minimal", "vertical_scroll", "dropdown_bounce"] as const;
 export type SubtitlePresetId = (typeof SUBTITLE_PRESET_IDS)[number];
 
 export interface SubtitlePreset {
@@ -153,28 +153,6 @@ export const SUBTITLE_PRESETS: ReadonlyArray<SubtitlePreset> = [
       dimUnhighlighted: true,
       position: 45,
       animation: "vertical_scroll",
-    },
-  },
-  {
-    id: "video_through_text",
-    label: "Video Through Text",
-    description: "Subtitles appear as cutouts in a black bar, revealing the video through the text. Cinematic and eye-catching.",
-    style: {
-      fontFamily: "Anton-Regular",
-      fontWeight: 900,
-      textTransform: "uppercase",
-      letterSpacing: 2,
-      strokeColor: "#000000",
-      strokeWidth: 0,
-      strokeBlur: 0,
-      shadowColor: "#000000",
-      shadowOpacity: 0,
-      shadowBlur: 0,
-      shadowOffsetX: 0,
-      shadowOffsetY: 0,
-      dimUnhighlighted: true,
-      position: 75,
-      animation: "video_through_text",
     },
   },
   {
