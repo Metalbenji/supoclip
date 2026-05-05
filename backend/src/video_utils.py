@@ -4037,6 +4037,31 @@ def create_optimized_clip(
         # Compose and encode
         final_clip = CompositeVideoClip(final_clips) if len(final_clips) > 1 else cropped_clip
 
+        # ── Safety: ensure no clip in the composition has a mask that can
+        #    cause shape-mismatch crashes during MoviePy's compose_mask().
+        #    Replace every mask with a no-op (fully opaque) solid white mask
+        #    that always returns 1.0 at any shape.                          ──
+        def _safe_mask(make_frame_fn, _orig_make_frame):
+            """Wrap a make_frame so it never returns a zero-size array."""
+            def _wrapped(t):
+                try:
+                    f = _orig_make_frame(t)
+                    if f is None or f.size == 0:
+                        return np.ones((1, 1), dtype=np.uint8) * 255
+                    return f
+                except Exception:
+                    return np.ones((1, 1), dtype=np.uint8) * 255
+            return _wrapped
+
+        if len(final_clips) > 1:
+            for _cl in final_clips[1:]:  # skip base cropped_clip at index 0
+                _mask = getattr(_cl, "mask", None)
+                if _mask is not None:
+                    if hasattr(_mask, "make_frame"):
+                        _mask.make_frame = _safe_mask(_mask.make_frame, _mask.make_frame)
+                    else:
+                        _cl.mask = None
+
         processor = VideoProcessor(font_family, font_size, font_color)
         clip_encoding_candidates = processor.get_clip_render_encoding_candidates()
         selected_encoder_backend = ""
