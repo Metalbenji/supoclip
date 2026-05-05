@@ -3511,16 +3511,55 @@ def create_assemblyai_subtitles(
                             )
 
                             # Apply text as mask — video shows through text shape only.
-                            # CRITICAL: Use mask_clip.mask (the 2D alpha-channel ImageClip)
-                            # rather than mask_clip itself.  A TextClip with transparent=True
-                            # renders HxWx3 RGB frames, which crashes MoviePy's compose_mask()
-                            # when it tries: clip_h, clip_w = clip_mask.shape  → 3 values, not 2.
-                            # The .mask attribute is the proper 2D grayscale mask extracted
-                            # from the alpha channel by ImageClip.__init__.
-                            actual_mask = getattr(mask_clip, "mask", None)
-                            if actual_mask is None:
-                                actual_mask = mask_clip
-                            video_masked = video_crop.with_mask(actual_mask)
+                            # Extract the mask as a raw numpy array and apply it via a
+                            # custom VideoClip(make_frame=…), bypassing MoviePy's
+                            # fragile with_mask() / compose_mask() pipeline entirely.
+                            _raw_frame = mask_clip.get_frame(0)
+
+                            # Prefer the .mask attribute (2D alpha-channel ImageClip)
+                            # when available; fall back to the clip's own pixel data.
+                            _alpha_mask = getattr(mask_clip, "mask", None)
+                            if _alpha_mask is not None:
+                                _mask_np = _alpha_mask.get_frame(0)
+                            else:
+                                _mask_np = _raw_frame
+
+                            # Coerce to 2D: if 3D (H×W×C), take the first channel.
+                            if _mask_np.ndim == 3:
+                                _mask_np = _mask_np[:, :, 0]
+
+                            # Validate shape.
+                            _exp_h, _exp_w = line_box_height, word_box_width
+                            if _mask_np.ndim != 2:
+                                logger.warning(
+                                    "video_through_text: unexpected mask ndim=%s shape=%s for '%s'",
+                                    _mask_np.ndim, _mask_np.shape, word_text,
+                                )
+                                word_x += ww + space_width
+                                continue
+                            if _mask_np.shape[0] != _exp_h or _mask_np.shape[1] != _exp_w:
+                                logger.warning(
+                                    "video_through_text: mask shape %s != expected (%d,%d) for '%s', resizing",
+                                    _mask_np.shape, _exp_h, _exp_w, word_text,
+                                )
+                                _mask_pil = __import__("PIL.Image", fromlist=["Image"]).Image.fromarray(
+                                    _mask_np.astype(np.uint8)
+                                ).resize((_exp_w, _exp_h), __import__("PIL.Image", fromlist=["Image"]).Image.LANCZOS)
+                                _mask_np = np.array(_mask_pil)
+
+                            # Normalise to 0-1 float for multiplication.
+                            _mask_float = _mask_np.astype(np.float32) / 255.0
+
+                            # Custom clip that multiplies each video frame by the
+                            # mask, so only the text-shaped region is visible.
+                            def _make_masked_frame(t, _vc=video_crop, _m=_mask_float):
+                                frame = _vc.get_frame(t)
+                                return (frame * _m[:, :, np.newaxis]).astype(np.uint8)
+
+                            video_masked = VideoClip(
+                                make_frame=_make_masked_frame,
+                                duration=w_duration,
+                            )
                             video_layer = video_masked.with_start(w_start).with_position((word_x, line_y))
                             subtitle_clips.append(video_layer)
                         except Exception as e:
