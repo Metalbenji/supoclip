@@ -1203,6 +1203,51 @@ export function SettingsSectionFont({
                 fontFamily={fontFamily}
                 fontWeight={fontWeight}
               />
+            ) : animation === "dropdown_bounce" ? (
+              /* ═══════════════════════════════════════════════════════════
+                 Dropdown Bounce preview — letters drop from above
+                 CSS animation: each letter starts above its final position
+                 and bounces down into place, staggered per letter.
+                 ═══════════════════════════════════════════════════════════ */
+              <div
+                className="w-full flex items-center justify-center overflow-hidden"
+                style={{ height: Math.max(70, Math.ceil(fontSize * 2.2)) }}
+              >
+                <div
+                  className="flex items-end"
+                  style={{ gap: 0, font: `${fontWeight} ${fontSize}px ${fontFamily}` }}
+                >
+                  {previewText.split("").map((char, i) => (
+                    <span
+                      key={i}
+                      style={{
+                        display: "inline-block",
+                        color: fontColor,
+                        textShadow: shadowOpacity > 0
+                          ? `${shadowOffsetX}px ${shadowOffsetY}px ${Math.ceil(shadowBlur * 1.5)}px ${shadowColor}`
+                          : "none",
+                        WebkitTextStroke: strokeWidth > 0
+                          ? `${strokeWidth}px ${strokeColor}`
+                          : "none",
+                        animation: `dropdownBounce 0.8s ease-out ${i * 0.05}s both`,
+                        transformOrigin: "bottom center",
+                      }}
+                    >
+                      {char === " " ? "\u00A0" : char}
+                    </span>
+                  ))}
+                </div>
+                <style>{`
+                  @keyframes dropdownBounce {
+                    0% { transform: translateY(-${Math.ceil(fontSize * 1.5)}px); opacity: 0; }
+                    40% { opacity: 1; }
+                    65% { transform: translateY(4px); }
+                    80% { transform: translateY(-2px); }
+                    90% { transform: translateY(1px); }
+                    100% { transform: translateY(0); opacity: 1; }
+                  }
+                `}</style>
+              </div>
             ) : animation === "hormozi" ? (
               /* ═══════════════════════════════════════════════════════════
                  Hormozi preview — yellow box behind each word

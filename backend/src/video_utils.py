@@ -3719,6 +3719,132 @@ def create_assemblyai_subtitles(
 
                 current_x += w_width + space_width
 
+    elif subtitle_animation == "dropdown_bounce":
+        # ═══════════════════════════════════════════════════════════════════
+        # DROPDOWN BOUNCE: each letter of each word drops in from above
+        # and bounces into place using an elastic ease-out curve.
+        # Letters appear one-by-one within each word's timing window.
+        # Pure TextClip — no video masking, no crash risk.
+        # ═══════════════════════════════════════════════════════════════════
+        horizontal_padding = int(video_width * 0.04)
+        available_width = video_width - horizontal_padding * 2
+        space_width, _ = _measure_label_text(" ", processor.font_path, final_font_size)
+        space_width = max(1, space_width)
+
+        # Bounce easing: overshoots target then settles
+        def _bounce_ease(t):
+            """Elastic ease-out with one bounce for a natural drop effect."""
+            if t <= 0:
+                return 0.0
+            if t >= 1:
+                return 1.0
+            # Damped oscillation: smooth drop with a single bounce
+            return 1.0 - np.exp(-6.0 * t) * np.cos(8.0 * t * np.pi)
+
+        DROP_HEIGHT = int(final_font_size * 1.8)  # how far above letters start
+        LETTER_STAGGER = 0.04  # seconds between each letter appearing
+        LETTER_ANIM_DUR = 0.35  # duration of each letter's drop animation
+
+        word_groups = _group_words_into_lines(word_widths_all, space_width, available_width)
+        for group_indices in word_groups:
+            word_group_words = [display_words_all[i] for i in group_indices]
+            word_group_timings = [word_timings_all[i] for i in group_indices]
+            word_group_widths = [word_widths_all[i] for i in group_indices]
+            if not word_group_words:
+                continue
+
+            segment_start = float(word_group_timings[0][0])
+            segment_end = float(word_group_timings[-1][1])
+            segment_duration = segment_end - segment_start
+            if segment_duration < 0.1:
+                continue
+
+            total_width = sum(word_group_widths) + (space_width * max(0, len(word_group_words) - 1))
+            if text_align == "left":
+                line_start_x = horizontal_padding
+            elif text_align == "right":
+                line_start_x = video_width - horizontal_padding - total_width
+            else:
+                line_start_x = (video_width - total_width) // 2
+            max_line_start = max(0, video_width - total_width)
+            line_start_x = max(0, min(int(line_start_x), max_line_start))
+
+            word_x = line_start_x
+            for word_local_idx, (word_text, (w_start, w_end), w_width) in enumerate(
+                zip(word_group_words, word_group_timings, word_group_widths)
+            ):
+                # Per-word visibility extends to next word's start or segment end
+                if word_local_idx < len(word_group_timings) - 1:
+                    w_end_vis = float(word_group_timings[word_local_idx + 1][0])
+                else:
+                    w_end_vis = max(w_end, segment_end)
+                w_vis_duration = max(0.01, w_end_vis - w_start)
+
+                letter_chars = list(word_text)
+                letter_widths = []
+                for ch in letter_chars:
+                    lw, _ = _measure_label_text(ch, processor.font_path, final_font_size)
+                    letter_widths.append(lw)
+
+                letter_x = word_x
+                for letter_idx, (ch, ch_w) in enumerate(zip(letter_chars, letter_widths)):
+                    ch_box_width = max(1, ch_w)
+
+                    # Stagger: each letter starts its animation after the previous
+                    letter_local_start = letter_idx * LETTER_STAGGER
+                    clip_start = w_start + letter_local_start
+                    clip_duration = max(0.01, w_vis_duration - letter_local_start)
+
+                    if clip_duration <= 0:
+                        letter_x += ch_w
+                        continue
+
+                    try:
+                        letter_clip = (
+                            TextClip(
+                                text=ch,
+                                font=processor.font_path,
+                                font_size=final_font_size,
+                                color=str(style["font_color"]),
+                                stroke_color=str(style["stroke_color"]),
+                                stroke_width=stroke_width,
+                                stroke_blur=stroke_blur,
+                                method="caption",
+                                size=(ch_box_width, line_box_height),
+                                text_align="center",
+                            )
+                            .with_duration(clip_duration)
+                            .with_start(clip_start)
+                        )
+
+                        # Build bounce position function with proper closure
+                        _cap_x = letter_x
+                        _cap_base_y = base_y
+                        _cap_drop_y = base_y - DROP_HEIGHT
+                        _cap_anim_dur = LETTER_ANIM_DUR
+
+                        def _make_pos(__x=_cap_x, __by=_cap_base_y,
+                                       __dy=_cap_drop_y, __ad=_cap_anim_dur):
+                            def _pos_fn(t):
+                                progress = min(1.0, t / __ad) if __ad > 0 else 1.0
+                                eased = _bounce_ease(progress)
+                                y = int(__dy + (__by - __dy) * eased)
+                                y = max(0, min(y, max_y))
+                                return (__x, y)
+                            return _pos_fn
+
+                        letter_clip = letter_clip.with_position(_make_pos())
+                        # Strip mask to avoid compose_mask issues
+                        letter_clip.mask = None
+                        subtitle_clips.append(letter_clip)
+                    except Exception as le:
+                        logger.warning(
+                            "dropdown_bounce: letter '%s' failed: %s", ch, le,
+                        )
+                    letter_x += ch_w
+
+                word_x += w_width + space_width
+
     else:
         # ═══════════════════════════════════════════════════════════════════
         # STANDARD KARAOKE: dynamic words-per-line based on available width

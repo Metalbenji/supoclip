@@ -1,7 +1,7 @@
 export const TEXT_TRANSFORM_OPTIONS = ["none", "uppercase", "lowercase", "capitalize"] as const;
 export const TEXT_ALIGN_OPTIONS = ["left", "center", "right"] as const;
 export const SUBTITLE_POSITION_OPTIONS = ["bottom", "center", "top"] as const;
-export const SUBTITLE_ANIMATION_OPTIONS = ["none", "vertical_scroll", "hormozi", "video_through_text"] as const;
+export const SUBTITLE_ANIMATION_OPTIONS = ["none", "vertical_scroll", "hormozi", "video_through_text", "dropdown_bounce"] as const;
 
 export type TextTransformOption = (typeof TEXT_TRANSFORM_OPTIONS)[number];
 export type TextAlignOption = (typeof TEXT_ALIGN_OPTIONS)[number];
@@ -56,7 +56,7 @@ export const DEFAULT_FONT_STYLE_OPTIONS: FontStyleOptions = {
   subtitlePreset: "classic",
 };
 
-export const SUBTITLE_PRESET_IDS = ["classic", "hormozi", "minimal", "vertical_scroll", "video_through_text"] as const;
+export const SUBTITLE_PRESET_IDS = ["classic", "hormozi", "minimal", "vertical_scroll", "video_through_text", "dropdown_bounce"] as const;
 export type SubtitlePresetId = (typeof SUBTITLE_PRESET_IDS)[number];
 
 export interface SubtitlePreset {
@@ -175,6 +175,26 @@ export const SUBTITLE_PRESETS: ReadonlyArray<SubtitlePreset> = [
       dimUnhighlighted: true,
       position: 75,
       animation: "video_through_text",
+    },
+  },
+  {
+    id: "dropdown_bounce",
+    label: "Dropdown Bounce",
+    description: "Each letter drops in from above and bounces into place, word by word.",
+    style: {
+      fontFamily: "TikTokSans-Regular",
+      fontWeight: 600,
+      strokeColor: "#000000",
+      strokeWidth: 2,
+      strokeBlur: 0.6,
+      shadowColor: "#000000",
+      shadowOpacity: 0.5,
+      shadowBlur: 2,
+      shadowOffsetX: 0,
+      shadowOffsetY: 2,
+      dimUnhighlighted: true,
+      position: 75,
+      animation: "dropdown_bounce",
     },
   },
 ];
