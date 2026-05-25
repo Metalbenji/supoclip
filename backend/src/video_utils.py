@@ -641,17 +641,28 @@ def _extract_audio_chunk_for_whisper(
     )
 
 
-def _run_whisper_transcription(model: Any, media_path: Union[Path, str], use_fp16: bool) -> Dict[str, Any]:
+def _run_whisper_transcription(
+    model: Any,
+    media_path: Union[Path, str],
+    use_fp16: bool,
+    language: Optional[str] = None,
+) -> Dict[str, Any]:
     log_local_whisper_runtime_summary("first_whisper_use")
+    transcribe_kwargs: Dict[str, Any] = {
+        "task": "transcribe",
+        "word_timestamps": True,
+        "verbose": False,
+        "fp16": use_fp16,
+        # Disable conditioning on previous text for faster transcription.
+        # When a language is explicitly set, this has minimal accuracy impact
+        # but significantly speeds up processing of long audio.
+        "condition_on_previous_text": False,
+    }
+    if language and language.strip():
+        transcribe_kwargs["language"] = language.strip()
     with warnings.catch_warnings(record=True) as caught_warnings:
         warnings.simplefilter("always")
-        result = model.transcribe(
-            str(media_path),
-            task="transcribe",
-            word_timestamps=True,
-            verbose=False,
-            fp16=use_fp16,
-        )
+        result = model.transcribe(str(media_path), **transcribe_kwargs)
 
     for caught in caught_warnings:
         message = str(caught.message)
@@ -813,6 +824,7 @@ def _transcribe_with_local_whisper_chunked(
     chunk_ranges: List[Tuple[float, float]],
     overlap_seconds: int,
     progress_callback: Optional[Callable[[Dict[str, Any]], None]] = None,
+    language: Optional[str] = None,
 ) -> Dict[str, Any]:
     total_chunks = len(chunk_ranges)
     transcription_started_at = time.perf_counter()
@@ -849,7 +861,7 @@ def _transcribe_with_local_whisper_chunked(
             )
             chunk_path = temp_dir_path / f"chunk_{idx:04d}.wav"
             _extract_audio_chunk_for_whisper(video_path, chunk_path, start_sec, end_sec)
-            chunk_result = _run_whisper_transcription(model, chunk_path, use_fp16)
+            chunk_result = _run_whisper_transcription(model, chunk_path, use_fp16, language=language)
 
             chunk_offset_ms = int(start_sec * 1000)
             min_end_ms = None
@@ -929,6 +941,7 @@ def _transcribe_with_local_whisper(
     gpu_index_override: Optional[int] = None,
     model_name_override: Optional[str] = None,
     progress_callback: Optional[Callable[[Dict[str, Any]], None]] = None,
+    language: Optional[str] = None,
 ) -> Dict[str, Any]:
     model_name = (model_name_override or config.whisper_model or "medium").strip().lower()
     device, use_fp16 = resolve_whisper_device(
@@ -969,6 +982,7 @@ def _transcribe_with_local_whisper(
                     chunk_ranges=chunk_ranges,
                     overlap_seconds=overlap_seconds,
                     progress_callback=progress_callback,
+                    language=language,
                 )
 
     _emit_transcription_progress(
@@ -982,7 +996,7 @@ def _transcribe_with_local_whisper(
         },
     )
     transcription_started_at = time.perf_counter()
-    result = _run_whisper_transcription(model, video_path, use_fp16)
+    result = _run_whisper_transcription(model, video_path, use_fp16, language=language)
     transcript_text = str(result.get("text") or "").strip()
     words_data = _extract_words_from_whisper_result(result)
 
@@ -1066,6 +1080,7 @@ def get_video_transcript(
     whisper_gpu_index: Optional[int] = None,
     whisper_model_size: Optional[str] = None,
     progress_callback: Optional[Callable[[Dict[str, Any]], None]] = None,
+    language: Optional[str] = None,
 ) -> str:
     """Get transcript using configured provider with word-level timings."""
     video_path = Path(video_path)
@@ -1088,6 +1103,7 @@ def get_video_transcript(
                     gpu_index_override=whisper_gpu_index,
                     model_name_override=whisper_model_size,
                     progress_callback=progress_callback,
+                    language=language,
                 )
             finally:
                 release_local_whisper_model_cache()

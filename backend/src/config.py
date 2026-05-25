@@ -25,6 +25,10 @@ class Config:
         self.whisper_chunking_enabled = env_bool("WHISPER_CHUNKING_ENABLED", "true")
         self.whisper_chunk_duration_seconds = int(os.getenv("WHISPER_CHUNK_DURATION_SECONDS", "1200"))
         self.whisper_chunk_overlap_seconds = int(os.getenv("WHISPER_CHUNK_OVERLAP_SECONDS", "8"))
+        raw_whisper_language = os.getenv("WHISPER_LANGUAGE")
+        self.whisper_language = (
+            raw_whisper_language.strip().lower() if isinstance(raw_whisper_language, str) and raw_whisper_language.strip() else None
+        )
         self.transcription_provider = (os.getenv("TRANSCRIPTION_PROVIDER", "local") or "local").strip().lower()
         self.llm = os.getenv("LLM") or os.getenv("LLM_MODEL") or "openai:gpt-5-mini"
         self.openai_api_key = os.getenv("OPENAI_API_KEY")
@@ -42,6 +46,7 @@ class Config:
 
         self.max_video_duration = int(os.getenv("MAX_VIDEO_DURATION", "3600"))
         self.output_dir = os.getenv("OUTPUT_DIR", "outputs")
+        self.render_max_workers = max(1, int(os.getenv("RENDER_MAX_WORKERS", "2")))
 
         self.max_clips = int(os.getenv("MAX_CLIPS", "10"))
         self.clip_duration = int(os.getenv("CLIP_DURATION", "30"))  # seconds
@@ -62,6 +67,7 @@ class Config:
         self.redis_port = int(os.getenv("REDIS_PORT", "6379"))
         self.worker_max_jobs = int(os.getenv("WORKER_MAX_JOBS", "2"))
         self.worker_job_timeout_seconds = int(os.getenv("WORKER_JOB_TIMEOUT_SECONDS", "21600"))
+        self.ai_chunk_parallel = env_bool("AI_CHUNK_PARALLEL", "true")
         self.enable_gpu_worker = env_bool("ENABLE_GPU_WORKER", "false")
         self.arq_queue_name = (os.getenv("ARQ_QUEUE_NAME", "arq:queue:local") or "arq:queue:local").strip()
         self.arq_local_queue_name = (os.getenv("ARQ_QUEUE_NAME_LOCAL", "arq:queue:local") or "arq:queue:local").strip()

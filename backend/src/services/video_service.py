@@ -135,12 +135,13 @@ class VideoService:
         whisper_gpu_index: Optional[int] = None,
         whisper_model_size: Optional[str] = None,
         progress_callback: Optional[Callable[[Dict[str, Any]], None]] = None,
+        language: Optional[str] = None,
     ) -> str:
         """
         Generate transcript from video using configured transcription provider.
         Runs in thread pool to avoid blocking.
         """
-        logger.info(f"Generating transcript for: {video_path}")
+        logger.info(f"Generating transcript for: {video_path} (language={language or 'auto-detect'})")
         get_video_transcript = VideoService._video_utils_attr("get_video_transcript")
         transcript = await run_in_thread(
             get_video_transcript,
@@ -154,6 +155,7 @@ class VideoService:
             whisper_gpu_index,
             whisper_model_size,
             progress_callback,
+            language,
         )
         logger.info(f"Transcript generated: {len(transcript)} characters")
         return transcript
@@ -170,6 +172,7 @@ class VideoService:
         whisper_device_preference: Optional[str] = None,
         whisper_gpu_index: Optional[int] = None,
         whisper_model_size: Optional[str] = None,
+        language: Optional[str] = None,
     ) -> str:
         """
         Generate transcript and emit heartbeat progress while waiting for transcription.
@@ -264,6 +267,7 @@ class VideoService:
                 whisper_gpu_index=whisper_gpu_index,
                 whisper_model_size=whisper_model_size,
                 progress_callback=on_transcription_progress,
+                language=language,
             )
             return transcript
         finally:
@@ -421,6 +425,7 @@ class VideoService:
         create_clips_with_transitions = VideoService._video_utils_attr("create_clips_with_transitions")
         create_clips_from_segments = VideoService._video_utils_attr("create_clips_from_segments")
         clip_builder = create_clips_with_transitions if transitions_enabled else create_clips_from_segments
+        render_workers = 1 if transitions_enabled else getattr(config, "render_max_workers", 2)
         clips_info = await run_in_thread(
             clip_builder,
             video_path,
@@ -434,7 +439,7 @@ class VideoService:
             render_diagnostics,
             on_clip_progress,
             filename_prefix,
-            1 if transitions_enabled else 2,
+            render_workers,
         )
         if not transitions_enabled:
             render_diagnostics["transitions_disabled"] = True
@@ -1171,6 +1176,11 @@ class VideoService:
                 transcription_options.get("whisper_model_size")
                 if transcription_options
                 else None
+            ),
+            language=(
+                transcription_options.get("language")
+                if transcription_options and transcription_options.get("language")
+                else getattr(config, "whisper_language", None)
             ),
         )
         await ensure_not_cancelled()

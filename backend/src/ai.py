@@ -937,12 +937,16 @@ async def get_most_relevant_parts_by_transcript(
         chunk_failures: List[Dict[str, Any]] = []
         chunk_results: List[Dict[str, Any]] = []
 
-        for chunk in chunks:
+        # Check if parallel chunk analysis is enabled (default: true)
+        ai_chunk_parallel = bool(getattr(config, "ai_chunk_parallel", True))
+
+        async def _analyze_single_chunk(chunk: Dict[str, Any]) -> Tuple[Optional[TranscriptAnalysis], Optional[Dict[str, Any]], Optional[Dict[str, Any]]]:
+            """Analyze a single chunk, returning (analysis, success_info, failure_info)."""
             chunk_index = int(chunk.get("index") or 1)
             total_chunks = int(chunk.get("total") or 1)
             chunk_text = str(chunk.get("text") or "")
             if not chunk_text.strip():
-                continue
+                return None, None, None
 
             logger.info(
                 "Analyzing transcript chunk %s/%s (%s chars, lines %s-%s)",
@@ -963,24 +967,22 @@ async def get_most_relevant_parts_by_transcript(
                 analysis = getattr(result, "data", None) or getattr(result, "output", None)
                 if analysis is None:
                     raise RuntimeError("AI result did not contain parsed output (expected .data or .output)")
-                successful_analyses.append(analysis)
-                chunk_results.append(
-                    {
-                        "chunk_index": chunk_index,
-                        "chunk_total": total_chunks,
-                        "line_count": int(chunk.get("line_count") or 0),
-                        "char_count": int(chunk.get("char_count") or 0),
-                        "raw_segments": len(analysis.most_relevant_segments),
-                        "start_time": chunk.get("start_time"),
-                        "end_time": chunk.get("end_time"),
-                    }
-                )
+                success_info = {
+                    "chunk_index": chunk_index,
+                    "chunk_total": total_chunks,
+                    "line_count": int(chunk.get("line_count") or 0),
+                    "char_count": int(chunk.get("char_count") or 0),
+                    "raw_segments": len(analysis.most_relevant_segments),
+                    "start_time": chunk.get("start_time"),
+                    "end_time": chunk.get("end_time"),
+                }
                 logger.info(
                     "AI analysis chunk %s/%s found %s segments",
                     chunk_index,
                     total_chunks,
                     len(analysis.most_relevant_segments),
                 )
+                return analysis, success_info, None
             except Exception as exc:
                 logger.warning(
                     "AI analysis chunk %s/%s failed: %s",
@@ -988,16 +990,43 @@ async def get_most_relevant_parts_by_transcript(
                     total_chunks,
                     exc,
                 )
-                chunk_failures.append(
-                    {
-                        "chunk_index": chunk_index,
-                        "chunk_total": total_chunks,
-                        "start_time": chunk.get("start_time"),
-                        "end_time": chunk.get("end_time"),
-                        "error": str(exc),
-                        "error_type": type(exc).__name__,
-                    }
-                )
+                failure_info = {
+                    "chunk_index": chunk_index,
+                    "chunk_total": total_chunks,
+                    "start_time": chunk.get("start_time"),
+                    "end_time": chunk.get("end_time"),
+                    "error": str(exc),
+                    "error_type": type(exc).__name__,
+                }
+                return None, None, failure_info
+
+        if ai_chunk_parallel and len(chunks) > 1:
+            # Parallel analysis: fire all chunks at once via asyncio.gather
+            logger.info("Running AI chunk analysis in parallel (%s chunks)", len(chunks))
+            chunk_coroutines = [_analyze_single_chunk(chunk) for chunk in chunks]
+            chunk_outcomes = await asyncio.gather(*chunk_coroutines, return_exceptions=True)
+
+            for outcome in chunk_outcomes:
+                if isinstance(outcome, Exception):
+                    logger.error("Unexpected error in parallel chunk analysis: %s", outcome)
+                    continue
+                analysis, success_info, failure_info = outcome  # type: ignore[misc]
+                if analysis is not None:
+                    successful_analyses.append(analysis)
+                if success_info is not None:
+                    chunk_results.append(success_info)
+                if failure_info is not None:
+                    chunk_failures.append(failure_info)
+        else:
+            # Sequential analysis (original behavior)
+            for chunk in chunks:
+                analysis, success_info, failure_info = await _analyze_single_chunk(chunk)
+                if analysis is not None:
+                    successful_analyses.append(analysis)
+                if success_info is not None:
+                    chunk_results.append(success_info)
+                if failure_info is not None:
+                    chunk_failures.append(failure_info)
 
         if not successful_analyses:
             raise RuntimeError("AI analysis failed for all transcript chunks")
