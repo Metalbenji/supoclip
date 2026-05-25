@@ -3908,6 +3908,78 @@ class TaskService:
         await self.task_repo.delete_task(self.db, task_id)
         logger.info(f"Deleted task {task_id} and all associated clips")
 
+    async def clear_task_source_cache(self, task: Dict[str, Any]) -> Dict[str, Any]:
+        """Clear cached files (video download, transcript, waveform) for a task's source."""
+        from pathlib import Path as FilePath
+        import glob as glob_mod
+
+        temp_dir = FilePath(getattr(config, "temp_dir", "temp"))
+        source_url = str(task.get("source_url") or "").strip()
+        source_type = str(task.get("source_type") or "").strip()
+
+        cleanup: Dict[str, Any] = {"deleted_files": [], "errors": []}
+
+        if not source_url:
+            cleanup["message"] = "No source URL found, nothing to clean"
+            return cleanup
+
+        # Derive the video filename stem that yt-dlp uses (video_id based)
+        # Try to find cached files matching this source
+        video_id = ""
+        if source_type == "youtube":
+            # Extract video ID from various YouTube URL formats
+            import re
+            yt_match = re.search(r"(?:v=|/v/|youtu\.be/|/embed/|/shorts/)([a-zA-Z0-9_-]{11})", source_url)
+            if yt_match:
+                video_id = yt_match.group(1)
+
+        def _safe_delete(path: FilePath) -> bool:
+            try:
+                if path.exists():
+                    path.unlink(missing_ok=True)
+                    return True
+            except Exception as e:
+                cleanup["errors"].append(f"{path.name}: {e}")
+            return False
+
+        if video_id:
+            # Find and delete all cached files for this video ID
+            patterns = [
+                str(temp_dir / f"{video_id}.*"),
+                str(temp_dir / f"{video_id}.*.*"),  # handles formats like kKo9UzYfiqU.f134.mp4
+            ]
+            seen: set[str] = set()
+            for pattern in patterns:
+                for fpath in glob_mod.glob(pattern):
+                    if fpath not in seen:
+                        seen.add(fpath)
+                        if _safe_delete(FilePath(fpath)):
+                            cleanup["deleted_files"].append(FilePath(fpath).name)
+
+        # Also try matching by source title stem in the temp dir
+        source_title = str(task.get("source_title") or "").strip()
+        if source_title:
+            title_stem = source_title[:80]  # limit length to avoid issues
+            for suffix in ["*.mp4", "*.webm", "*.mkv", "*.mov",
+                           "*.transcript.txt", "*.transcript_cache.json",
+                           "*.waveform_base.json"]:
+                pattern = str(temp_dir / f"{video_id}{suffix}" if video_id else f"{title_stem}{suffix}")
+                for fpath in glob_mod.glob(pattern):
+                    if fpath not in seen:
+                        seen.add(fpath)
+                        if _safe_delete(FilePath(fpath)):
+                            cleanup["deleted_files"].append(FilePath(fpath).name)
+
+        cleanup["total_deleted"] = len(cleanup["deleted_files"])
+        cleanup["total_errors"] = len(cleanup["errors"])
+        logger.info(
+            "Cleared source cache for task: video_id=%s deleted=%s errors=%s",
+            video_id,
+            cleanup["total_deleted"],
+            cleanup["total_errors"],
+        )
+        return cleanup
+
     async def delete_all_user_tasks(self, user_id: str) -> int:
         """Delete all tasks that belong to a user."""
         deleted_count = await self.task_repo.delete_tasks_by_user(self.db, user_id)

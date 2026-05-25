@@ -379,6 +379,15 @@ def _resolve_transcription_runtime_options(
                 ),
             )
 
+    # Whisper language override (ISO 639-1 code, e.g. "en", "es", "fr").
+    # When set, Whisper skips language detection — faster and more accurate for known-language content.
+    if "language" in transcription_options:
+        raw_language = transcription_options.get("language")
+        if isinstance(raw_language, str) and raw_language.strip():
+            normalized = raw_language.strip().lower()
+            if len(normalized) >= 2:
+                options["language"] = normalized
+
     return options
 
 
@@ -2640,8 +2649,13 @@ async def update_task(task_id: str, request: Request, db: AsyncSession = Depends
 
 
 @router.delete("/{task_id}")
-async def delete_task(task_id: str, request: Request, db: AsyncSession = Depends(get_db)):
-    """Delete a task and all its associated clips."""
+async def delete_task(
+    task_id: str,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+    clear_cache: bool = Query(False, description="Also clear cached video, transcript, and waveform files for this task's source"),
+):
+    """Delete a task and all its associated clips. Optionally clear cached source files."""
     try:
         headers = request.headers
         user_id = headers.get("user_id")
@@ -2662,7 +2676,12 @@ async def delete_task(task_id: str, request: Request, db: AsyncSession = Depends
         # Delete clips and task
         await task_service.delete_task(task_id)
 
-        return {"message": "Task deleted successfully"}
+        # Optionally clear cached files for this source
+        cache_cleanup = {}
+        if clear_cache:
+            cache_cleanup = await task_service.clear_task_source_cache(task)
+
+        return {"message": "Task deleted successfully", "cache_cleared": cache_cleanup}
 
     except HTTPException:
         raise

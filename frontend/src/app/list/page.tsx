@@ -150,10 +150,13 @@ export default function ListPage() {
     const confirmed = window.confirm("Delete this generation? This cannot be undone.");
     if (!confirmed) return;
 
+    const clearCache = window.confirm("Also clear cached download/transcript files?\n(Choose OK to re-process from scratch next time, Cancel to keep cache)");
+    const clearCacheParam = clearCache ? "?clear_cache=true" : "";
+
     try {
       setError(null);
       setDeletingTaskId(taskId);
-      const response = await fetch(`${apiUrl}/tasks/${taskId}`, {
+      const response = await fetch(`${apiUrl}/tasks/${taskId}${clearCacheParam}`, {
         method: "DELETE",
         headers: {
           user_id: session.user.id,

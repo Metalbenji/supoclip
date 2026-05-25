@@ -518,6 +518,7 @@ export default function TaskPage() {
   const [isEditing, setIsEditing] = useState(false);
   const [editedTitle, setEditedTitle] = useState("");
   const [showDeleteDialog, setShowDeleteDialog] = useState(false);
+  const [deleteClearCache, setDeleteClearCache] = useState(false);
   const [deletingClipId, setDeletingClipId] = useState<string | null>(null);
   const [isDeleting, setIsDeleting] = useState(false);
   const [nowMs, setNowMs] = useState(() => Date.now());
@@ -1021,7 +1022,8 @@ export default function TaskPage() {
 
     setIsDeleting(true);
     try {
-      const response = await fetch(`${apiUrl}/tasks/${params.id}`, {
+      const clearCacheParam = deleteClearCache ? "?clear_cache=true" : "";
+      const response = await fetch(`${apiUrl}/tasks/${params.id}${clearCacheParam}`, {
         method: "DELETE",
         headers: {
           user_id: session.user.id,
@@ -2611,7 +2613,7 @@ export default function TaskPage() {
       </div>
 
       {/* Delete Task Confirmation Dialog */}
-      <AlertDialog open={showDeleteDialog} onOpenChange={setShowDeleteDialog}>
+      <AlertDialog open={showDeleteDialog} onOpenChange={(open) => { if (!open) setDeleteClearCache(false); setShowDeleteDialog(open); }}>
         <AlertDialogContent>
           <AlertDialogHeader>
             <AlertDialogTitle>Delete Generation</AlertDialogTitle>
@@ -2620,6 +2622,18 @@ export default function TaskPage() {
               undone.
             </AlertDialogDescription>
           </AlertDialogHeader>
+          <div className="flex items-center gap-3 py-2 px-1">
+            <input
+              type="checkbox"
+              id="delete-clear-cache"
+              checked={deleteClearCache}
+              onChange={(e) => setDeleteClearCache(e.target.checked)}
+              className="h-4 w-4 rounded border-gray-300 text-red-600 focus:ring-red-500"
+            />
+            <label htmlFor="delete-clear-cache" className="text-sm text-muted-foreground cursor-pointer select-none">
+              Also clear cached download, transcript &amp; waveform files (re-process from scratch next time)
+            </label>
+          </div>
           <AlertDialogFooter>
             <AlertDialogCancel disabled={isDeleting}>Cancel</AlertDialogCancel>
             <AlertDialogAction onClick={handleDeleteTask} disabled={isDeleting} className="bg-red-600 hover:bg-red-700">
