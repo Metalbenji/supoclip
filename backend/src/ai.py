@@ -5,7 +5,9 @@ AI-related functions for transcript analysis with enhanced precision.
 from typing import List, Dict, Any, Optional, Tuple
 import asyncio
 import logging
+import random
 import re
+import time
 
 from pydantic_ai import Agent, NativeOutput
 from pydantic import BaseModel, Field
@@ -962,48 +964,80 @@ async def get_most_relevant_parts_by_transcript(
                 ai_focus_tags=ai_focus_tags,
             )
 
-            try:
-                result = await transcript_agent.run(prompt)
-                analysis = getattr(result, "data", None) or getattr(result, "output", None)
-                if analysis is None:
-                    raise RuntimeError("AI result did not contain parsed output (expected .data or .output)")
-                success_info = {
-                    "chunk_index": chunk_index,
-                    "chunk_total": total_chunks,
-                    "line_count": int(chunk.get("line_count") or 0),
-                    "char_count": int(chunk.get("char_count") or 0),
-                    "raw_segments": len(analysis.most_relevant_segments),
-                    "start_time": chunk.get("start_time"),
-                    "end_time": chunk.get("end_time"),
-                }
-                logger.info(
-                    "AI analysis chunk %s/%s found %s segments",
-                    chunk_index,
-                    total_chunks,
-                    len(analysis.most_relevant_segments),
-                )
-                return analysis, success_info, None
-            except Exception as exc:
-                logger.warning(
-                    "AI analysis chunk %s/%s failed: %s",
-                    chunk_index,
-                    total_chunks,
-                    exc,
-                )
-                failure_info = {
-                    "chunk_index": chunk_index,
-                    "chunk_total": total_chunks,
-                    "start_time": chunk.get("start_time"),
-                    "end_time": chunk.get("end_time"),
-                    "error": str(exc),
-                    "error_type": type(exc).__name__,
-                }
-                return None, None, failure_info
+            retry_max = max(0, int(getattr(config, "ai_chunk_retry_max", 3)))
+            backoff_base = max(0.5, float(getattr(config, "ai_chunk_retry_backoff_base", 4.0)))
+            backoff_max = max(1.0, float(getattr(config, "ai_chunk_retry_backoff_max", 60.0)))
+
+            last_exc: Optional[Exception] = None
+            for attempt in range(retry_max + 1):
+                try:
+                    result = await transcript_agent.run(prompt)
+                    analysis = getattr(result, "data", None) or getattr(result, "output", None)
+                    if analysis is None:
+                        raise RuntimeError("AI result did not contain parsed output (expected .data or .output)")
+                    success_info = {
+                        "chunk_index": chunk_index,
+                        "chunk_total": total_chunks,
+                        "line_count": int(chunk.get("line_count") or 0),
+                        "char_count": int(chunk.get("char_count") or 0),
+                        "raw_segments": len(analysis.most_relevant_segments),
+                        "start_time": chunk.get("start_time"),
+                        "end_time": chunk.get("end_time"),
+                        "retries": attempt,
+                    }
+                    logger.info(
+                        "AI analysis chunk %s/%s found %s segments",
+                        chunk_index,
+                        total_chunks,
+                        len(analysis.most_relevant_segments),
+                    )
+                    return analysis, success_info, None
+                except Exception as exc:
+                    last_exc = exc
+                    exc_str = str(exc).lower()
+                    # Determine if this error is retryable (rate limit or transient server error)
+                    is_rate_limit = ("429" in exc_str or "rate limit" in exc_str)
+                    is_transient = ("500" in exc_str or "502" in exc_str or "503" in exc_str or "timeout" in exc_str or "connection" in exc_str)
+                    is_retryable = is_rate_limit or is_transient
+
+                    if attempt < retry_max and is_retryable:
+                        delay = min(backoff_base * (2 ** attempt) + random.uniform(0, 1), backoff_max)
+                        logger.warning(
+                            "AI analysis chunk %s/%s failed (attempt %s/%s, retryable=%s): %s. Retrying in %.1fs...",
+                            chunk_index, total_chunks, attempt + 1, retry_max + 1, is_retryable, exc, delay,
+                        )
+                        await asyncio.sleep(delay)
+                        continue
+                    else:
+                        logger.warning(
+                            "AI analysis chunk %s/%s failed (attempt %s/%s, retryable=%s): %s",
+                            chunk_index, total_chunks, attempt + 1, retry_max + 1, is_retryable, exc,
+                        )
+
+            failure_info = {
+                "chunk_index": chunk_index,
+                "chunk_total": total_chunks,
+                "start_time": chunk.get("start_time"),
+                "end_time": chunk.get("end_time"),
+                "error": str(last_exc) if last_exc else "unknown",
+                "error_type": type(last_exc).__name__ if last_exc else "UnknownError",
+            }
+            return None, None, failure_info
 
         if ai_chunk_parallel and len(chunks) > 1:
-            # Parallel analysis: fire all chunks at once via asyncio.gather
-            logger.info("Running AI chunk analysis in parallel (%s chunks)", len(chunks))
-            chunk_coroutines = [_analyze_single_chunk(chunk) for chunk in chunks]
+            # Parallel analysis with concurrency limiter to avoid rate limiting
+            max_concurrent = max(1, int(getattr(config, "ai_chunk_concurrency", 3)))
+            logger.info(
+                "Running AI chunk analysis in parallel (%s chunks, max_concurrent=%s)",
+                len(chunks), max_concurrent,
+            )
+            semaphore = asyncio.Semaphore(max_concurrent)
+
+            async def _bounded_analyze(chunk: Dict[str, Any]) -> Tuple[Optional[TranscriptAnalysis], Optional[Dict[str, Any]], Optional[Dict[str, Any]]]:
+                async with semaphore:
+                    return await _analyze_single_chunk(chunk)
+
+            chunk_coroutines = [_bounded_analyze(chunk) for chunk in chunks]
             chunk_outcomes = await asyncio.gather(*chunk_coroutines, return_exceptions=True)
 
             for outcome in chunk_outcomes:
