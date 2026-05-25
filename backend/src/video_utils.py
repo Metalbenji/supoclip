@@ -2749,6 +2749,39 @@ def _measure_label_text(text: str, font_path: str, font_size: int) -> Tuple[int,
         return (max(1, int(font_size * 0.6 * len(text))), max(1, int(font_size)))
 
 
+def _measure_caption_text(text: str, font_path: str, font_size: int) -> Tuple[int, int]:
+    """Measure text using caption mode (same as rendering) for accurate sizing.
+
+    Custom/decorative fonts often have different metrics between label and
+    caption modes. Using caption for measurement ensures the highlight box
+    and word positioning match what's actually rendered on screen.
+    """
+    if not text:
+        return (0, max(1, int(font_size)))
+    try:
+        # Use a generous box size — we only care about the actual text dimensions
+        probe_width = max(font_size * len(text) * 2, 4096)
+        probe_height = max(int(font_size * 2.5), 64)
+        measure_clip = TextClip(
+            text=text,
+            font=font_path,
+            font_size=font_size,
+            color="#FFFFFF",
+            stroke_width=0,
+            method="caption",
+            size=(probe_width, probe_height),
+            text_align="center",
+        )
+        try:
+            if measure_clip.size:
+                return (max(1, int(measure_clip.size[0])), max(1, int(measure_clip.size[1])))
+            return _measure_label_text(text, font_path, font_size)
+        finally:
+            measure_clip.close()
+    except Exception:
+        return _measure_label_text(text, font_path, font_size)
+
+
 def _build_styled_word_layers(
     *,
     text: str,
@@ -3073,10 +3106,13 @@ def create_assemblyai_subtitles(
 
     calculated_font_size = max(16, int(style["font_size"] * (video_width / 640) * 1.15))
     final_font_size = calculated_font_size
+    # Stroke scaling: use sqrt of the font scale ratio so stroke doesn't blow up
+    # on decorative fonts at high resolutions. Full linear scaling causes
+    # disproportionately thick strokes on fonts like Pokemon, AmazDooM, etc.
     base_stroke_width = max(0, int(style["stroke_width"]))
     if style["font_size"] > 0:
         stroke_scale = final_font_size / style["font_size"]
-        stroke_width = max(0, int(round(base_stroke_width * stroke_scale)))
+        stroke_width = max(0, int(round(base_stroke_width * (stroke_scale ** 0.6))))
     else:
         stroke_width = base_stroke_width
     stroke_blur = float(style["stroke_blur"])
@@ -3125,7 +3161,19 @@ def create_assemblyai_subtitles(
         return []
 
     # ── Measure word dimensions ─────────────────────────────────────────
+    # Use method="caption" for measurement to match the rendering method.
+    # Custom/decorative fonts can have very different metrics between
+    # "label" and "caption" modes, causing highlight boxes to not align
+    # with the rendered text.
     word_sizes_all = [_measure_label_text(w, processor.font_path, final_font_size) for w in display_words_all]
+    # Verify measurement by cross-checking with caption-sized bounding.
+    # If caption mode measures wider, use the caption width to prevent
+    # the highlight from being narrower than the rendered text.
+    caption_word_sizes = [_measure_caption_text(w, processor.font_path, final_font_size) for w in display_words_all]
+    word_sizes_all = [
+        (max(ws[0], cs[0]), max(ws[1], cs[1]))
+        for ws, cs in zip(word_sizes_all, caption_word_sizes)
+    ]
     word_widths_all = [s[0] for s in word_sizes_all]
     word_heights_all = [s[1] for s in word_sizes_all]
     text_height = max([final_font_size] + word_heights_all)
