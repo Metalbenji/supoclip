@@ -223,18 +223,22 @@ class VideoProcessor:
             candidates.append(
                 {
                     "encoder_backend": "h264_nvenc",
-                    "encoder_profile": "gpu_fast",
+                    "encoder_profile": "gpu_balanced",
                     "settings": {
                         "codec": "h264_nvenc",
                         "audio_codec": "aac",
-                        "bitrate": "6000k",
+                        "bitrate": "8000k",
                         "audio_bitrate": "192k",
-                        "preset": "p4",
+                        "preset": "p6",
                         "ffmpeg_params": [
                             "-pix_fmt",
                             "yuv420p",
                             "-profile:v",
-                            "main",
+                            "high",
+                            "-rc",
+                            "vbr",
+                            "-cq",
+                            "23",
                         ],
                     },
                 }
@@ -653,10 +657,6 @@ def _run_whisper_transcription(
         "word_timestamps": True,
         "verbose": False,
         "fp16": use_fp16,
-        # Disable conditioning on previous text for faster transcription.
-        # When a language is explicitly set, this has minimal accuracy impact
-        # but significantly speeds up processing of long audio.
-        "condition_on_previous_text": False,
     }
     if language and language.strip():
         transcribe_kwargs["language"] = language.strip()
@@ -3966,6 +3966,11 @@ def create_optimized_clip(
 
         # Compose and encode
         final_clip = CompositeVideoClip(final_clips) if len(final_clips) > 1 else cropped_clip
+
+        # CompositeVideoClip does not automatically preserve audio from constituent clips.
+        # Explicitly attach the audio from the cropped base clip so output has sound.
+        if len(final_clips) > 1 and hasattr(cropped_clip, "audio") and cropped_clip.audio is not None:
+            final_clip = final_clip.with_audio(cropped_clip.audio)
 
         # ── Nuclear safety: wrap EVERY clip and mask so no get_frame can
         #    ever return a zero-height frame.  MoviePy's compose_mask()
