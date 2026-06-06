@@ -359,7 +359,7 @@ services:
 
   # Redis for caching and job queues (useful for video processing)
   redis:
-    image: redis:7-alpine
+    image: bitnami/redis@sha256:1347d526ecec0c6537e99eac09e7c3405c21664f6044ff60e78b0898da37abd2
     container_name: supoclip-redis
     ports:
       - "${REDIS_HOST_PORT:-6379}:6379"
