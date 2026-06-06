@@ -1666,6 +1666,78 @@ async def init_db():
             )
         )
 
+        # --- Ensure core tables exist (init.sql may not run on existing volumes) ---
+        await conn.execute(
+            text(
+                """
+                CREATE TABLE IF NOT EXISTS sources (
+                    id VARCHAR(36) PRIMARY KEY DEFAULT uuid_generate_v4()::text,
+                    type VARCHAR(20) NOT NULL,
+                    title VARCHAR(500) NOT NULL,
+                    url TEXT,
+                    created_at TIMESTAMPTZ DEFAULT NOW(),
+                    updated_at TIMESTAMPTZ DEFAULT NOW()
+                )
+                """
+            )
+        )
+        await conn.execute(
+            text(
+                """
+                CREATE TABLE IF NOT EXISTS generated_clips (
+                    id VARCHAR(36) PRIMARY KEY DEFAULT uuid_generate_v4()::text,
+                    task_id VARCHAR(36) NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+                    filename VARCHAR(255) NOT NULL,
+                    file_path VARCHAR(500) NOT NULL,
+                    start_time VARCHAR(20) NOT NULL,
+                    end_time VARCHAR(20) NOT NULL,
+                    duration FLOAT NOT NULL,
+                    text TEXT,
+                    relevance_score FLOAT NOT NULL,
+                    reasoning TEXT,
+                    generated_title TEXT,
+                    generated_description TEXT,
+                    generated_hashtags TEXT,
+                    clip_order INTEGER NOT NULL,
+                    created_at TIMESTAMPTZ DEFAULT NOW(),
+                    updated_at TIMESTAMPTZ DEFAULT NOW()
+                )
+                """
+            )
+        )
+        await conn.execute(
+            text(
+                """
+                CREATE TABLE IF NOT EXISTS task_clip_drafts (
+                    id VARCHAR(36) PRIMARY KEY DEFAULT uuid_generate_v4()::text,
+                    task_id VARCHAR(36) NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+                    clip_order INTEGER NOT NULL,
+                    start_time VARCHAR(20) NOT NULL,
+                    end_time VARCHAR(20) NOT NULL,
+                    duration FLOAT NOT NULL,
+                    original_start_time VARCHAR(20) NOT NULL,
+                    original_end_time VARCHAR(20) NOT NULL,
+                    original_duration FLOAT NOT NULL,
+                    original_text TEXT,
+                    edited_text TEXT,
+                    relevance_score FLOAT NOT NULL,
+                    review_score FLOAT NOT NULL DEFAULT 0,
+                    feedback_score_adjustment FLOAT NOT NULL DEFAULT 0,
+                    feedback_signals_json JSONB,
+                    reasoning TEXT,
+                    created_by_user BOOLEAN NOT NULL DEFAULT false,
+                    is_selected BOOLEAN NOT NULL DEFAULT true,
+                    is_deleted BOOLEAN NOT NULL DEFAULT false,
+                    edited_word_timings_json JSONB,
+                    created_at TIMESTAMPTZ DEFAULT NOW(),
+                    updated_at TIMESTAMPTZ DEFAULT NOW()
+                )
+                """
+            )
+        )
+        await conn.execute(text("""CREATE INDEX IF NOT EXISTS idx_generated_clips_task_id ON generated_clips(task_id)"""))
+        await conn.execute(text("""CREATE INDEX IF NOT EXISTS idx_task_clip_drafts_task_id ON task_clip_drafts(task_id)"""))
+
         # --- Ensure bypass user exists (for single-user / dev setups) ---
         await conn.execute(
             text(
