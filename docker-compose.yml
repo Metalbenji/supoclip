@@ -361,10 +361,12 @@ services:
   redis:
     image: bitnami/redis@sha256:1347d526ecec0c6537e99eac09e7c3405c21664f6044ff60e78b0898da37abd2
     container_name: supoclip-redis
+    environment:
+      - ALLOW_EMPTY_PASSWORD=yes
     ports:
       - "${REDIS_HOST_PORT:-6379}:6379"
     volumes:
-      - redis_data:/data
+      - redis_data:/bitnami/redis/data
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
