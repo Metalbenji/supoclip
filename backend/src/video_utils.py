@@ -10,7 +10,7 @@ import logging
 import gc
 from datetime import datetime
 import numpy as np
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import ThreadPoolExecutor, as_completed, TimeoutError as FuturesTimeoutError
 import json
 import hashlib
 import threading
@@ -2844,11 +2844,16 @@ def _build_styled_word_layers(
         def _pos_fn(x: int, y: int):
             """Wheel position: slide-in → hold → slide-out.
 
-            ``t`` is clip-local time.  Phase 1 (0→in_dur): slides from
-            center-offset above down to center.  Phase 2 (in_dur→duration-out_dur):
+            Returns a MoviePy-compatible position lambda.  ``t`` is clip-local
+            time (0 at first frame of the clip).  Phase 1 (0→in_dur): slides
+            from center-offset above down to center.  Phase 2 (in_dur→duration-out_dur):
                 holds at center.  Phase 3 (duration-out_dur→duration): slides from
             center down to center+offset below.
             """
+            return lambda t: _wheel_pos(t, x)
+
+        def _wheel_pos(t: float, x: int) -> Tuple[int, int]:
+            """Compute wheel-mode (x, y) for clip-local time *t*."""
             _t = max(0.0, min(float(t), float(duration)))
             if _t <= _in_dur:
                 # Slide in from above
@@ -3833,6 +3838,7 @@ def create_optimized_clip(
     output_aspect_ratio: str = "9:16",
     error_collector: Optional[List[str]] = None,
     render_details_sink: Optional[Dict[str, Any]] = None,
+    clip_render_timeout: Optional[float] = None,
 ) -> bool:
     """Create an optimized clip with word-timed subtitles."""
     try:
@@ -4100,13 +4106,53 @@ def create_optimized_clip(
                 f"{output_path.stem}.{selected_encoder_profile or 'render'}.temp-audio.m4a"
             )
             try:
-                final_clip.write_videofile(
-                    str(output_path),
-                    temp_audiofile=str(temp_audiofile),
-                    remove_temp=True,
-                    logger=None,
-                    **dict(encoding_candidate.get("settings") or {}),
-                )
+                _enc_settings = dict(encoding_candidate.get("settings") or {})
+                if clip_render_timeout and clip_render_timeout > 0:
+                    # Run write_videofile in a sub-thread so we can enforce a per-clip timeout.
+                    # This prevents a single stuck ffmpeg process from blocking the entire
+                    # render queue indefinitely.
+                    _encode_done = threading.Event()
+                    _encode_exc: List[Exception] = []
+
+                    def _run_encode():
+                        try:
+                            final_clip.write_videofile(
+                                str(output_path),
+                                temp_audiofile=str(temp_audiofile),
+                                remove_temp=True,
+                                logger=None,
+                                **_enc_settings,
+                            )
+                        except Exception as exc:
+                            _encode_exc.append(exc)
+                        finally:
+                            _encode_done.set()
+
+                    _enc_thread = threading.Thread(target=_run_encode, daemon=True)
+                    _enc_thread.start()
+                    _encode_done.wait(timeout=clip_render_timeout)
+                    if _enc_thread.is_alive():
+                        # Thread is still running — timed out
+                        logger.error(
+                            "Clip encode timed out after %.1fs using %s (%s); aborting",
+                            clip_render_timeout,
+                            selected_encoder_backend,
+                            selected_encoder_profile,
+                        )
+                        raise RuntimeError(
+                            f"Clip render timed out after {clip_render_timeout:.0f}s "
+                            f"(encoder={selected_encoder_backend}/{selected_encoder_profile})"
+                        )
+                    if _encode_exc:
+                        raise _encode_exc[0]
+                else:
+                    final_clip.write_videofile(
+                        str(output_path),
+                        temp_audiofile=str(temp_audiofile),
+                        remove_temp=True,
+                        logger=None,
+                        **_enc_settings,
+                    )
                 break
             except Exception as encode_error:
                 last_encode_error = encode_error
@@ -4168,6 +4214,7 @@ def create_clips_from_segments(
     progress_callback: Optional[Callable[[Dict[str, Any]], None]] = None,
     filename_prefix: Optional[str] = None,
     max_workers: int = 1,
+    clip_render_timeout: Optional[float] = None,
 ) -> List[Dict[str, Any]]:
     """Create optimized video clips from segments."""
     video_path = Path(video_path)
@@ -4284,6 +4331,7 @@ def create_clips_from_segments(
                 output_aspect_ratio=str(segment.get("output_aspect_ratio") or output_aspect_ratio),
                 error_collector=clip_errors,
                 render_details_sink=render_details,
+                clip_render_timeout=clip_render_timeout,
             )
 
             if success:
@@ -4481,6 +4529,7 @@ def create_clips_with_transitions(
     progress_callback: Optional[Callable[[Dict[str, Any]], None]] = None,
     filename_prefix: Optional[str] = None,
     max_workers: int = 1,
+    clip_render_timeout: Optional[float] = None,
 ) -> List[Dict[str, Any]]:
     """Create video clips with transition effects between them."""
     video_path = Path(video_path)
@@ -4502,6 +4551,7 @@ def create_clips_with_transitions(
         progress_callback=progress_callback,
         filename_prefix=filename_prefix,
         max_workers=1,
+        clip_render_timeout=clip_render_timeout,
     )
 
     if len(clips_info) < 2:

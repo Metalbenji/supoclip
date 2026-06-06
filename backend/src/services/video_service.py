@@ -426,6 +426,7 @@ class VideoService:
         create_clips_from_segments = VideoService._video_utils_attr("create_clips_from_segments")
         clip_builder = create_clips_with_transitions if transitions_enabled else create_clips_from_segments
         render_workers = 1 if transitions_enabled else getattr(config, "render_max_workers", 2)
+        clip_render_timeout = getattr(config, "per_clip_render_timeout_seconds", 300)
         clips_info = await run_in_thread(
             clip_builder,
             video_path,
@@ -440,6 +441,7 @@ class VideoService:
             on_clip_progress,
             filename_prefix,
             render_workers,
+            clip_render_timeout,
         )
         if not transitions_enabled:
             render_diagnostics["transitions_disabled"] = True

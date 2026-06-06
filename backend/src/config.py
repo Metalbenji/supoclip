@@ -47,6 +47,7 @@ class Config:
         self.max_video_duration = int(os.getenv("MAX_VIDEO_DURATION", "3600"))
         self.output_dir = os.getenv("OUTPUT_DIR", "outputs")
         self.render_max_workers = max(1, int(os.getenv("RENDER_MAX_WORKERS", "2")))
+        self.per_clip_render_timeout_seconds = int(os.getenv("PER_CLIP_RENDER_TIMEOUT_SECONDS", "300"))
 
         self.max_clips = int(os.getenv("MAX_CLIPS", "10"))
         self.clip_duration = int(os.getenv("CLIP_DURATION", "30"))  # seconds
