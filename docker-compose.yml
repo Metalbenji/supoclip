@@ -363,6 +363,7 @@ services:
     container_name: supoclip-redis
     environment:
       - ALLOW_EMPTY_PASSWORD=yes
+      - REDIS_AOF_ENABLED=no
     ports:
       - "${REDIS_HOST_PORT:-6379}:6379"
     volumes:
