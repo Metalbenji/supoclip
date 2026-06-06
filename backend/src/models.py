@@ -188,6 +188,8 @@ class Task(Base):
     transcription_provider: Mapped[str] = mapped_column(String(20), nullable=False, server_default=text("'local'"))
     ai_provider: Mapped[str] = mapped_column(String(20), nullable=False, server_default=text("'openai'"))
     ai_focus_tags: Mapped[Optional[list[str]]] = mapped_column(JSONB, nullable=True)
+    clip_context: Mapped[Optional[str]] = mapped_column(Text, nullable=True, description="User-provided context: game, activity, topic")
+    content_tone: Mapped[Optional[str]] = mapped_column(String(30), nullable=True, description="Tone for generated content")
     processing_profile: Mapped[str] = mapped_column(String(32), nullable=False, server_default=text("'balanced'"))
     workflow_source: Mapped[str] = mapped_column(String(16), nullable=False, server_default=text("'built_in'"))
     saved_workflow_id: Mapped[Optional[str]] = mapped_column(
@@ -283,6 +285,9 @@ class GeneratedClip(Base):
     text: Mapped[Optional[str]] = mapped_column(Text, nullable=True)     # Transcript text for this clip
     relevance_score: Mapped[float] = mapped_column(Float, nullable=False)
     reasoning: Mapped[Optional[str]] = mapped_column(Text, nullable=True) # AI reasoning for selection
+    generated_title: Mapped[Optional[str]] = mapped_column(Text, nullable=True, description="AI-generated clip title")
+    generated_description: Mapped[Optional[str]] = mapped_column(Text, nullable=True, description="AI-generated description")
+    generated_hashtags: Mapped[Optional[str]] = mapped_column(Text, nullable=True, description="AI-generated hashtags")
     clip_order: Mapped[int] = mapped_column(Integer, nullable=False)     # Order within the task
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())

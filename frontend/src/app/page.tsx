@@ -89,6 +89,8 @@ export default function Home() {
   const [statusMessage, setStatusMessage] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [aiFocusTags, setAiFocusTags] = useState<AiFocusTag[]>([]);
+  const [clipContext, setClipContext] = useState("");
+  const [contentTone, setContentTone] = useState("casual");
   const [preferences, setPreferences] = useState<UserPreferences>(DEFAULT_USER_PREFERENCES);
   const [savedWorkflows, setSavedWorkflows] = useState<SavedWorkflow[]>([]);
   const [selectedWorkflow, setSelectedWorkflow] = useState<WorkflowSelection>({ kind: "built_in", id: "balanced" });
@@ -511,6 +513,8 @@ export default function Home() {
           provider: preferences.aiProvider,
           model: preferences.aiModel.trim() || DEFAULT_AI_MODELS[preferences.aiProvider],
           focus_tags: aiFocusTags,
+          clip_context: clipContext.trim() || undefined,
+          content_tone: contentTone,
         },
       };
 
@@ -995,6 +999,50 @@ export default function Home() {
                   </button>
                 </div>
               ) : null}
+            </div>
+
+            {/* AI Content Generation */}
+            <div className="space-y-4 rounded-lg border bg-gray-50 p-4">
+              <div>
+                <h3 className="text-sm font-medium text-black">AI Content Generation</h3>
+                <p className="text-xs text-gray-600">
+                  Auto-generate titles, descriptions, and hashtags for each clip. Files are renamed with the generated title and metadata is embedded.
+                </p>
+              </div>
+
+              <div className="space-y-1.5">
+                <label className="text-sm font-medium text-black">Game / Activity Context</label>
+                <Input
+                  type="text"
+                  placeholder="e.g. Playing Valorant ranked, Minecraft building, cooking tutorial..."
+                  value={clipContext}
+                  onChange={(e) => setClipContext(e.target.value)}
+                  disabled={isLoading}
+                />
+                <p className="text-xs text-gray-500">
+                  Tell the AI what you&apos;re playing or doing so it can create more relevant content for each clip.
+                </p>
+              </div>
+
+              <div className="space-y-1.5">
+                <label className="text-sm font-medium text-black">Content Tone</label>
+                <Select value={contentTone} onValueChange={setContentTone} disabled={isLoading}>
+                  <SelectTrigger className="w-full">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="casual">Casual — relaxed, friendly, natural</SelectItem>
+                    <SelectItem value="humorous">Humorous — witty, funny, meme-worthy</SelectItem>
+                    <SelectItem value="energetic">Energetic — hype, exciting, fire</SelectItem>
+                    <SelectItem value="serious">Serious — grounded, impactful</SelectItem>
+                    <SelectItem value="dramatic">Dramatic — epic, cinematic, intense</SelectItem>
+                    <SelectItem value="educational">Educational — informative, takeaways</SelectItem>
+                    <SelectItem value="sarcastic">Sarcastic — dry humor, deadpan</SelectItem>
+                    <SelectItem value="inspirational">Inspirational — uplifting, motivating</SelectItem>
+                    <SelectItem value="professional">Professional — polished, thought leadership</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
             </div>
 
             <div className="rounded-lg border bg-white p-4">

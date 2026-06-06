@@ -1899,6 +1899,88 @@ class TaskService:
             clip_ids.append(clip_id)
 
         await self.task_repo.update_task_clips(self.db, task_id, clip_ids)
+
+        # --- AI Content Generation (title, description, hashtags) ---
+        try:
+            task_record = await self.task_repo.get_task_by_id(self.db, task_id)
+            runtime_info = {}
+            if task_record and isinstance(task_record.get("runtime_info"), dict):
+                runtime_info = task_record["runtime_info"]
+            clip_context = runtime_info.get("clip_context")
+            content_tone = runtime_info.get("content_tone")
+
+            if clip_context or content_tone:
+                from ..ai import generate_clip_metadata, VALID_CONTENT_TONES
+                from pathlib import Path as P
+                from ..video_utils import rename_clip_file, embed_ffmpeg_metadata
+
+                effective_tone = content_tone if content_tone in VALID_CONTENT_TONES else "casual"
+
+                # Resolve AI credentials from task record
+                creds = await self._resolve_processing_credentials(
+                    transcription_provider=str(task_record.get("transcription_provider") or "local"),
+                    ai_provider=str(task_record.get("ai_provider") or "openai"),
+                    ai_model=None,
+                    ai_routing_mode=None,
+                    user_id=str(task_record.get("user_id")) if task_record else None,
+                )
+                ai_api_key = creds[3]
+                ai_base_url = creds[4]
+                ai_api_key_fallbacks = creds[5]
+                ai_key_labels = creds[6]
+                ai_request_options = creds[7]
+
+                for i, clip_info in enumerate(clips):
+                    clip_id = clip_ids[i]
+                    clip_text = clip_info.get("text", "")
+                    clip_reasoning = clip_info.get("reasoning", "")
+                    if not clip_text or not clip_reasoning:
+                        continue
+
+                    try:
+                        clip_file_path = P(clip_info["path"])
+                        metadata = await generate_clip_metadata(
+                            transcript_text=clip_text,
+                            reasoning=clip_reasoning,
+                            context=clip_context,
+                            tone=effective_tone,
+                            ai_provider=str(task_record.get("ai_provider") or "openai"),
+                            ai_api_key=ai_api_key,
+                            ai_base_url=ai_base_url,
+                            ai_model=None,
+                            ai_api_key_fallbacks=ai_api_key_fallbacks,
+                            ai_key_labels=ai_key_labels,
+                            ai_request_options=ai_request_options,
+                        )
+
+                        if clip_file_path.exists() and metadata.title:
+                            new_path = rename_clip_file(clip_file_path, metadata.title)
+                            full_description = metadata.description or ""
+                            if metadata.hashtags:
+                                full_description = f"{full_description}\n{metadata.hashtags}"
+                            embed_ffmpeg_metadata(
+                                new_path,
+                                title=metadata.title,
+                                description=full_description,
+                                hashtags=metadata.hashtags,
+                            )
+                            await self.clip_repo.update_clip_content(
+                                self.db,
+                                clip_id=clip_id,
+                                filename=new_path.name,
+                                file_path=str(new_path),
+                                generated_title=metadata.title,
+                                generated_description=metadata.description,
+                                generated_hashtags=metadata.hashtags,
+                            )
+                            logger.info(f"Clip {clip_id} renamed to '{new_path.name}' (tone={effective_tone})")
+                    except Exception as content_err:
+                        logger.warning(f"Content generation failed for clip {clip_id}: {content_err}")
+
+                await self.db.flush()
+        except Exception as meta_err:
+            logger.warning(f"Metadata generation skipped for task {task_id}: {meta_err}")
+
         return clip_ids
 
     async def _resolve_processing_credentials(

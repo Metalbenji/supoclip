@@ -107,6 +107,8 @@ CREATE TABLE tasks (
     transcription_provider VARCHAR(20) NOT NULL DEFAULT 'local' CHECK (transcription_provider IN ('local', 'assemblyai')),
     ai_provider VARCHAR(20) NOT NULL DEFAULT 'openai' CHECK (ai_provider IN ('openai', 'google', 'anthropic', 'zai')),
     ai_focus_tags JSONB,
+    clip_context TEXT,                          -- User-provided context: game, activity, topic
+    content_tone VARCHAR(30),                   -- Tone for generated content: humorous, serious, energetic, casual, etc.
 
     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
@@ -124,6 +126,9 @@ CREATE TABLE generated_clips (
     text TEXT,                       -- Transcript text for this clip
     relevance_score FLOAT NOT NULL,
     reasoning TEXT,                  -- AI reasoning for selection
+    generated_title TEXT,                      -- AI-generated clip title for social media
+    generated_description TEXT,                 -- AI-generated description for social media
+    generated_hashtags TEXT,                   -- AI-generated hashtags (comma-separated)
     clip_order INTEGER NOT NULL,     -- Order within the task
     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP

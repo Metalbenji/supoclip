@@ -72,7 +72,8 @@ class ClipRepository:
         result = await db.execute(
             sql_text("""
                 SELECT id, filename, file_path, start_time, end_time, duration,
-                       text, relevance_score, reasoning, clip_order, created_at
+                       text, relevance_score, reasoning, clip_order, created_at,
+                       generated_title, generated_description, generated_hashtags
                 FROM generated_clips
                 WHERE task_id = :task_id
                 ORDER BY clip_order ASC
@@ -94,7 +95,10 @@ class ClipRepository:
                 "reasoning": row.reasoning,
                 "clip_order": row.clip_order,
                 "created_at": row.created_at.isoformat(),
-                "video_url": f"/clips/{row.filename}"
+                "video_url": f"/clips/{row.filename}",
+                "generated_title": row.generated_title,
+                "generated_description": row.generated_description,
+                "generated_hashtags": row.generated_hashtags,
             })
 
         return clips
@@ -129,3 +133,36 @@ class ClipRepository:
         )
         await db.commit()
         logger.info(f"Deleted clip {clip_id}")
+
+    @staticmethod
+    async def update_clip_content(
+        db: AsyncSession,
+        clip_id: str,
+        filename: str,
+        file_path: str,
+        generated_title: str,
+        generated_description: str,
+        generated_hashtags: str,
+    ) -> None:
+        """Update a clip's generated content and file info after AI metadata generation."""
+        await db.execute(
+            sql_text("""
+                UPDATE generated_clips
+                SET filename = :filename,
+                    file_path = :file_path,
+                    generated_title = :generated_title,
+                    generated_description = :generated_description,
+                    generated_hashtags = :generated_hashtags,
+                    updated_at = NOW()
+                WHERE id = :clip_id
+            """),
+            {
+                "clip_id": clip_id,
+                "filename": filename,
+                "file_path": file_path,
+                "generated_title": generated_title,
+                "generated_description": generated_description,
+                "generated_hashtags": generated_hashtags,
+            }
+        )
+        logger.info(f"Updated clip {clip_id} with generated content")

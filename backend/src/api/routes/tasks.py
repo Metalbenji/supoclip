@@ -1597,6 +1597,8 @@ async def create_task(request: Request, db: AsyncSession = Depends(get_db)):
             "output_aspect_ratio": output_aspect_ratio,
             "source_options": source_options,
             "review_options": review_options,
+            "clip_context": str(ai_options.get("clip_context") or "").strip() or None,
+            "content_tone": str(ai_options.get("content_tone") or "").strip().lower() or None,
             "video_preferences_override": {
                 "default_framing_mode": video_options.get("default_framing_mode"),
                 "face_detection_mode": video_options.get("face_detection_mode"),

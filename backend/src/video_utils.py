@@ -4565,3 +4565,72 @@ def get_video_transcript_with_assemblyai(path: Path) -> str:
 def create_9_16_clip(video_path: Path, start_time: float, end_time: float, output_path: Path, subtitle_text: str = "") -> bool:
     """Backward compatibility wrapper."""
     return create_optimized_clip(video_path, start_time, end_time, output_path, add_subtitles=bool(subtitle_text))
+
+
+def embed_ffmpeg_metadata(
+    clip_path: Path,
+    title: str | None = None,
+    description: str | None = None,
+    hashtags: str | None = None,
+) -> bool:
+    """Embed title, description, and hashtags into an MP4 file's metadata using FFmpeg."""
+    if not clip_path.exists():
+        logger.warning(f"Cannot embed metadata: file not found: {clip_path}")
+        return False
+
+    metadata_args: list[str] = []
+    if title:
+        safe_title = str(title).replace('"', '\\"').replace('\n', ' ')
+        metadata_args.extend(["-metadata", f"title={safe_title}"])
+    if description:
+        safe_desc = str(description).replace('"', '\\"').replace('\n', ' ')
+        metadata_args.extend(["-metadata", f"description={safe_desc}"])
+    if hashtags:
+        safe_tags = str(hashtags).replace('"', '\\"').replace('\n', ' ')
+        metadata_args.extend(["-metadata", f"comment={safe_tags}"])
+
+    if not metadata_args:
+        return True
+
+    output_path = clip_path.with_suffix(".tmp_meta.mp4")
+    command = [
+        "ffmpeg", "-y", "-i", str(clip_path),
+        "-c", "copy",
+        *metadata_args,
+        "-movflags", "+faststart",
+        str(output_path),
+    ]
+    result = subprocess.run(command, capture_output=True, text=True, timeout=120)
+    if result.returncode != 0 or not output_path.exists():
+        logger.error(f"FFmpeg metadata embedding failed: {result.stderr[-500:]}")
+        return False
+
+    import shutil
+    shutil.move(str(output_path), str(clip_path))
+    logger.info(f"Embedded metadata into {clip_path.name}")
+    return True
+
+
+def rename_clip_file(clip_path: Path, new_title: str) -> Path:
+    """Rename a clip file using the generated title (sanitized for filesystem)."""
+    import re
+    # Sanitize title for filesystem: remove unsafe chars, limit length
+    safe_name = re.sub(r'[<>:"/\\|*?]', '', new_title).strip()
+    safe_name = re.sub(r'\s+', '_', safe_name)
+    if len(safe_name) > 80:
+        safe_name = safe_name[:80].rstrip('_')
+    if not safe_name:
+        safe_name = "untitled_clip"
+
+    new_path = clip_path.with_name(f"{safe_name}{clip_path.suffix}")
+    # Handle collision
+    counter = 1
+    while new_path.exists() and new_path != clip_path:
+        new_path = clip_path.with_name(f"{safe_name}_{counter}{clip_path.suffix}")
+        counter += 1
+
+    if new_path != clip_path:
+        import shutil
+        shutil.move(str(clip_path), str(new_path))
+        logger.info(f"Renamed clip: {clip_path.name} -> {new_path.name}")
+    return new_path

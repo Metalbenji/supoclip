@@ -67,6 +67,49 @@ class CandidateRerankResult(BaseModel):
     ranked_candidates: List[RerankedCandidate]
 
 
+class ClipMetadata(BaseModel):
+    """AI-generated social media metadata for a single clip."""
+    title: str = Field(description="Catchy title for the clip (under 100 characters)", max_length=100)
+    description: str = Field(description="Engaging description for social media (150-300 characters)", max_length=500)
+    hashtags: str = Field(description="Comma-separated list of relevant hashtags (5-15 hashtags)")
+
+VALID_CONTENT_TONES = {
+    "humorous", "serious", "energetic", "casual", "professional",
+    "dramatic", "educational", "sarcastic", "inspirational",
+}
+
+CLIP_METADATA_SYSTEM_PROMPT = """You are a social media content expert who creates compelling titles, descriptions, and hashtags for short-form video clips.
+
+You will receive:
+1. The transcript text of the clip
+2. The AI's reasoning for why this clip was selected
+3. Optional context about the game, activity, or topic being featured
+4. A desired tone for the output
+
+Your task is to create engaging social media content that:
+- Captures the essence and hook of the clip
+- Matches the requested tone
+- Is optimized for platforms like TikTok, Instagram Reels, and YouTube Shorts
+- Uses the provided context to add relevance and specificity
+
+OUTPUT FORMAT: Return valid JSON only with keys: "title", "description", "hashtags"
+
+TITLE RULES:
+- Maximum 100 characters, catchy and attention-grabbing
+- Can use emojis if the tone is humorous or energetic
+- Reflect the requested tone
+
+DESCRIPTION RULES:
+- 150-300 characters, expand on the title with more context
+- Include a call-to-action when appropriate for the tone
+- Should work as a standalone social media caption
+
+HASHTAG RULES:
+- 5-15 relevant hashtags, mix of broad and specific
+- Include game-specific hashtags if context is provided
+- Return as a single comma-separated string"""
+
+
 # Simplified system prompt that trusts transcript timing
 simplified_system_prompt = """You are an expert at analyzing video transcripts to find the most engaging segments for short-form content creation.
 
@@ -1137,3 +1180,77 @@ async def get_most_relevant_parts_by_transcript(
 def get_most_relevant_parts_sync(transcript: str) -> TranscriptAnalysis:
     """Synchronous wrapper for the async function."""
     return asyncio.run(get_most_relevant_parts_by_transcript(transcript))
+
+
+async def generate_clip_metadata(
+    transcript_text: str,
+    reasoning: str,
+    context: Optional[str] = None,
+    tone: str = "casual",
+    ai_provider: str = "openai",
+    ai_api_key: Optional[str] = None,
+    ai_base_url: Optional[str] = None,
+    ai_model: Optional[str] = None,
+    ai_api_key_fallbacks: list = None,
+    ai_key_labels: list = None,
+    ai_request_options: Optional[Dict[str, Any]] = None,
+) -> ClipMetadata:
+    """Generate title, description, and hashtags for a clip using the LLM."""
+    logger.info(f"Generating metadata for clip (tone={tone}, has_context={bool(context)})")
+
+    tone_guidance = {
+        "humorous": "Use witty wordplay, funny observations, and memes. Don't be afraid to exaggerate for comedic effect.",
+        "serious": "Keep it grounded and impactful. Focus on the substance and insight.",
+        "energetic": "Use exciting language, caps for emphasis, and hype words. Lots of exclamation marks!",
+        "casual": "Relaxed and conversational. Like a friend sharing something cool they found.",
+        "professional": "Clean, polished, and insightful. Focus on the takeaway or lesson.",
+        "dramatic": "Build tension and anticipation. Use dramatic language. Make it feel epic and cinematic.",
+        "educational": "Highlight the learning moment. Include a mini-takeaway.",
+        "sarcastic": "Dry humor and witty observations. Deadpan delivery.",
+        "inspirational": "Uplifting and motivating. Focus on the positive message or lesson.",
+    }.get(tone, "Relaxed and conversational.")
+
+    context_section = ""
+    if context:
+        context_section = f"\nCONTEXT / ACTIVITY:\nThe user is playing or doing: {context}\nUse this context to make the content more specific and relevant."
+    else:
+        context_section = "\nCONTEXT: No specific context provided. Create general viral content."
+
+    user_prompt = f"""Create social media content for this video clip.
+
+CLIP TRANSCRIPT:
+{transcript_text}
+
+AI SELECTION REASONING:
+{reasoning}
+{context_section}
+
+REQUESTED TONE: {tone}
+TONE GUIDANCE: {tone_guidance}
+
+Generate a title, description, and hashtags. Return JSON only: {{"title": "...", "description": "...", "hashtags": "..."}}"""
+
+    try:
+        agent = _build_ai_agent(
+            output_type=ClipMetadata,
+            system_prompt=CLIP_METADATA_SYSTEM_PROMPT,
+            ai_provider=ai_provider,
+            ai_api_key=ai_api_key,
+            ai_base_url=ai_base_url,
+            ai_model=ai_model,
+            ai_api_key_fallbacks=ai_api_key_fallbacks,
+            ai_key_labels=ai_key_labels,
+            ai_request_options=ai_request_options,
+        )
+        result = await agent.run(user_prompt)
+        content = result.output
+        logger.info(f"Generated metadata - title: '{content.title[:50]}...' ({len(content.hashtags.split(','))} hashtags)")
+        return content
+    except Exception as e:
+        logger.error(f"Error generating clip metadata: {e}")
+        fallback_title = transcript_text[:80].strip() if transcript_text else "Untitled Clip"
+        return ClipMetadata(
+            title=fallback_title,
+            description=transcript_text[:280].strip() if transcript_text else "",
+            hashtags="#viral #shorts #clips #trending",
+        )
