@@ -1666,6 +1666,73 @@ async def init_db():
             )
         )
 
+        # --- Missing user preference columns ---
+        await conn.execute(
+            text(
+                """
+                ALTER TABLE users
+                ADD COLUMN IF NOT EXISTS default_dim_unhighlighted BOOLEAN DEFAULT true
+                """
+            )
+        )
+        await conn.execute(
+            text(
+                """
+                ALTER TABLE users
+                ADD COLUMN IF NOT EXISTS default_subtitle_position VARCHAR(16) DEFAULT 'bottom'
+                """
+            )
+        )
+        await conn.execute(
+            text(
+                """
+                ALTER TABLE users
+                ADD COLUMN IF NOT EXISTS default_subtitle_animation VARCHAR(24) DEFAULT 'none'
+                """
+            )
+        )
+        # --- AI content generation feature columns ---
+        await conn.execute(
+            text(
+                """
+                ALTER TABLE tasks
+                ADD COLUMN IF NOT EXISTS clip_context TEXT
+                """
+            )
+        )
+        await conn.execute(
+            text(
+                """
+                ALTER TABLE tasks
+                ADD COLUMN IF NOT EXISTS content_tone VARCHAR(30)
+                """
+            )
+        )
+        await conn.execute(
+            text(
+                """
+                ALTER TABLE generated_clips
+                ADD COLUMN IF NOT EXISTS generated_title TEXT
+                """
+            )
+        )
+        await conn.execute(
+            text(
+                """
+                ALTER TABLE generated_clips
+                ADD COLUMN IF NOT EXISTS generated_description TEXT
+                """
+            )
+        )
+        await conn.execute(
+            text(
+                """
+                ALTER TABLE generated_clips
+                ADD COLUMN IF NOT EXISTS generated_hashtags TEXT
+                """
+            )
+        )
+
 # Close database connections
 async def close_db():
     await engine.dispose()
