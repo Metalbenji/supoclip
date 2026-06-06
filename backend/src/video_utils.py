@@ -660,9 +660,21 @@ def _run_whisper_transcription(
     }
     if language and language.strip():
         transcribe_kwargs["language"] = language.strip()
+    # word_timestamps can crash on newer GPU architectures (e.g. RTX 50xx / Blackwell)
+    # due to a cross-attention hook returning None. Retry without word timestamps.
     with warnings.catch_warnings(record=True) as caught_warnings:
         warnings.simplefilter("always")
-        result = model.transcribe(str(media_path), **transcribe_kwargs)
+        try:
+            result = model.transcribe(str(media_path), **transcribe_kwargs)
+        except TypeError as exc:
+            if "NoneType" in str(exc) and "subscriptable" in str(exc):
+                logger.warning(
+                    "word_timestamps failed (GPU compatibility), retrying without: %s", exc
+                )
+                transcribe_kwargs["word_timestamps"] = False
+                result = model.transcribe(str(media_path), **transcribe_kwargs)
+            else:
+                raise
 
     for caught in caught_warnings:
         message = str(caught.message)
