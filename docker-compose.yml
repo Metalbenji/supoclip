@@ -6,7 +6,7 @@ services:
       dockerfile: Dockerfile
       target: development
     container_name: supoclip-frontend
-    command: ["sh", "-lc", "bunx prisma generate && bun run dev"]
+    command: ["sh", "-lc", "bunx prisma generate && bunx prisma db push --skip-generate && bun run dev"]
     ports:
       - "${FRONTEND_HOST_PORT:-3000}:3000"
     volumes:
