@@ -1666,6 +1666,24 @@ async def init_db():
             )
         )
 
+        # --- Ensure bypass user exists (for single-user / dev setups) ---
+        await conn.execute(
+            text(
+                """
+                INSERT INTO users (id, name, email, "emailVerified", "createdAt", "updatedAt")
+                VALUES (
+                    '00000000-0000-0000-0000-000000000001',
+                    'Admin',
+                    'admin@localhost',
+                    true,
+                    NOW(),
+                    NOW()
+                )
+                ON CONFLICT (id) DO NOTHING
+                """
+            )
+        )
+
         # --- Missing user preference columns ---
         await conn.execute(
             text(
