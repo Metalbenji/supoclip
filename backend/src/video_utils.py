@@ -3960,9 +3960,20 @@ def create_optimized_clip(
                     error_collector.append(f"ASS subtitle generation failed: {ass_error}")
                 last_encode_error = ass_error
 
-        # Fallback: if ASS rendering failed or no subtitles, use MoviePy for the crop+encode
-        if not _ass_rendered and not add_subtitles:
-            # No subtitles needed — render directly with ffmpeg (no MoviePy compositing at all)
+        # Fallback: if ASS rendering failed, render the clip without subtitles
+        # rather than falling back to the old broken MoviePy compositing path
+        # which creates misaligned single-word overlays.
+        if not _ass_rendered:
+            if add_subtitles and last_encode_error:
+                logger.warning(
+                    "[ASS_RENDER] ASS subtitle render failed for clip [%.1f-%.1f]s, "
+                    "rendering without subtitles. Error: %s",
+                    start_time, end_time, last_encode_error,
+                )
+                if error_collector is not None:
+                    error_collector.append(
+                        f"ASS subtitle render failed, clip rendered without subtitles: {last_encode_error}"
+                    )
             for encoding_candidate in clip_encoding_candidates:
                 selected_encoder_backend = str(encoding_candidate.get("encoder_backend") or "")
                 selected_encoder_profile = str(encoding_candidate.get("encoder_profile") or "")
@@ -3995,122 +4006,7 @@ def create_optimized_clip(
                     last_encode_error = e
                     output_path.unlink(missing_ok=True)
 
-        if not _ass_rendered:
-            # Final fallback: use MoviePy compositing (original path)
-            logger.warning("[ASS_RENDER] Falling back to MoviePy compositing for clip [%.1f-%.1f]s", start_time, end_time)
-            final_clips = [cropped_clip]
-
-            if add_subtitles:
-                try:
-                    subtitle_clips = create_assemblyai_subtitles(
-                        video_path, start_time, end_time,
-                        new_width, new_height,
-                        font_family, font_size, font_color,
-                        subtitle_style=subtitle_style,
-                        word_timings_override=subtitle_word_timings,
-                        base_clip=cropped_clip,
-                    )
-                    final_clips.extend(subtitle_clips)
-                except Exception as subtitle_error:
-                    logger.error(f"MoviePy subtitle creation FAILED: {subtitle_error}", exc_info=True)
-                    if error_collector is not None:
-                        error_collector.append(f"Subtitle creation failed: {subtitle_error}")
-
-            _had_subtitle_layers = len(final_clips) > 1
-            final_clip = CompositeVideoClip(final_clips) if _had_subtitle_layers else cropped_clip
-            if _had_subtitle_layers and hasattr(cropped_clip, "audio") and cropped_clip.audio is not None:
-                final_clip = final_clip.with_audio(cropped_clip.audio)
-
-            # Nuclear safety wrappers for MoviePy frames
-            if _had_subtitle_layers:
-                for _cl in final_clips[1:]:
-                    _orig_gf = _cl.get_frame
-                    _cl_size = getattr(_cl, "size", None) or (new_width, new_height)
-                    def _safe_clip_get_frame(t, _orig=_orig_gf, _sz=_cl_size):
-                        try:
-                            f = _orig(t)
-                            if f is not None and hasattr(f, "shape") and f.ndim >= 2 and f.shape[0] > 0 and f.shape[1] > 0:
-                                return f
-                        except Exception:
-                            pass
-                        return np.zeros((_sz[1], _sz[0], 3), dtype=np.uint8)
-                    _cl.get_frame = _safe_clip_get_frame
-                    if hasattr(_cl, "make_frame") and callable(_cl.make_frame):
-                        _orig_mf = _cl.make_frame
-                        def _safe_clip_mf(t, _orig=_orig_mf, _sz=_cl_size):
-                            try:
-                                f = _orig(t)
-                                if f is not None and hasattr(f, "shape") and f.ndim >= 2 and f.shape[0] > 0 and f.shape[1] > 0:
-                                    return f
-                            except Exception:
-                                pass
-                            return np.zeros((_sz[1], _sz[0], 3), dtype=np.uint8)
-                        _cl.make_frame = _safe_clip_mf
-
-            for encoding_candidate in clip_encoding_candidates:
-                selected_encoder_backend = str(encoding_candidate.get("encoder_backend") or "")
-                selected_encoder_profile = str(encoding_candidate.get("encoder_profile") or "")
-                temp_audiofile = output_path.with_name(
-                    f"{output_path.stem}.{selected_encoder_profile or 'render'}.temp-audio.m4a"
-                )
-                try:
-                    _enc_settings = dict(encoding_candidate.get("settings") or {})
-                    if clip_render_timeout and clip_render_timeout > 0:
-                        _encode_done = threading.Event()
-                        _encode_exc: List[Exception] = []
-
-                        def _run_encode():
-                            try:
-                                final_clip.write_videofile(
-                                    str(output_path), temp_audiofile=str(temp_audiofile),
-                                    remove_temp=True, logger=None, **_enc_settings,
-                                )
-                            except Exception as exc:
-                                _encode_exc.append(exc)
-                            finally:
-                                _encode_done.set()
-
-                        _enc_thread = threading.Thread(target=_run_encode, daemon=True)
-                        _enc_thread.start()
-                        _encode_done.wait(timeout=clip_render_timeout)
-                        if _enc_thread.is_alive():
-                            try:
-                                if hasattr(final_clip, 'reader') and hasattr(final_clip.reader, 'process'):
-                                    final_clip.reader.process.kill()
-                            except Exception:
-                                pass
-                            logger.error("MoviePy clip encode timed out after %.1fs", clip_render_timeout)
-                            raise RuntimeError(f"MoviePy clip render timed out ({clip_render_timeout:.0f}s)")
-                        if _encode_exc:
-                            raise _encode_exc[0]
-                    else:
-                        final_clip.write_videofile(
-                            str(output_path), temp_audiofile=str(temp_audiofile),
-                            remove_temp=True, logger=None, **_enc_settings,
-                        )
-                    break
-                except Exception as encode_error:
-                    last_encode_error = encode_error
-                    logger.warning("MoviePy encode failed with %s: %s", selected_encoder_backend, encode_error)
-                    try:
-                        output_path.unlink(missing_ok=True)
-                    except Exception:
-                        pass
-                    try:
-                        temp_audiofile.unlink(missing_ok=True)
-                    except Exception:
-                        pass
-            else:
-                if last_encode_error is not None:
-                    raise last_encode_error
-
-            # Cleanup MoviePy clips
-            if final_clip is not None:
-                try:
-                    final_clip.close()
-                except Exception:
-                    pass
-                final_clip = None
+        # MoviePy subtitle fallback removed — ASS-only rendering now
 
         # Cleanup — always close clips to free mmap'd video buffers and ffmpeg pipes
         if clip is not None:

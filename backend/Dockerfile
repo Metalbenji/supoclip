@@ -86,7 +86,13 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     g++ \
     libegl1 \
     libgles2 \
+    fontconfig \
     && rm -rf /var/lib/apt/lists/*
+
+# Tell fontconfig to scan /app/fonts so libass (ffmpeg's ASS filter)
+# can resolve custom font families like TikTokSans-Regular.
+RUN mkdir -p /etc/fonts/conf.d \
+    && echo '<fontconfig><dir>/app/fonts</dir></fontconfig>' > /etc/fonts/conf.d/99-supoclip.conf
 
 WORKDIR /app
 
