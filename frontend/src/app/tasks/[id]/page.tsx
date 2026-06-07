@@ -2542,7 +2542,7 @@ export default function TaskPage() {
                 <CardContent className="p-0">
                   <div className="flex flex-col lg:flex-row">
                     {/* Video Player */}
-                    <div className="bg-black relative flex-shrink-0 flex items-center justify-center">
+                    <div className="bg-black relative flex items-center justify-center w-full lg:w-auto lg:max-w-[320px] xl:max-w-[360px] flex-shrink-0">
                       <DynamicVideoPlayer
                         src={`${apiUrl}${clip.video_url}`}
                         poster="/placeholder-video.jpg"
