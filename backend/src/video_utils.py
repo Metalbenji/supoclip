@@ -1,6 +1,7 @@
 """
 Utility functions for video-related operations.
 Optimized for MoviePy v2, local transcription, and high-quality output.
+Subtitles are rendered via ffmpeg's native ASS/SSA filter — no Python/numpy compositing.
 """
 
 from pathlib import Path
@@ -3035,6 +3036,336 @@ def _build_styled_word_layers(
     return layered_clips
 
 
+def _hex_to_ass_color(hex_color: str) -> str:
+    """Convert '#RRGGBB' to ASS '&H00BBGGRR&' format (BGR, alpha=0 = fully opaque)."""
+    h = str(hex_color or "").strip().lstrip("#")
+    if len(h) != 6:
+        return "&H00FFFFFF"
+    r, g, b = h[0:2], h[2:4], h[4:6]
+    return f"&H00{b}{g}{r}"
+
+
+def _generate_ass_subtitles(
+    relevant_words: List[Dict[str, Any]],
+    video_width: int,
+    video_height: int,
+    subtitle_style: Dict[str, Any],
+    font_path: str,
+) -> str:
+    """Generate ASS subtitle content from word timings with karaoke highlighting.
+
+    Returns the complete .ass file content as a string.
+    The caller is responsible for writing it to a temp file and passing
+    it to ffmpeg via -vf "ass=<path>".
+    """
+    if not relevant_words:
+        return ""
+
+    font_size = int(subtitle_style.get("font_size", 24))
+    # Scale font size relative to 640px reference width
+    calculated_font_size = max(16, int(font_size * (video_width / 640) * 1.15))
+
+    font_color = str(subtitle_style.get("font_color", "#FFFFFF"))
+    highlight_color = str(subtitle_style.get("highlight_color") or "")
+    if not highlight_color:
+        highlight_color = _resolve_karaoke_highlight_color(font_color)
+
+    stroke_color = str(subtitle_style.get("stroke_color", "#000000"))
+    stroke_width = max(0, int(subtitle_style.get("stroke_width", 2)))
+    # Scale stroke with sqrt ratio to prevent blowup on decorative fonts
+    if font_size > 0:
+        stroke_scale = calculated_font_size / font_size
+        stroke_width = max(0, int(round(stroke_width * (stroke_scale ** 0.6))))
+
+    shadow_color = str(subtitle_style.get("shadow_color", "#000000"))
+    shadow_opacity = float(subtitle_style.get("shadow_opacity", 0.5))
+    shadow_offset_x = int(subtitle_style.get("shadow_offset_x", 0))
+    shadow_offset_y = int(subtitle_style.get("shadow_offset_y", 2))
+
+    # Dimming for unhighlighted words
+    dim_unhighlighted = bool(subtitle_style.get("dim_unhighlighted", True))
+    # ASS alpha: 0 = opaque, 255 = transparent
+    dimmed_alpha = 180 if dim_unhighlighted else 0
+
+    text_transform = str(subtitle_style.get("text_transform", "none"))
+    letter_spacing = int(subtitle_style.get("letter_spacing", 0))
+
+    # Position
+    subtitle_position = subtitle_style.get("position", 75)
+    if isinstance(subtitle_position, (int, float)):
+        position_percent = float(max(5, min(95, float(subtitle_position))))
+    elif isinstance(subtitle_position, str):
+        _pos_map = {"top": 15, "center": 45, "bottom": 75}
+        position_percent = float(_pos_map.get(subtitle_position.lower(), 75))
+    else:
+        position_percent = 75.0
+
+    # ASS uses a coordinate system based on PlayRes. We'll use actual video dimensions.
+    # Margin bottom positions the subtitle: margin_b=0 means bottom, higher = further up.
+    # Convert position_percent (75 = bottom area) to ASS margin bottom.
+    # In ASS, margin_b is in pixels from the bottom edge.
+    margin_bottom = int(video_height * (1.0 - position_percent / 100.0))
+    margin_bottom = max(0, min(margin_bottom, video_height - 20))
+
+    # Font filename for ASS — just use the font name, ASS/libass resolves via fontconfig
+    font_name = Path(font_path).stem
+
+    # Karaoke timing shift
+    timing_shift = float(KARAOKE_TIMING_SHIFT_SECONDS)
+
+    # Apply text transforms to words
+    display_words = []
+    for word in relevant_words:
+        text = str(word.get("text", "")).strip()
+        text = _apply_text_transform(text, text_transform)
+        text = _apply_letter_spacing(text, letter_spacing)
+        if text:
+            display_words.append(text)
+
+    if not display_words:
+        return ""
+
+    # Group words into lines of max 3 words
+    # For ASS, we need to create dialogue events for each word group
+    # and use \k tags for karaoke timing within each group
+
+    # Build word groups
+    groups: List[List[int]] = []
+    current_group: List[int] = []
+    for idx in range(len(relevant_words)):
+        if len(current_group) >= MAX_WORDS_PER_LINE:
+            groups.append(current_group)
+            current_group = [idx]
+        else:
+            current_group.append(idx)
+    if current_group:
+        groups.append(current_group)
+
+    # ASS header
+    ass_lines = [
+        "[Script Info]",
+        "ScriptType: v4.00+",
+        "PlayResX: {}".format(video_width),
+        "PlayResY: {}".format(video_height),
+        "WrapStyle: 0",
+        "",
+        "[V4+ Styles]",
+        "Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding",
+    ]
+
+    # Style: Dimmed base (unhighlighted words shown dimmed)
+    dimmed_primary = _hex_to_ass_color(font_color)
+    if dimmed_alpha > 0:
+        dimmed_primary = f"&H{dimmed_alpha:02X}{dimmed_primary[4:]}"  # insert alpha
+
+    ass_styles = []
+
+    # Style 1: Base dimmed (for words not yet highlighted)
+    ass_styles.append(
+        "Style: Default,{font},{size},{primary},{secondary},{outline},{back},"
+        "{bold},0,0,0,100,100,{spacing},0,1,{outline_w},{shadow_w},2,"
+        "{margin_l},{margin_r},{margin_v},1".format(
+            font=font_name,
+            size=calculated_font_size,
+            primary=dimmed_primary,
+            secondary=_hex_to_ass_color(highlight_color),
+            outline=_hex_to_ass_color(stroke_color),
+            back=_hex_to_ass_color(shadow_color),
+            bold=-1 if int(subtitle_style.get("font_weight", 600)) >= 600 else 0,
+            spacing=letter_spacing,
+            outline_w=stroke_width * 2,  # ASS outline = total outline width
+            shadow_w=int(shadow_offset_y) if shadow_opacity > 0 else 0,
+            margin_l=10,
+            margin_r=10,
+            margin_v=margin_bottom,
+        )
+    )
+
+    ass_lines.extend(ass_styles)
+    ass_lines.append("")
+    ass_lines.append("[Events]")
+    ass_lines.append("Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text")
+
+    def _ass_time(seconds: float) -> str:
+        """Convert seconds to ASS timestamp format H:MM:SS.CC"""
+        h = int(seconds // 3600)
+        m = int((seconds % 3600) // 60)
+        s = int(seconds % 60)
+        cs = int(round((seconds - int(seconds)) * 100))
+        return f"{h}:{m:02d}:{s:02d}.{cs:02d}"
+
+    # Generate dialogue events with karaoke tags
+    for group in groups:
+        if not group:
+            continue
+
+        # Group timing
+        group_start = float(relevant_words[group[0]].get("start", 0)) + timing_shift
+        group_end = float(relevant_words[group[-1]].get("end", 0)) + timing_shift
+        group_start = max(0.0, group_start)
+        group_duration = group_end - group_start
+        if group_duration < 0.05:
+            continue
+
+        # For each word in the group, create a separate dialogue line
+        # with \k tags. Each word gets highlighted in sequence.
+        # We need overlapping dialogue lines: one per word to highlight,
+        # and one base line showing all words dimmed.
+
+        group_text_parts = []
+        for idx in group:
+            word_text = display_words[idx] if idx < len(display_words) else ""
+            group_text_parts.append(word_text)
+        group_text = " ".join(group_text_parts)
+        if not group_text.strip():
+            continue
+
+        # Base dimmed line (shows the whole group dimmed throughout)
+        base_start = _ass_time(group_start)
+        base_end = _ass_time(group_end)
+        ass_lines.append(
+            f"Dialogue: 0,{base_start},{base_end},Default,,0,0,0,,{group_text}"
+        )
+
+        # Highlighted word lines — one per word, overlapping with the base
+        for word_idx_in_group, word_global_idx in enumerate(group):
+            if word_global_idx >= len(relevant_words):
+                continue
+
+            word_start = float(relevant_words[word_global_idx].get("start", 0)) + timing_shift
+            word_end = float(relevant_words[word_global_idx].get("end", 0)) + timing_shift
+            word_start = max(0.0, word_start)
+
+            # Calculate karaoke duration for the word
+            # The highlight starts at word_start and ends when next word starts (or group ends)
+            if word_idx_in_group < len(group) - 1:
+                next_global_idx = group[word_idx_in_group + 1]
+                highlight_end = max(word_end, float(relevant_words[next_global_idx].get("start", 0)) + timing_shift)
+            else:
+                highlight_end = max(word_end, group_end)
+            highlight_end = max(word_start + 0.01, highlight_end)
+
+            # Build the text with \k karaoke timing
+            # \k<duration_cs> highlights the following syllable for that many centiseconds
+            # We'll show only the highlighted word (others are dimmed on the base line)
+            word_text = display_words[word_global_idx] if word_global_idx < len(display_words) else ""
+            if not word_text.strip():
+                continue
+
+            # Build karaoke line: use {\c&H...&} override for the highlight color
+            highlight_ass_color = _hex_to_ass_color(highlight_color)
+            k_duration = int((highlight_end - word_start) * 100)  # centiseconds
+
+            highlighted_line = (
+                f"{{\\c{highlight_ass_color}}}"
+                f"{word_text}"
+            )
+
+            h_start = _ass_time(word_start)
+            h_end = _ass_time(highlight_end)
+            ass_lines.append(
+                f"Dialogue: 1,{h_start},{h_end},Default,,0,0,0,,{highlighted_line}"
+            )
+
+    return "\n".join(ass_lines)
+
+
+def _render_clip_with_ffmpeg_ass(
+    video_path: Path,
+    start_time: float,
+    end_time: float,
+    output_path: Path,
+    *,
+    crop_x: int,
+    crop_y: int,
+    crop_w: int,
+    crop_h: int,
+    ass_content: str,
+    encoding_settings: Dict[str, Any],
+    clip_render_timeout: Optional[float] = None,
+) -> bool:
+    """Render a clip using pure ffmpeg — crop + ASS subtitle burn in a single pass.
+
+    This bypasses MoviePy's Python/numpy compositing entirely, using ffmpeg's
+    native crop and ass filters.  Memory usage is minimal since ffmpeg operates
+    in streaming mode without loading frames into Python.
+    """
+    duration = max(0.01, end_time - start_time)
+
+    # Write ASS content to a temp file
+    ass_file = output_path.with_suffix(".tmp_sub.ass")
+    try:
+        ass_file.write_text(ass_content, encoding="utf-8")
+
+        # Build ffmpeg command
+        # -ss before -i for fast seeking
+        # -t for duration
+        # -vf "crop=W:H:X:Y,ass=FILE" for crop + subtitle burn
+        codec = encoding_settings.get("codec", "libx264")
+        audio_codec = encoding_settings.get("audio_codec", "aac")
+        audio_bitrate = encoding_settings.get("audio_bitrate", "192k")
+        preset = encoding_settings.get("preset", "veryfast")
+        extra_params = list(encoding_settings.get("ffmpeg_params") or [])
+
+        cmd = [
+            "ffmpeg",
+            "-hide_banner",
+            "-loglevel", "error",
+            "-nostdin",
+            "-y",
+            "-ss", f"{start_time:.3f}",
+            "-i", str(video_path),
+            "-t", f"{duration:.3f}",
+            "-vf", f"crop={crop_w}:{crop_h}:{crop_x}:{crop_y},ass={str(ass_file)}",
+            "-c:v", codec,
+            "-c:a", audio_codec,
+            "-b:a", str(audio_bitrate),
+        ]
+
+        if preset:
+            cmd.extend(["-preset", str(preset)])
+
+        cmd.extend(extra_params)
+
+        # Ensure yuv420p for compatibility
+        if "-pix_fmt" not in cmd:
+            cmd.extend(["-pix_fmt", "yuv420p"])
+
+        cmd.extend(["-movflags", "+faststart", str(output_path)])
+
+        logger.info(
+            "ffmpeg ASS render: start=%.3fs duration=%.3fs crop=%dx%d+%d+%d codec=%s",
+            start_time, duration, crop_w, crop_h, crop_x, crop_y, codec,
+        )
+
+        try:
+            result = subprocess.run(
+                cmd,
+                check=True,
+                capture_output=True,
+                text=True,
+                timeout=clip_render_timeout or 300,
+            )
+
+            if not output_path.exists() or output_path.stat().st_size <= 0:
+                raise RuntimeError("ffmpeg produced no output")
+
+            return True
+
+        except subprocess.TimeoutExpired:
+            logger.error("ffmpeg ASS render timed out after %.1fs", clip_render_timeout or 300)
+            output_path.unlink(missing_ok=True)
+            return False
+        except subprocess.CalledProcessError as exc:
+            stderr = (exc.stderr or "").strip()
+            logger.error("ffmpeg ASS render failed: %s", stderr[-500:] if stderr else str(exc))
+            output_path.unlink(missing_ok=True)
+            return False
+
+    finally:
+        ass_file.unlink(missing_ok=True)
+
+
 def create_assemblyai_subtitles(
     video_path: Union[Path, str],
     clip_start: float,
@@ -3525,75 +3856,177 @@ def create_optimized_clip(
             end_time,
         )
 
-        # Add subtitles from cached word timings.
-        final_clips = [cropped_clip]
+        # ── Generate ASS subtitles and render via ffmpeg (no MoviePy compositing) ──
+        processor = VideoProcessor(font_family, font_size, font_color)
+        clip_encoding_candidates = processor.get_clip_render_encoding_candidates()
+        selected_encoder_backend = ""
+        selected_encoder_profile = ""
+        last_encode_error: Optional[Exception] = None
 
+        # Resolve crop offsets for the ffmpeg command
+        crop_x, crop_y = int(fixed_offsets[0]), int(fixed_offsets[1])
+        crop_w, crop_h = new_width, new_height
+
+        # Try the new ffmpeg ASS rendering path first
+        _ass_rendered = False
         if add_subtitles:
-            logger.info(f"[SUBTITLE_DIAG] create_optimized_clip: add_subtitles=True, "
-                        f"word_timings_override={'yes (' + str(len(subtitle_word_timings)) + ' entries)' if subtitle_word_timings else 'None'}, "
-                        f"video_path={video_path}, clip=[{start_time}-{end_time}]s")
             try:
-                subtitle_clips = create_assemblyai_subtitles(
-                    video_path,
-                    start_time,
-                    end_time,
-                    new_width,
-                    new_height,
-                    font_family,
-                    font_size,
-                    font_color,
-                    subtitle_style=subtitle_style,
-                    word_timings_override=subtitle_word_timings,
-                    base_clip=cropped_clip,
-                )
-                final_clips.extend(subtitle_clips)
-                logger.info(f"[SUBTITLE_DIAG] Added {len(subtitle_clips)} subtitle clips to final composition "
-                            f"(total clips in composition: {len(final_clips)})")
-            except Exception as subtitle_error:
-                logger.error(f"[SUBTITLE_DIAG] Subtitle creation FAILED: {subtitle_error}", exc_info=True)
+                style = normalize_subtitle_style(subtitle_style)
+                style["font_family"] = font_family or style["font_family"]
+                style["font_size"] = int(font_size or style["font_size"])
+                style["font_color"] = font_color or style["font_color"]
+
+                # Get relevant words for this clip
+                clip_start_ms = int(start_time * 1000)
+                clip_end_ms = int(end_time * 1000)
+                clip_duration_seconds = max(0.0, end_time - start_time)
+                relevant_words = []
+
+                if subtitle_word_timings:
+                    for word_data in subtitle_word_timings:
+                        text = str(word_data.get("text") or "").strip()
+                        if not text:
+                            continue
+                        ws = float(word_data.get("start") or 0.0)
+                        we = float(word_data.get("end") or 0.0)
+                        ws = max(0.0, min(clip_duration_seconds, ws))
+                        we = max(0.0, min(clip_duration_seconds, we))
+                        if we <= ws:
+                            continue
+                        relevant_words.append({"text": text, "start": ws, "end": we})
+                else:
+                    transcript_data = load_cached_transcript_data(video_path)
+                    if transcript_data and transcript_data.get("words"):
+                        for word_data in transcript_data["words"]:
+                            word_start = word_data["start"]
+                            word_end = word_data["end"]
+                            if word_start < clip_end_ms and word_end > clip_start_ms:
+                                relative_start = max(0, (word_start - clip_start_ms) / 1000.0)
+                                relative_end = min((clip_end_ms - clip_start_ms) / 1000.0, (word_end - clip_start_ms) / 1000.0)
+                                if relative_end > relative_start:
+                                    relevant_words.append({
+                                        "text": word_data["text"],
+                                        "start": relative_start,
+                                        "end": relative_end,
+                                    })
+
+                if relevant_words:
+                    relevant_words.sort(key=lambda w: (float(w["start"]), float(w["end"])))
+                    logger.info(
+                        "[ASS_RENDER] Generating ASS subtitles: %d words for clip [%.1f-%.1f]s, crop=%dx%d+%d+%d",
+                        len(relevant_words), start_time, end_time, crop_w, crop_h, crop_x, crop_y,
+                    )
+                    ass_content = _generate_ass_subtitles(
+                        relevant_words, crop_w, crop_h, style, processor.font_path,
+                    )
+
+                    if ass_content:
+                        for encoding_candidate in clip_encoding_candidates:
+                            selected_encoder_backend = str(encoding_candidate.get("encoder_backend") or "")
+                            selected_encoder_profile = str(encoding_candidate.get("encoder_profile") or "")
+                            enc_settings = dict(encoding_candidate.get("settings") or {})
+                            success = _render_clip_with_ffmpeg_ass(
+                                video_path,
+                                start_time,
+                                end_time,
+                                output_path,
+                                crop_x=crop_x,
+                                crop_y=crop_y,
+                                crop_w=crop_w,
+                                crop_h=crop_h,
+                                ass_content=ass_content,
+                                encoding_settings=enc_settings,
+                                clip_render_timeout=clip_render_timeout,
+                            )
+                            if success:
+                                _ass_rendered = True
+                                break
+                            else:
+                                last_encode_error = RuntimeError(f"ffmpeg ASS render failed with {selected_encoder_backend}")
+                                output_path.unlink(missing_ok=True)
+
+                        if _ass_rendered:
+                            logger.info("[ASS_RENDER] Successfully rendered clip via ffmpeg ASS: %s", output_path.name)
+                        else:
+                            logger.warning("[ASS_RENDER] All ffmpeg ASS render attempts failed, falling back to MoviePy")
+                    else:
+                        logger.warning("[ASS_RENDER] ASS content was empty, falling back to MoviePy")
+                else:
+                    logger.info("[ASS_RENDER] No relevant words found, rendering without subtitles")
+
+            except Exception as ass_error:
+                logger.error("[ASS_RENDER] ASS subtitle generation failed: %s", ass_error, exc_info=True)
                 if error_collector is not None:
-                    error_collector.append(f"Subtitle creation failed: {subtitle_error}")
-        else:
-            logger.info(f"[SUBTITLE_DIAG] create_optimized_clip: add_subtitles=False, skipping subtitles")
+                    error_collector.append(f"ASS subtitle generation failed: {ass_error}")
+                last_encode_error = ass_error
 
-        # Compose and encode
-        _had_subtitle_layers = len(final_clips) > 1
-        final_clip = CompositeVideoClip(final_clips) if _had_subtitle_layers else cropped_clip
+        # Fallback: if ASS rendering failed or no subtitles, use MoviePy for the crop+encode
+        if not _ass_rendered and not add_subtitles:
+            # No subtitles needed — render directly with ffmpeg (no MoviePy compositing at all)
+            for encoding_candidate in clip_encoding_candidates:
+                selected_encoder_backend = str(encoding_candidate.get("encoder_backend") or "")
+                selected_encoder_profile = str(encoding_candidate.get("encoder_profile") or "")
+                enc_settings = dict(encoding_candidate.get("settings") or {})
+                # Simple ffmpeg crop without subtitles
+                duration = max(0.01, end_time - start_time)
+                cmd = [
+                    "ffmpeg", "-hide_banner", "-loglevel", "error", "-nostdin", "-y",
+                    "-ss", f"{start_time:.3f}",
+                    "-i", str(video_path),
+                    "-t", f"{duration:.3f}",
+                    "-vf", f"crop={crop_w}:{crop_h}:{crop_x}:{crop_y}",
+                    "-c:v", enc_settings.get("codec", "libx264"),
+                    "-c:a", enc_settings.get("audio_codec", "aac"),
+                    "-b:a", str(enc_settings.get("audio_bitrate", "192k")),
+                ]
+                if enc_settings.get("preset"):
+                    cmd.extend(["-preset", str(enc_settings["preset"])])
+                cmd.extend(list(enc_settings.get("ffmpeg_params") or []))
+                if "-pix_fmt" not in cmd:
+                    cmd.extend(["-pix_fmt", "yuv420p"])
+                cmd.extend(["-movflags", "+faststart", str(output_path)])
+                try:
+                    subprocess.run(cmd, check=True, capture_output=True, text=True,
+                                   timeout=clip_render_timeout or 300)
+                    if output_path.exists() and output_path.stat().st_size > 0:
+                        _ass_rendered = True  # Mark as done
+                        break
+                except Exception as e:
+                    last_encode_error = e
+                    output_path.unlink(missing_ok=True)
 
-        # CompositeVideoClip does not automatically preserve audio from constituent clips.
-        # Explicitly attach the audio from the cropped base clip so output has sound.
-        if _had_subtitle_layers and hasattr(cropped_clip, "audio") and cropped_clip.audio is not None:
-            final_clip = final_clip.with_audio(cropped_clip.audio)
+        if not _ass_rendered:
+            # Final fallback: use MoviePy compositing (original path)
+            logger.warning("[ASS_RENDER] Falling back to MoviePy compositing for clip [%.1f-%.1f]s", start_time, end_time)
+            final_clips = [cropped_clip]
 
-        # ── Nuclear safety: wrap EVERY clip and mask so no get_frame can
-        #    ever return a zero-height frame.  MoviePy's compose_mask()
-        #    calls clip.get_frame() and mask.get_frame() internally and
-        #    will crash with a numpy broadcast error if either returns a
-        #    (0, W, C) or (0, W) array.  Wrapping at this level catches
-        #    ALL sources — TextClip, VideoClip, resized subclips, etc.  ──
-        if _had_subtitle_layers:
-            for _cl in final_clips[1:]:  # skip base cropped_clip at index 0
-                # 1) Wrap the clip's own get_frame AND make_frame to guarantee non-zero size
-                _orig_gf = _cl.get_frame
-                _cl_size = getattr(_cl, "size", None) or (new_width, new_height)
+            if add_subtitles:
+                try:
+                    subtitle_clips = create_assemblyai_subtitles(
+                        video_path, start_time, end_time,
+                        new_width, new_height,
+                        font_family, font_size, font_color,
+                        subtitle_style=subtitle_style,
+                        word_timings_override=subtitle_word_timings,
+                        base_clip=cropped_clip,
+                    )
+                    final_clips.extend(subtitle_clips)
+                except Exception as subtitle_error:
+                    logger.error(f"MoviePy subtitle creation FAILED: {subtitle_error}", exc_info=True)
+                    if error_collector is not None:
+                        error_collector.append(f"Subtitle creation failed: {subtitle_error}")
 
-                def _safe_clip_get_frame(t, _orig=_orig_gf, _sz=_cl_size):
-                    try:
-                        f = _orig(t)
-                        if f is not None and hasattr(f, "shape") and f.ndim >= 2 and f.shape[0] > 0 and f.shape[1] > 0:
-                            return f
-                    except Exception:
-                        f = None
-                    # Return a black frame of the clip's declared size
-                    return np.zeros((_sz[1], _sz[0], 3), dtype=np.uint8)
+            _had_subtitle_layers = len(final_clips) > 1
+            final_clip = CompositeVideoClip(final_clips) if _had_subtitle_layers else cropped_clip
+            if _had_subtitle_layers and hasattr(cropped_clip, "audio") and cropped_clip.audio is not None:
+                final_clip = final_clip.with_audio(cropped_clip.audio)
 
-                _cl.get_frame = _safe_clip_get_frame
-
-                # Also wrap make_frame if it exists (MoviePy may use either)
-                if hasattr(_cl, "make_frame") and callable(_cl.make_frame):
-                    _orig_mf = _cl.make_frame
-
-                    def _safe_clip_mf(t, _orig=_orig_mf, _sz=_cl_size):
+            # Nuclear safety wrappers for MoviePy frames
+            if _had_subtitle_layers:
+                for _cl in final_clips[1:]:
+                    _orig_gf = _cl.get_frame
+                    _cl_size = getattr(_cl, "size", None) or (new_width, new_height)
+                    def _safe_clip_get_frame(t, _orig=_orig_gf, _sz=_cl_size):
                         try:
                             f = _orig(t)
                             if f is not None and hasattr(f, "shape") and f.ndim >= 2 and f.shape[0] > 0 and f.shape[1] > 0:
@@ -3601,133 +4034,85 @@ def create_optimized_clip(
                         except Exception:
                             pass
                         return np.zeros((_sz[1], _sz[0], 3), dtype=np.uint8)
-
-                    _cl.make_frame = _safe_clip_mf
-
-                # 2) Wrap the mask's make_frame (if any) similarly
-                _mask = getattr(_cl, "mask", None)
-                if _mask is not None and hasattr(_mask, "make_frame"):
-                    _orig_mf = _mask.make_frame
-
-                    def _safe_mask_mf(t, _orig=_orig_mf):
-                        try:
-                            f = _orig(t)
-                            if f is not None and hasattr(f, "shape") and f.size > 0 and f.shape[0] > 0:
-                                return f
-                        except Exception:
-                            pass
-                        return np.ones((1, 1), dtype=np.uint8) * 255
-
-                    _mask.make_frame = _safe_mask_mf
-
-        processor = VideoProcessor(font_family, font_size, font_color)
-        clip_encoding_candidates = processor.get_clip_render_encoding_candidates()
-        selected_encoder_backend = ""
-        selected_encoder_profile = ""
-        last_encode_error: Optional[Exception] = None
-
-        for encoding_candidate in clip_encoding_candidates:
-            selected_encoder_backend = str(encoding_candidate.get("encoder_backend") or "")
-            selected_encoder_profile = str(encoding_candidate.get("encoder_profile") or "")
-            temp_audiofile = output_path.with_name(
-                f"{output_path.stem}.{selected_encoder_profile or 'render'}.temp-audio.m4a"
-            )
-            try:
-                _enc_settings = dict(encoding_candidate.get("settings") or {})
-                if clip_render_timeout and clip_render_timeout > 0:
-                    # Run write_videofile in a sub-thread so we can enforce a per-clip timeout.
-                    # This prevents a single stuck ffmpeg process from blocking the entire
-                    # render queue indefinitely.
-                    _encode_done = threading.Event()
-                    _encode_exc: List[Exception] = []
-                    _ffmpeg_process: List[Any] = []
-
-                    def _run_encode():
-                        try:
-                            final_clip.write_videofile(
-                                str(output_path),
-                                temp_audiofile=str(temp_audiofile),
-                                remove_temp=True,
-                                logger=None,
-                                **_enc_settings,
-                            )
-                        except Exception as exc:
-                            _encode_exc.append(exc)
-                        finally:
-                            _encode_done.set()
-
-                    _enc_thread = threading.Thread(target=_run_encode, daemon=True)
-                    _enc_thread.start()
-                    _encode_done.wait(timeout=clip_render_timeout)
-                    if _enc_thread.is_alive():
-                        # Thread is still running — timed out. Attempt to kill the
-                        # underlying ffmpeg subprocess to free memory and file handles.
-                        _killed = False
-                        if hasattr(final_clip, 'reader') and hasattr(final_clip.reader, 'process'):
+                    _cl.get_frame = _safe_clip_get_frame
+                    if hasattr(_cl, "make_frame") and callable(_cl.make_frame):
+                        _orig_mf = _cl.make_frame
+                        def _safe_clip_mf(t, _orig=_orig_mf, _sz=_cl_size):
                             try:
-                                final_clip.reader.process.kill()
-                                _killed = True
+                                f = _orig(t)
+                                if f is not None and hasattr(f, "shape") and f.ndim >= 2 and f.shape[0] > 0 and f.shape[1] > 0:
+                                    return f
                             except Exception:
                                 pass
-                        if not _killed:
-                            # Bruteforce: find any ffmpeg child of this process.
-                            try:
-                                import signal
-                                import os
-                                _pid = os.getpid()
-                                _cmd = f"pgrep -P {_pid} ffmpeg | xargs kill -9 2>/dev/null; pkill -9 -P {_pid} ffmpeg 2>/dev/null"
-                                subprocess.run(_cmd, shell=True, timeout=5)
-                            except Exception:
-                                pass
-                        logger.error(
-                            "Clip encode timed out after %.1fs using %s (%s); aborting, ffmpeg_killed=%s",
-                            clip_render_timeout,
-                            selected_encoder_backend,
-                            selected_encoder_profile,
-                            _killed,
-                        )
-                        raise RuntimeError(
-                            f"Clip render timed out after {clip_render_timeout:.0f}s "
-                            f"(encoder={selected_encoder_backend}/{selected_encoder_profile})"
-                        )
-                    if _encode_exc:
-                        raise _encode_exc[0]
-                else:
-                    final_clip.write_videofile(
-                        str(output_path),
-                        temp_audiofile=str(temp_audiofile),
-                        remove_temp=True,
-                        logger=None,
-                        **_enc_settings,
-                    )
-                break
-            except Exception as encode_error:
-                last_encode_error = encode_error
-                logger.warning(
-                    "Clip encode failed using %s (%s); retrying if fallback remains: %s",
-                    selected_encoder_backend,
-                    selected_encoder_profile,
-                    encode_error,
+                            return np.zeros((_sz[1], _sz[0], 3), dtype=np.uint8)
+                        _cl.make_frame = _safe_clip_mf
+
+            for encoding_candidate in clip_encoding_candidates:
+                selected_encoder_backend = str(encoding_candidate.get("encoder_backend") or "")
+                selected_encoder_profile = str(encoding_candidate.get("encoder_profile") or "")
+                temp_audiofile = output_path.with_name(
+                    f"{output_path.stem}.{selected_encoder_profile or 'render'}.temp-audio.m4a"
                 )
                 try:
-                    output_path.unlink(missing_ok=True)
-                except Exception:
-                    pass
+                    _enc_settings = dict(encoding_candidate.get("settings") or {})
+                    if clip_render_timeout and clip_render_timeout > 0:
+                        _encode_done = threading.Event()
+                        _encode_exc: List[Exception] = []
+
+                        def _run_encode():
+                            try:
+                                final_clip.write_videofile(
+                                    str(output_path), temp_audiofile=str(temp_audiofile),
+                                    remove_temp=True, logger=None, **_enc_settings,
+                                )
+                            except Exception as exc:
+                                _encode_exc.append(exc)
+                            finally:
+                                _encode_done.set()
+
+                        _enc_thread = threading.Thread(target=_run_encode, daemon=True)
+                        _enc_thread.start()
+                        _encode_done.wait(timeout=clip_render_timeout)
+                        if _enc_thread.is_alive():
+                            try:
+                                if hasattr(final_clip, 'reader') and hasattr(final_clip.reader, 'process'):
+                                    final_clip.reader.process.kill()
+                            except Exception:
+                                pass
+                            logger.error("MoviePy clip encode timed out after %.1fs", clip_render_timeout)
+                            raise RuntimeError(f"MoviePy clip render timed out ({clip_render_timeout:.0f}s)")
+                        if _encode_exc:
+                            raise _encode_exc[0]
+                    else:
+                        final_clip.write_videofile(
+                            str(output_path), temp_audiofile=str(temp_audiofile),
+                            remove_temp=True, logger=None, **_enc_settings,
+                        )
+                    break
+                except Exception as encode_error:
+                    last_encode_error = encode_error
+                    logger.warning("MoviePy encode failed with %s: %s", selected_encoder_backend, encode_error)
+                    try:
+                        output_path.unlink(missing_ok=True)
+                    except Exception:
+                        pass
+                    try:
+                        temp_audiofile.unlink(missing_ok=True)
+                    except Exception:
+                        pass
+            else:
+                if last_encode_error is not None:
+                    raise last_encode_error
+
+            # Cleanup MoviePy clips
+            if final_clip is not None:
                 try:
-                    temp_audiofile.unlink(missing_ok=True)
+                    final_clip.close()
                 except Exception:
                     pass
-        else:
-            if last_encode_error is not None:
-                raise last_encode_error
+                final_clip = None
 
         # Cleanup — always close clips to free mmap'd video buffers and ffmpeg pipes
-        if final_clip is not None:
-            try:
-                final_clip.close()
-            except Exception:
-                pass
-            final_clip = None
         if clip is not None:
             try:
                 clip.close()
@@ -3749,6 +4134,7 @@ def create_optimized_clip(
                     "framing_analysis_source": framing_analysis_source,
                     "framing_metadata_reused": framing_analysis_source == "persisted_metadata",
                     "output_aspect_ratio": normalized_output_aspect_ratio,
+                    "render_method": "ffmpeg_ass" if _ass_rendered else "moviepy_composite",
                 }
             )
         logger.info(f"Successfully created clip: {output_path}")
