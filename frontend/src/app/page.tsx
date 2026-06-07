@@ -474,6 +474,7 @@ export default function Home() {
           fallback_crop_position: workflowPayload.fallbackCropPosition,
           face_anchor_profile: workflowPayload.faceAnchorProfile,
           output_aspect_ratio: selectedOutputAspectRatio,
+          video_quality_preset: preferences.videoQualityPreset,
         },
         font_options: {
           font_family: preferences.fontFamily,

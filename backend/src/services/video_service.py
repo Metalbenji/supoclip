@@ -371,6 +371,7 @@ class VideoService:
         output_aspect_ratio: str = "9:16",
         progress_callback: Optional[callable] = None,
         filename_prefix: Optional[str] = None,
+        video_quality_preset: str = "good",
     ) -> Dict[str, Any]:
         """
         Create video clips from segments with subtitles.
@@ -439,6 +440,7 @@ class VideoService:
             filename_prefix,
             render_workers,
             clip_render_timeout,
+            video_quality_preset,
         )
         logger.info(f"Successfully created {len(clips_info)} clips")
         return {"clips": clips_info, "diagnostics": render_diagnostics}
@@ -1307,6 +1309,7 @@ class VideoService:
         progress_callback: Optional[callable] = None,
         cancel_check: Optional[Callable[[], Awaitable[None]]] = None,
         filename_prefix: Optional[str] = None,
+        video_quality_preset: str = "good",
     ) -> Dict[str, Any]:
         """Render clips from prepared segments."""
         async def ensure_not_cancelled() -> None:
@@ -1332,6 +1335,7 @@ class VideoService:
             output_aspect_ratio=output_aspect_ratio,
             progress_callback=progress_callback,
             filename_prefix=filename_prefix,
+            video_quality_preset=video_quality_preset,
         )
         await ensure_not_cancelled()
 
@@ -1420,6 +1424,7 @@ class VideoService:
         progress_callback: Optional[callable] = None,
         cancel_check: Optional[Callable[[], Awaitable[None]]] = None,
         filename_prefix: Optional[str] = None,
+        video_quality_preset: str = "good",
     ) -> Dict[str, Any]:
         """
         Complete video processing pipeline.
@@ -1462,6 +1467,7 @@ class VideoService:
                 progress_callback=progress_callback,
                 cancel_check=cancel_check,
                 filename_prefix=filename_prefix,
+                video_quality_preset=video_quality_preset,
             )
 
             return {

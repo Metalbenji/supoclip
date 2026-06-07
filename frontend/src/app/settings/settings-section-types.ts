@@ -25,6 +25,7 @@ export const FACE_ANCHOR_PROFILES = [
 export const OUTPUT_ASPECT_RATIOS = ["auto", "1:1", "21:9", "16:9", "9:16", "4:3", "4:5", "5:4", "3:4", "3:2", "2:3"] as const;
 export const PROCESSING_PROFILES = ["fast_draft", "balanced", "best_quality", "stream_layout"] as const;
 export const WORKFLOW_SOURCES = ["built_in", "saved", "custom"] as const;
+export const VIDEO_QUALITY_PRESETS = ["fast", "good", "better", "best"] as const;
 export const AI_PROVIDERS = ["openai", "google", "anthropic", "zai", "ollama"] as const;
 export const ZAI_ROUTING_MODES = ["auto", "subscription", "metered"] as const;
 export const OLLAMA_AUTH_MODES = ["none", "bearer", "custom_header"] as const;
@@ -40,6 +41,7 @@ export type OutputAspectRatio = (typeof OUTPUT_ASPECT_RATIOS)[number];
 export type ProcessingProfile = (typeof PROCESSING_PROFILES)[number];
 export type PersistedProcessingProfile = ProcessingProfile | "custom";
 export type WorkflowSource = (typeof WORKFLOW_SOURCES)[number];
+export type VideoQualityPreset = (typeof VIDEO_QUALITY_PRESETS)[number];
 export type AiProvider = (typeof AI_PROVIDERS)[number];
 export type ZaiRoutingMode = (typeof ZAI_ROUTING_MODES)[number];
 export type OllamaAuthMode = (typeof OLLAMA_AUTH_MODES)[number];
@@ -88,6 +90,7 @@ export interface UserPreferences extends FontStyleOptions {
   fallbackCropPosition: FallbackCropPosition;
   faceAnchorProfile: FaceAnchorProfile;
   defaultOutputAspectRatio: OutputAspectRatio;
+  videoQualityPreset: VideoQualityPreset;
   transcriptionProvider: TranscriptionProvider;
   whisperChunkingEnabled: boolean;
   whisperChunkDurationSeconds: number;
@@ -114,6 +117,7 @@ export const DEFAULT_USER_PREFERENCES: UserPreferences = {
   fallbackCropPosition: "center",
   faceAnchorProfile: "auto",
   defaultOutputAspectRatio: "9:16",
+  videoQualityPreset: "good",
   transcriptionProvider: "local",
   whisperChunkingEnabled: true,
   whisperChunkDurationSeconds: 1200,
@@ -213,6 +217,10 @@ export function isWorkflowSource(value: string): value is WorkflowSource {
   return WORKFLOW_SOURCES.includes(value as WorkflowSource);
 }
 
+export function isVideoQualityPreset(value: string): value is VideoQualityPreset {
+  return VIDEO_QUALITY_PRESETS.includes(value as VideoQualityPreset);
+}
+
 export function isAiProvider(value: string): value is AiProvider {
   return AI_PROVIDERS.includes(value as AiProvider);
 }
@@ -257,6 +265,7 @@ export function arePreferencesEqual(a: UserPreferences, b: UserPreferences): boo
     a.fallbackCropPosition === b.fallbackCropPosition &&
     a.faceAnchorProfile === b.faceAnchorProfile &&
     a.defaultOutputAspectRatio === b.defaultOutputAspectRatio &&
+    a.videoQualityPreset === b.videoQualityPreset &&
     a.transcriptionProvider === b.transcriptionProvider &&
     a.whisperChunkingEnabled === b.whisperChunkingEnabled &&
     a.whisperChunkDurationSeconds === b.whisperChunkDurationSeconds &&

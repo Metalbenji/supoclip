@@ -67,6 +67,7 @@ import {
   isPersistedProcessingProfile,
   isSettingsSection,
   isTranscriptionProvider,
+  isVideoQualityPreset,
   isWhisperDevicePreference,
   isWhisperModelSize,
   isWorkflowSource,
@@ -1652,6 +1653,10 @@ function SettingsPageContent() {
             typeof data.defaultOutputAspectRatio === "string" && isOutputAspectRatio(data.defaultOutputAspectRatio)
               ? data.defaultOutputAspectRatio
               : DEFAULT_USER_PREFERENCES.defaultOutputAspectRatio,
+          videoQualityPreset:
+            typeof data.videoQualityPreset === "string" && isVideoQualityPreset(data.videoQualityPreset)
+              ? data.videoQualityPreset
+              : DEFAULT_USER_PREFERENCES.videoQualityPreset,
           transcriptionProvider:
             typeof data.transcriptionProvider === "string" && isTranscriptionProvider(data.transcriptionProvider)
               ? data.transcriptionProvider
@@ -2061,6 +2066,7 @@ function SettingsPageContent() {
                 fallbackCropPosition={preferencesDraft.fallbackCropPosition}
                 faceAnchorProfile={preferencesDraft.faceAnchorProfile}
                 defaultOutputAspectRatio={preferencesDraft.defaultOutputAspectRatio}
+                videoQualityPreset={preferencesDraft.videoQualityPreset}
                 onDefaultFramingModeChange={(value) => {
                   setPreferencesDraft((prev) => ({ ...prev, defaultFramingMode: value }));
                 }}
@@ -2075,6 +2081,9 @@ function SettingsPageContent() {
                 }}
                 onDefaultOutputAspectRatioChange={(value) => {
                   setPreferencesDraft((prev) => ({ ...prev, defaultOutputAspectRatio: value }));
+                }}
+                onVideoQualityPresetChange={(value) => {
+                  setPreferencesDraft((prev) => ({ ...prev, videoQualityPreset: value }));
                 }}
               />
             ) : activeSection === "transcription" ? (

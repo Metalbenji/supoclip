@@ -1435,6 +1435,9 @@ async def create_task(request: Request, db: AsyncSession = Depends(get_db)):
     if not isinstance(video_options, dict):
         video_options = {}
     output_aspect_ratio = _resolve_output_aspect_ratio(video_options.get("output_aspect_ratio"))
+    video_quality_preset = str(video_options.get("video_quality_preset") or "good").strip().lower()
+    if video_quality_preset not in ("fast", "good", "better", "best"):
+        video_quality_preset = "good"
     source_options = _resolve_source_options(data.get("source_options"))
     has_review_options_override = "review_options" in data
     review_options = _resolve_review_options(data.get("review_options"))
@@ -1594,6 +1597,7 @@ async def create_task(request: Request, db: AsyncSession = Depends(get_db)):
             "saved_workflow_id": saved_workflow_id,
             "workflow_name_snapshot": workflow_name_snapshot,
             "output_aspect_ratio": output_aspect_ratio,
+            "video_quality_preset": video_quality_preset,
             "source_options": source_options,
             "review_options": review_options,
             "clip_context": str(ai_options.get("clip_context") or "").strip() or None,
@@ -1604,6 +1608,7 @@ async def create_task(request: Request, db: AsyncSession = Depends(get_db)):
                 "fallback_crop_position": video_options.get("fallback_crop_position"),
                 "face_anchor_profile": video_options.get("face_anchor_profile"),
                 "output_aspect_ratio": output_aspect_ratio,
+                "video_quality_preset": video_quality_preset,
             },
             "latest_stage_metadata": {},
         }

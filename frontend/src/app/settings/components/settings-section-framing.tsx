@@ -6,6 +6,7 @@ import type {
   FaceDetectionMode,
   FallbackCropPosition,
   OutputAspectRatio,
+  VideoQualityPreset,
 } from "../settings-section-types";
 
 interface SettingsSectionFramingProps {
@@ -15,11 +16,13 @@ interface SettingsSectionFramingProps {
   fallbackCropPosition: FallbackCropPosition;
   faceAnchorProfile: FaceAnchorProfile;
   defaultOutputAspectRatio: OutputAspectRatio;
+  videoQualityPreset: VideoQualityPreset;
   onDefaultFramingModeChange: (value: DefaultFramingMode) => void;
   onFaceDetectionModeChange: (value: FaceDetectionMode) => void;
   onFallbackCropPositionChange: (value: FallbackCropPosition) => void;
   onFaceAnchorProfileChange: (value: FaceAnchorProfile) => void;
   onDefaultOutputAspectRatioChange: (value: OutputAspectRatio) => void;
+  onVideoQualityPresetChange: (value: VideoQualityPreset) => void;
 }
 
 export function SettingsSectionFraming({
@@ -29,11 +32,13 @@ export function SettingsSectionFraming({
   fallbackCropPosition,
   faceAnchorProfile,
   defaultOutputAspectRatio,
+  videoQualityPreset,
   onDefaultFramingModeChange,
   onFaceDetectionModeChange,
   onFallbackCropPositionChange,
   onFaceAnchorProfileChange,
   onDefaultOutputAspectRatioChange,
+  onVideoQualityPresetChange,
 }: SettingsSectionFramingProps) {
   return (
     <div className="space-y-4">
@@ -152,6 +157,29 @@ export function SettingsSectionFraming({
             <SelectItem value="center_only">Center only</SelectItem>
             <SelectItem value="right_or_center">Right or center</SelectItem>
             <SelectItem value="right_only">Right only</SelectItem>
+          </SelectContent>
+        </Select>
+      </div>
+      <div className="space-y-3 rounded-md border border-gray-200 bg-white p-4">
+        <div>
+          <p className="text-sm font-medium text-black">Video quality</p>
+          <p className="text-xs text-gray-500">
+            Controls output video bitrate and encoding speed. Higher quality uses more storage and takes longer to render.
+          </p>
+        </div>
+        <Select
+          value={videoQualityPreset}
+          onValueChange={(value) => onVideoQualityPresetChange(value as VideoQualityPreset)}
+          disabled={isSaving}
+        >
+          <SelectTrigger className="bg-white">
+            <SelectValue placeholder="Select video quality" />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="fast">Fast — smallest file, quickest encode</SelectItem>
+            <SelectItem value="good">Good — default balance</SelectItem>
+            <SelectItem value="better">Better — higher quality, slower encode</SelectItem>
+            <SelectItem value="best">Best — near-lossless, slowest encode</SelectItem>
           </SelectContent>
         </Select>
       </div>

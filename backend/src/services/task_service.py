@@ -890,6 +890,7 @@ class TaskService:
                 "default_fallback_crop_position": "center",
                 "default_face_anchor_profile": "auto",
                 "default_output_aspect_ratio": "9:16",
+                "video_quality_preset": "good",
                 "effective_default_framing_mode": "auto",
             }
         else:
@@ -903,6 +904,7 @@ class TaskService:
                 "default_fallback_crop_position": task_video_overrides.get("fallback_crop_position", preferences.get("default_fallback_crop_position")),
                 "default_face_anchor_profile": task_video_overrides.get("face_anchor_profile", preferences.get("default_face_anchor_profile")),
                 "default_output_aspect_ratio": task_video_overrides.get("output_aspect_ratio", preferences.get("default_output_aspect_ratio")),
+                "video_quality_preset": task_video_overrides.get("video_quality_preset", preferences.get("video_quality_preset")),
             }
         raw_detection_mode = str(preferences.get("default_face_detection_mode") or "balanced").strip().lower()
         default_framing_mode = self._normalize_framing_mode_override(preferences.get("default_framing_mode"))
@@ -937,6 +939,9 @@ class TaskService:
             "default_face_anchor_profile": face_anchor_profile,
             "default_output_aspect_ratio": output_aspect_ratio,
             "effective_default_framing_mode": effective_default_framing_mode,
+            "video_quality_preset": self._normalize_video_quality_preset(
+                preferences.get("video_quality_preset")
+            ),
         }
 
     @staticmethod
@@ -944,6 +949,13 @@ class TaskService:
         normalized = str(value or "balanced").strip().lower()
         if normalized not in SUPPORTED_PROCESSING_PROFILES:
             return "balanced"
+        return normalized
+
+    @staticmethod
+    def _normalize_video_quality_preset(value: Any) -> str:
+        normalized = str(value or "good").strip().lower()
+        if normalized not in ("fast", "good", "better", "best"):
+            return "good"
         return normalized
 
     @staticmethod
@@ -2303,6 +2315,7 @@ class TaskService:
             progress_callback=update_progress,
             cancel_check=cancel_check,
             filename_prefix=render_filename_prefix,
+            video_quality_preset=str(user_video_preferences.get("video_quality_preset") or "good"),
         )
         result_video_path = Path(str(result.get("video_path") or "")) if result.get("video_path") else None
         if result_video_path is not None:
@@ -2365,8 +2378,14 @@ class TaskService:
         subtitle_style: Optional[Dict[str, Any]],
         cancel_check: Optional[Callable[[], Awaitable[None]]],
         update_progress: Callable[[int, str, Optional[Dict[str, Any]]], Awaitable[None]],
+        task_video_overrides: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         await update_progress(10, "Loading approved draft clips...")
+
+        user_video_preferences = await self._get_effective_user_video_preferences(
+            user_id,
+            task_video_overrides=task_video_overrides,
+        )
 
         render_filename_prefix = self._build_render_filename_prefix()
         drafts = await self.draft_clip_repo.get_drafts_by_task(self.db, task_id)
@@ -2520,6 +2539,7 @@ class TaskService:
             progress_callback=update_progress,
             cancel_check=cancel_check,
             filename_prefix=render_filename_prefix,
+            video_quality_preset=str(user_video_preferences.get("video_quality_preset") or "good"),
         )
 
         await self.task_repo.update_task_status(
@@ -2733,6 +2753,7 @@ class TaskService:
                     subtitle_style=subtitle_style,
                     cancel_check=cancel_check,
                     update_progress=update_progress,
+                    task_video_overrides=task_video_overrides,
                 )
 
             ai_focus_tags = list((task_record or {}).get("ai_focus_tags") or [])

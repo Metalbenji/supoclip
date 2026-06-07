@@ -1,5 +1,5 @@
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import type { DefaultFramingMode, FaceAnchorProfile, FaceDetectionMode, FallbackCropPosition, ProcessingProfile } from "../settings-section-types";
+import type { DefaultFramingMode, FaceAnchorProfile, FaceDetectionMode, FallbackCropPosition, ProcessingProfile, VideoQualityPreset } from "../settings-section-types";
 import { getProcessingProfilePreset, PROCESSING_PROFILE_PRESETS } from "@/lib/processing-profiles";
 
 interface SettingsSectionVideoProps {
@@ -11,6 +11,7 @@ interface SettingsSectionVideoProps {
   faceDetectionMode: FaceDetectionMode;
   fallbackCropPosition: FallbackCropPosition;
   faceAnchorProfile: FaceAnchorProfile;
+  videoQualityPreset: VideoQualityPreset;
   onToggleReviewBeforeRender: () => void;
   onToggleTimelineEditor: () => void;
   onDefaultProcessingProfileChange: (value: ProcessingProfile) => void;
@@ -18,6 +19,7 @@ interface SettingsSectionVideoProps {
   onFaceDetectionModeChange: (value: FaceDetectionMode) => void;
   onFallbackCropPositionChange: (value: FallbackCropPosition) => void;
   onFaceAnchorProfileChange: (value: FaceAnchorProfile) => void;
+  onVideoQualityPresetChange: (value: VideoQualityPreset) => void;
 }
 
 export function SettingsSectionVideo({
@@ -29,6 +31,7 @@ export function SettingsSectionVideo({
   faceDetectionMode,
   fallbackCropPosition,
   faceAnchorProfile,
+  videoQualityPreset,
   onToggleReviewBeforeRender,
   onToggleTimelineEditor,
   onDefaultProcessingProfileChange,
@@ -36,6 +39,7 @@ export function SettingsSectionVideo({
   onFaceDetectionModeChange,
   onFallbackCropPositionChange,
   onFaceAnchorProfileChange,
+  onVideoQualityPresetChange,
 }: SettingsSectionVideoProps) {
   const selectedProfile = getProcessingProfilePreset(defaultProcessingProfile);
   return (
@@ -194,6 +198,29 @@ export function SettingsSectionVideo({
             <SelectItem value="center_only">Center only</SelectItem>
             <SelectItem value="right_or_center">Right or center</SelectItem>
             <SelectItem value="right_only">Right only</SelectItem>
+          </SelectContent>
+        </Select>
+      </div>
+      <div className="space-y-3 rounded-md border border-gray-200 bg-white p-3">
+        <div>
+          <p className="text-sm font-medium text-black">Video quality</p>
+          <p className="text-xs text-gray-500">
+            Controls output video bitrate and encoding speed. Higher quality uses more storage and takes longer to render.
+          </p>
+        </div>
+        <Select
+          value={videoQualityPreset}
+          onValueChange={(value) => onVideoQualityPresetChange(value as VideoQualityPreset)}
+          disabled={isSaving}
+        >
+          <SelectTrigger className="bg-white">
+            <SelectValue placeholder="Select video quality" />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="fast">Fast — smallest file, quickest encode</SelectItem>
+            <SelectItem value="good">Good — default balance</SelectItem>
+            <SelectItem value="better">Better — higher quality, slower encode</SelectItem>
+            <SelectItem value="best">Best — near-lossless, slowest encode</SelectItem>
           </SelectContent>
         </Select>
       </div>

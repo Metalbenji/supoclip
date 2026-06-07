@@ -77,6 +77,7 @@ SUPPORTED_FRAMING_MODE_OVERRIDES = ("auto", "prefer_face", "fixed_position")
 SUPPORTED_FACE_DETECTION_MODES = ("balanced", "more_faces")
 SUPPORTED_FALLBACK_CROP_POSITIONS = ("center", "left_center", "right_center")
 SUPPORTED_OUTPUT_ASPECT_RATIOS = ("auto", "1:1", "21:9", "16:9", "9:16", "4:3", "4:5", "5:4", "3:4", "3:2", "2:3")
+SUPPORTED_VIDEO_QUALITY_PRESETS = ("fast", "good", "better", "best")
 OUTPUT_ASPECT_RATIO_VALUES: Dict[str, float] = {
     "1:1": 1.0,
     "21:9": 21 / 9,
@@ -143,6 +144,76 @@ def _normalize_output_aspect_ratio(value: Any) -> str:
     if normalized not in SUPPORTED_OUTPUT_ASPECT_RATIOS:
         return "9:16"
     return normalized
+
+
+def _normalize_video_quality_preset(value: Any) -> str:
+    normalized = str(value or "good").strip().lower()
+    if normalized not in SUPPORTED_VIDEO_QUALITY_PRESETS:
+        return "good"
+    return normalized
+
+
+# Video quality presets: each defines ffmpeg encoding parameters.
+# Keys match SUPPORTED_VIDEO_QUALITY_PRESETS.
+VIDEO_QUALITY_PRESETS: Dict[str, Dict[str, Any]] = {
+    "fast": {
+        "crf": 28,
+        "preset": "ultrafast",
+        "profile": "main",
+        "audio_bitrate": "128k",
+        "pix_fmt": "yuv420p",
+        "label": "Fast",
+        "description": "Quickest encode, smallest file. Good for previews.",
+    },
+    "good": {
+        "crf": 23,
+        "preset": "veryfast",
+        "profile": "main",
+        "audio_bitrate": "192k",
+        "pix_fmt": "yuv420p",
+        "label": "Good",
+        "description": "Default balance of speed and quality.",
+    },
+    "better": {
+        "crf": 20,
+        "preset": "medium",
+        "profile": "high",
+        "audio_bitrate": "192k",
+        "pix_fmt": "yuv420p",
+        "label": "Better",
+        "description": "Higher quality at the cost of slower encoding.",
+    },
+    "best": {
+        "crf": 17,
+        "preset": "slow",
+        "profile": "high",
+        "audio_bitrate": "256k",
+        "pix_fmt": "yuv420p10le",
+        "label": "Best",
+        "description": "Near-lossless quality. Slowest encode, largest file.",
+    },
+}
+
+
+def _build_encoding_settings_from_quality_preset(quality_preset: str) -> Dict[str, Any]:
+    """Build ffmpeg encoding settings dict from a named quality preset.
+
+    This is used to override the defaults in get_clip_render_encoding_candidates()
+    so the user-selected quality takes effect.
+    """
+    preset_name = _normalize_video_quality_preset(quality_preset)
+    qp = VIDEO_QUALITY_PRESETS[preset_name]
+    return {
+        "codec": "libx264",
+        "audio_codec": "aac",
+        "audio_bitrate": qp["audio_bitrate"],
+        "preset": qp["preset"],
+        "ffmpeg_params": [
+            "-crf", str(qp["crf"]),
+            "-pix_fmt", qp["pix_fmt"],
+            "-profile:v", qp["profile"],
+        ],
+    }
 
 
 def _resolve_target_aspect_ratio(
@@ -261,46 +332,55 @@ class VideoProcessor:
         }
         return settings.get(target_quality, settings["high"])
 
-    def get_clip_render_encoding_candidates(self) -> List[Dict[str, Any]]:
+    def get_clip_render_encoding_candidates(self, quality_preset: str = "good") -> List[Dict[str, Any]]:
+        """Return ordered list of encoding candidates, tuned by quality_preset.
+
+        quality_preset is one of: fast, good, better, best.
+        Each preset controls CRF, x264 preset, profile, and audio bitrate.
+        """
+        quality_settings = _build_encoding_settings_from_quality_preset(quality_preset)
         runtime_info = get_local_whisper_runtime_info()
         candidates: List[Dict[str, Any]] = []
 
+        # GPU candidate: map quality CRF → nvenc CQ for equivalent perceptual quality.
+        # nvenc CQ scale differs from x264 CRF — we offset by ~3 to approximate parity.
         if bool(runtime_info.get("cuda_available")) and _ffmpeg_supports_encoder("h264_nvenc"):
+            qp = VIDEO_QUALITY_PRESETS[_normalize_video_quality_preset(quality_preset)]
+            nvenc_cq = max(0, qp["crf"] + 3)
+            # Map x264 preset → nvenc preset for equivalent speed/quality trade-off
+            nvenc_preset_map = {
+                "ultrafast": "p1",
+                "veryfast": "p4",
+                "fast": "p4",
+                "medium": "p6",
+                "slow": "p7",
+            }
+            nvenc_preset = nvenc_preset_map.get(qp["preset"], "p4")
             candidates.append(
                 {
                     "encoder_backend": "h264_nvenc",
-                    "encoder_profile": "gpu_balanced",
+                    "encoder_profile": f"gpu_{quality_preset}",
                     "settings": {
                         "codec": "h264_nvenc",
                         "audio_codec": "aac",
-                        "bitrate": "8000k",
-                        "audio_bitrate": "192k",
-                        "preset": "p6",
+                        "audio_bitrate": qp["audio_bitrate"],
+                        "preset": nvenc_preset,
                         "ffmpeg_params": [
-                            "-pix_fmt",
-                            "yuv420p",
-                            "-profile:v",
-                            "high",
-                            "-rc",
-                            "vbr",
-                            "-cq",
-                            "23",
+                            "-pix_fmt", qp["pix_fmt"],
+                            "-profile:v", qp["profile"],
+                            "-rc", "vbr",
+                            "-cq", str(nvenc_cq),
                         ],
                     },
                 }
             )
 
+        # CPU candidate: directly uses the quality preset settings
         candidates.append(
             {
                 "encoder_backend": "libx264",
-                "encoder_profile": "cpu_fast",
-                "settings": {
-                    "codec": "libx264",
-                    "audio_codec": "aac",
-                    "audio_bitrate": "192k",
-                    "preset": "veryfast",
-                    "ffmpeg_params": ["-crf", "22", "-pix_fmt", "yuv420p", "-profile:v", "main"],
-                },
+                "encoder_profile": f"cpu_{quality_preset}",
+                "settings": quality_settings,
             }
         )
         return candidates
@@ -3771,6 +3851,7 @@ def create_optimized_clip(
     error_collector: Optional[List[str]] = None,
     render_details_sink: Optional[Dict[str, Any]] = None,
     clip_render_timeout: Optional[float] = None,
+    video_quality_preset: str = "good",
 ) -> bool:
     """Create an optimized clip with word-timed subtitles."""
     video = None
@@ -3937,7 +4018,7 @@ def create_optimized_clip(
 
         # ── Generate ASS subtitles and render via ffmpeg (no MoviePy compositing) ──
         processor = VideoProcessor(font_family, font_size, font_color)
-        clip_encoding_candidates = processor.get_clip_render_encoding_candidates()
+        clip_encoding_candidates = processor.get_clip_render_encoding_candidates(quality_preset=video_quality_preset)
         selected_encoder_backend = ""
         selected_encoder_profile = ""
         last_encode_error: Optional[Exception] = None
@@ -4159,6 +4240,7 @@ def create_clips_from_segments(
     filename_prefix: Optional[str] = None,
     max_workers: int = 1,
     clip_render_timeout: Optional[float] = None,
+    video_quality_preset: str = "good",
 ) -> List[Dict[str, Any]]:
     """Create optimized video clips from segments."""
     video_path = Path(video_path)
@@ -4276,6 +4358,7 @@ def create_clips_from_segments(
                 error_collector=clip_errors,
                 render_details_sink=render_details,
                 clip_render_timeout=clip_render_timeout,
+                video_quality_preset=video_quality_preset,
             )
 
             if success:
