@@ -109,6 +109,9 @@ COPY --from=builder /app/src /app/src
 COPY --from=builder /app/fonts /app/fonts
 COPY --from=builder /app/transitions /app/transitions
 
+# Rebuild fontconfig cache now that fonts are actually present.
+RUN fc-cache -fv /app/fonts
+
 ARG CUDA_NVCC_WHEEL_VERSION=
 RUN if [ -n "${CUDA_NVCC_WHEEL_VERSION}" ]; then \
       mkdir -p /usr/local/cuda/bin \

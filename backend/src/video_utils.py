@@ -162,8 +162,9 @@ VIDEO_QUALITY_PRESETS: Dict[str, Dict[str, Any]] = {
         "profile": "main",
         "audio_bitrate": "128k",
         "pix_fmt": "yuv420p",
+        "max_height": 720,
         "label": "Fast",
-        "description": "Quickest encode, smallest file. Good for previews.",
+        "description": "720p output. Quickest encode, smallest file. Good for previews.",
     },
     "good": {
         "crf": 23,
@@ -171,8 +172,9 @@ VIDEO_QUALITY_PRESETS: Dict[str, Dict[str, Any]] = {
         "profile": "main",
         "audio_bitrate": "192k",
         "pix_fmt": "yuv420p",
+        "max_height": 1080,
         "label": "Good",
-        "description": "Default balance of speed and quality.",
+        "description": "1080p output. Default balance of speed and quality.",
     },
     "better": {
         "crf": 20,
@@ -180,8 +182,9 @@ VIDEO_QUALITY_PRESETS: Dict[str, Dict[str, Any]] = {
         "profile": "high",
         "audio_bitrate": "192k",
         "pix_fmt": "yuv420p",
+        "max_height": 1440,
         "label": "Better",
-        "description": "Higher quality at the cost of slower encoding.",
+        "description": "2K (1440p) output. Higher quality at the cost of slower encoding.",
     },
     "best": {
         "crf": 17,
@@ -189,8 +192,9 @@ VIDEO_QUALITY_PRESETS: Dict[str, Dict[str, Any]] = {
         "profile": "high",
         "audio_bitrate": "256k",
         "pix_fmt": "yuv420p10le",
+        "max_height": 2160,
         "label": "Best",
-        "description": "Near-lossless quality. Slowest encode, largest file.",
+        "description": "4K (2160p) output. Near-lossless quality. Slowest encode, largest file.",
     },
 }
 
@@ -3425,6 +3429,20 @@ def _generate_ass_subtitles(
     return "\n".join(ass_lines)
 
 
+def _compute_scaled_dimensions(crop_w: int, crop_h: int, max_height: Optional[int]) -> Tuple[int, int]:
+    """Compute output dimensions, scaling down to fit max_height while preserving aspect ratio.
+
+    If max_height is None or the crop already fits within the limit, returns the
+    original crop dimensions unchanged.
+    """
+    if max_height is None or crop_h <= max_height:
+        return crop_w, crop_h
+    scale_factor = max_height / crop_h
+    new_w = round_to_even(int(crop_w * scale_factor))
+    new_h = max_height
+    return new_w, new_h
+
+
 def _render_clip_with_ffmpeg_ass(
     video_path: Path,
     start_time: float,
@@ -3438,6 +3456,7 @@ def _render_clip_with_ffmpeg_ass(
     ass_content: str,
     encoding_settings: Dict[str, Any],
     clip_render_timeout: Optional[float] = None,
+    quality_preset: Optional[str] = None,
 ) -> bool:
     """Render a clip using pure ffmpeg — crop + ASS subtitle burn in a single pass.
 
@@ -3455,12 +3474,24 @@ def _render_clip_with_ffmpeg_ass(
         # Build ffmpeg command
         # -ss before -i for fast seeking
         # -t for duration
-        # -vf "crop=W:H:X:Y,ass=FILE" for crop + subtitle burn
+        # -vf "crop=W:H:X:Y[,scale=W:H],ass=FILE" for crop [+ scale] + subtitle burn
         codec = encoding_settings.get("codec", "libx264")
         audio_codec = encoding_settings.get("audio_codec", "aac")
         audio_bitrate = encoding_settings.get("audio_bitrate", "192k")
         preset = encoding_settings.get("preset", "veryfast")
         extra_params = list(encoding_settings.get("ffmpeg_params") or [])
+
+        # Determine output dimensions based on quality preset's max_height
+        qp_name = _normalize_video_quality_preset(quality_preset) if quality_preset else None
+        max_height = VIDEO_QUALITY_PRESETS[qp_name]["max_height"] if qp_name else None
+        out_w, out_h = _compute_scaled_dimensions(crop_w, crop_h, max_height)
+
+        # Build video filter chain: crop → optional scale → ass subtitle burn
+        vf_parts = [f"crop={crop_w}:{crop_h}:{crop_x}:{crop_y}"]
+        if (out_w, out_h) != (crop_w, crop_h):
+            vf_parts.append(f"scale={out_w}:{out_h}:flags=lanczos")
+        vf_parts.append(f"ass={str(ass_file)}")
+        vf_filter = ",".join(vf_parts)
 
         cmd = [
             "ffmpeg",
@@ -3471,7 +3502,7 @@ def _render_clip_with_ffmpeg_ass(
             "-ss", f"{start_time:.3f}",
             "-i", str(video_path),
             "-t", f"{duration:.3f}",
-            "-vf", f"crop={crop_w}:{crop_h}:{crop_x}:{crop_y},ass={str(ass_file)}",
+            "-vf", vf_filter,
             "-c:v", codec,
             "-c:a", audio_codec,
             "-b:a", str(audio_bitrate),
@@ -4076,8 +4107,13 @@ def create_optimized_clip(
                         "[ASS_RENDER] Generating ASS subtitles: %d words for clip [%.1f-%.1f]s, crop=%dx%d+%d+%d",
                         len(relevant_words), start_time, end_time, crop_w, crop_h, crop_x, crop_y,
                     )
+                    # Generate ASS subtitles at the output resolution (after scaling)
+                    # so that font sizes and positioning are correct in the final file.
+                    qp_name = _normalize_video_quality_preset(video_quality_preset)
+                    _ass_max_h = VIDEO_QUALITY_PRESETS[qp_name].get("max_height")
+                    _ass_w, _ass_h = _compute_scaled_dimensions(crop_w, crop_h, _ass_max_h)
                     ass_content = _generate_ass_subtitles(
-                        relevant_words, crop_w, crop_h, style, processor.font_path,
+                        relevant_words, _ass_w, _ass_h, style, processor.font_path,
                     )
 
                     if ass_content:
@@ -4110,6 +4146,7 @@ def create_optimized_clip(
                                 ass_content=ass_content,
                                 encoding_settings=enc_settings,
                                 clip_render_timeout=clip_render_timeout,
+                                quality_preset=video_quality_preset,
                             )
                             if success:
                                 _ass_rendered = True

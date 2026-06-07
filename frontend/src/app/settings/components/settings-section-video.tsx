@@ -217,10 +217,10 @@ export function SettingsSectionVideo({
             <SelectValue placeholder="Select video quality" />
           </SelectTrigger>
           <SelectContent>
-            <SelectItem value="fast">Fast — smallest file, quickest encode</SelectItem>
-            <SelectItem value="good">Good — default balance</SelectItem>
-            <SelectItem value="better">Better — higher quality, slower encode</SelectItem>
-            <SelectItem value="best">Best — near-lossless, slowest encode</SelectItem>
+            <SelectItem value="fast">Fast — 720p, smallest file, quickest encode</SelectItem>
+            <SelectItem value="good">Good — 1080p, default balance</SelectItem>
+            <SelectItem value="better">Better — 1440p (2K), higher quality</SelectItem>
+            <SelectItem value="best">Best — 2160p (4K), near-lossless</SelectItem>
           </SelectContent>
         </Select>
       </div>
