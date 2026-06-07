@@ -88,15 +88,13 @@ class YouTubeDownloader:
 
         return _apply_ytdlp_auth_options({
             'outtmpl': str(output_path),
-            # Prefer 1080p mp4 + m4a first, then gracefully fall back to lower resolutions.
-            # Order is important: first match wins.
+            # Prefer best available quality — no artificial resolution cap.
+            # Downloads the highest resolution/bitrate YouTube offers for the video.
             'format': (
-                'bestvideo[height=1080][ext=mp4]+bestaudio[ext=m4a]/'
-                'best[height=1080][ext=mp4]/'
-                'bestvideo[height<=1080][ext=mp4]+bestaudio[ext=m4a]/'
-                'best[height<=1080][ext=mp4]/'
-                'bestvideo[height<=1080]+bestaudio/'
-                'best[height<=1080]'
+                'bestvideo[ext=mp4]+bestaudio[ext=m4a]/'
+                'bestvideo+bestaudio/'
+                'best[ext=mp4]/'
+                'best'
             ),
             'merge_output_format': 'mp4',
             'writesubtitles': False,
@@ -125,11 +123,10 @@ class YouTubeDownloader:
                     'player_client': ['android_vr', 'android', 'web'],
                 }
             },
-            # Post-processing options
-            'postprocessors': [{
-                'key': 'FFmpegVideoConvertor',
-                'preferedformat': 'mp4',
-            }],
+            # No FFmpegVideoConvertor — yt-dlp's native merger handles
+            # format muxing without an extra re-encode pass.  The clip
+            # rendering pipeline handles all encoding with user-selected
+            # quality settings.
             # Metadata extraction
             'extract_flat': False,
             'writeinfojson': False,
