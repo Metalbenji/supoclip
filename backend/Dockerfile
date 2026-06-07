@@ -108,8 +108,12 @@ COPY --from=builder /app/models /app/models
 COPY --from=builder /app/src /app/src
 COPY --from=builder /app/fonts /app/fonts
 COPY --from=builder /app/transitions /app/transitions
+COPY entrypoint.sh /app/entrypoint.sh
+RUN chmod +x /app/entrypoint.sh
 
-# Rebuild fontconfig cache now that fonts are actually present.
+# Build-time fontconfig cache for the baked-in fonts.  The entrypoint
+# script also re-runs fc-cache at startup to pick up any fonts added
+# via the ./backend/fonts volume mount in docker-compose.
 RUN fc-cache -fv /app/fonts
 
 ARG CUDA_NVCC_WHEEL_VERSION=
@@ -132,4 +136,5 @@ RUN mkdir -p /app/uploads /app/clips /app/logs /tmp
 
 EXPOSE 8000
 
+ENTRYPOINT ["/app/entrypoint.sh"]
 CMD [".venv/bin/uvicorn", "src.main:app", "--host", "0.0.0.0", "--port", "8000"]
