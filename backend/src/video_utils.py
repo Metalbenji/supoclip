@@ -3302,49 +3302,36 @@ def _generate_ass_subtitles(
         if group_end - group_start < 0.05:
             continue
 
-        # Build karaoke text: {\k<dur>}word1 {\k<dur>}word2 {\k<dur>}word3
+        # Build karaoke text: {\K<dur>}word1 {\K<dur>}word2 {\K<dur>}word3
         #
-        # Each \k duration is in deciseconds (tenths of a second).
+        # Uses uppercase \K (sticky karaoke) so that once the sweep passes a
+        # word it stays highlighted for the rest of the dialogue event.
+        # This gives the TikTok-style look: dimmed -> highlighted -> stays bright.
+        #
+        # Each \K duration is in centiseconds (hundredths of a second).
         # The timing is relative to the dialogue event start (group_start).
-        #
-        # We need the cumulative timing to match actual word boundaries.
-        # For each word, the \k duration should advance the sweep cursor
-        # from the current position to the start of the NEXT word.
-        # The last word's \k duration covers until group_end.
+        # For word i, the \K duration is the time from the previous word's
+        # start (or event start) to word i's start — i.e. how long the word
+        # stays dimmed before the sweep reaches it and turns it bright.
         karaoke_parts: List[str] = []
         cumulative = group_start
 
         for i in range(n):
             word_text = display_words[group[i]] if group[i] < len(display_words) else ""
-            if not word_text:
-                # Empty word — still need to advance timing
-                target = word_ends[i]
-            elif i < n - 1:
-                # Advance to the start of the next word (including any gap)
-                target = word_starts[i + 1]
-            else:
-                # Last word — advance to group end
-                target = group_end
+            # Target = the moment this word should become highlighted
+            target = word_starts[i]
 
-            duration_cs = max(1, int(round((target - cumulative) * 10)))  # deciseconds
-            cumulative = group_start + duration_cs / 10.0  # approximate
+            duration_cs = max(1, int(round((target - cumulative) * 100)))  # centiseconds
+            cumulative += duration_cs / 100.0  # advance running clock
 
-            karaoke_parts.append("{\\k" + str(duration_cs) + "}" + word_text)
+            karaoke_parts.append("{\\K" + str(duration_cs) + "}" + word_text)
 
         evt_text = " ".join(karaoke_parts)
 
-        # Pre-highlight: if there's a gap before the first word, show all
-        # words dimmed during that gap (no \k sweep yet).
-        pre_gap = word_starts[0] - group_start
-        if pre_gap > 0.05:
-            # Build a plain text line (no \k tags) showing all words dimmed
-            plain_text = " ".join(display_words[group[i]] if group[i] < len(display_words) else "" for i in range(n))
-            ass_lines.append(
-                f"Dialogue: 0,{_ass_time(group_start)},{_ass_time(word_starts[0])},Default,,0,0,0,,{plain_text}"
-            )
-
+        # The dialogue event must span long enough for the last word's
+        # highlight to be visible.  Extend to group_end (last word's end).
         ass_lines.append(
-            f"Dialogue: 0,{_ass_time(word_starts[0])},{_ass_time(group_end)},Default,,0,0,0,,{evt_text}"
+            f"Dialogue: 0,{_ass_time(group_start)},{_ass_time(group_end)},Default,,0,0,0,,{evt_text}"
         )
 
     return "\n".join(ass_lines)
