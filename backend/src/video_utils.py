@@ -51,7 +51,27 @@ _whisper_model_cache: Dict[str, Any] = {}
 _whisper_model_lock = threading.Lock()
 _face_model_path_lock = threading.Lock()
 _face_model_path_cache: Optional[Path] = None
+
+
+def _force_cuda_cache_cleanup() -> None:
+    """Release PyTorch CUDA allocator pooled memory and run GC.
+
+    MoviePy clip hierarchies create circular references that prevent
+    prompt refcount collection.  Calling this after each clip (or batch
+    of clips) returns VRAM to the allocator pool so it can be reused
+    by subsequent clips, preventing unbounded memory growth.
+    """
+    gc.collect()
+    try:
+        import torch
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+            torch.cuda.ipc_collect()
+    except Exception:
+        pass
+
 _mediapipe_detector_tls = threading.local()
+_dnn_face_detector_tls = threading.local()
 SUPPORTED_FRAMING_MODE_OVERRIDES = ("auto", "prefer_face", "fixed_position")
 SUPPORTED_FACE_DETECTION_MODES = ("balanced", "more_faces")
 SUPPORTED_FALLBACK_CROP_POSITIONS = ("center", "left_center", "right_center")
@@ -886,6 +906,7 @@ def _transcribe_with_local_whisper_chunked(
                 min_end_ms=min_end_ms,
             )
             all_words.extend(chunk_words)
+            del chunk_result, chunk_words
             chunk_elapsed_seconds = round(time.perf_counter() - chunk_started_at, 2)
             total_elapsed_seconds = round(time.perf_counter() - transcription_started_at, 2)
             completed_chunks = idx
@@ -910,6 +931,12 @@ def _transcribe_with_local_whisper_chunked(
                     ),
                 },
             )
+
+            # Release CUDA memory held by the allocator between chunks.
+            # Whisper's transcribe() allocates intermediate tensors that
+            # accumulate without explicit cache cleanup.
+            if idx % 3 == 0 or idx == total_chunks:
+                _force_cuda_cache_cleanup()
 
     deduped_words = _dedupe_transcript_words(all_words)
     if not deduped_words:
@@ -1398,15 +1425,19 @@ def _collect_face_detection_samples(
         mp_face_detection, mp_detection_backend, mp_module = _get_thread_mediapipe_face_detector()
         haar_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_frontalface_default.xml')
 
-        dnn_net = None
-        try:
-            cv2_data_dir = Path(cv2.data.haarcascades)
-            prototxt_path = cv2_data_dir / "opencv_face_detector.pbtxt"
-            model_path = cv2_data_dir / "opencv_face_detector_uint8.pb"
-            if prototxt_path.exists() and model_path.exists():
-                dnn_net = cv2.dnn.readNetFromTensorflow(str(model_path), str(prototxt_path))
-        except Exception as exc:
-            logger.info(f"OpenCV DNN face detector failed to load: {exc}")
+        # Use thread-cached DNN detector to avoid re-loading the ~7MB model
+        # on every face detection call (which can happen 10-20+ times per task).
+        dnn_net = getattr(_dnn_face_detector_tls, 'dnn_net', None)
+        if dnn_net is None:
+            try:
+                cv2_data_dir = Path(cv2.data.haarcascades)
+                prototxt_path = cv2_data_dir / "opencv_face_detector.pbtxt"
+                model_path = cv2_data_dir / "opencv_face_detector_uint8.pb"
+                if prototxt_path.exists() and model_path.exists():
+                    dnn_net = cv2.dnn.readNetFromTensorflow(str(model_path), str(prototxt_path))
+                    _dnn_face_detector_tls.dnn_net = dnn_net
+            except Exception as exc:
+                logger.info(f"OpenCV DNN face detector failed to load: {exc}")
 
         sample_times = _get_face_detection_sample_times(start_time, end_time)
         logger.info("Sampling %s frames for face detection", len(sample_times))
@@ -3841,6 +3872,9 @@ def create_optimized_clip(
     clip_render_timeout: Optional[float] = None,
 ) -> bool:
     """Create an optimized clip with word-timed subtitles."""
+    video = None
+    clip = None
+    final_clip = None
     try:
         video_path = Path(video_path)
         output_path = Path(output_path)
@@ -3857,6 +3891,7 @@ def create_optimized_clip(
         if start_time >= video.duration:
             logger.error(f"Start time {start_time}s exceeds video duration {video.duration:.1f}s")
             video.close()
+            video = None
             return False
 
         end_time = min(end_time, video.duration)
@@ -4031,11 +4066,12 @@ def create_optimized_clip(
             logger.info(f"[SUBTITLE_DIAG] create_optimized_clip: add_subtitles=False, skipping subtitles")
 
         # Compose and encode
-        final_clip = CompositeVideoClip(final_clips) if len(final_clips) > 1 else cropped_clip
+        _had_subtitle_layers = len(final_clips) > 1
+        final_clip = CompositeVideoClip(final_clips) if _had_subtitle_layers else cropped_clip
 
         # CompositeVideoClip does not automatically preserve audio from constituent clips.
         # Explicitly attach the audio from the cropped base clip so output has sound.
-        if len(final_clips) > 1 and hasattr(cropped_clip, "audio") and cropped_clip.audio is not None:
+        if _had_subtitle_layers and hasattr(cropped_clip, "audio") and cropped_clip.audio is not None:
             final_clip = final_clip.with_audio(cropped_clip.audio)
 
         # ── Nuclear safety: wrap EVERY clip and mask so no get_frame can
@@ -4044,7 +4080,7 @@ def create_optimized_clip(
         #    will crash with a numpy broadcast error if either returns a
         #    (0, W, C) or (0, W) array.  Wrapping at this level catches
         #    ALL sources — TextClip, VideoClip, resized subclips, etc.  ──
-        if len(final_clips) > 1:
+        if _had_subtitle_layers:
             for _cl in final_clips[1:]:  # skip base cropped_clip at index 0
                 # 1) Wrap the clip's own get_frame AND make_frame to guarantee non-zero size
                 _orig_gf = _cl.get_frame
@@ -4093,6 +4129,19 @@ def create_optimized_clip(
 
                     _mask.make_frame = _safe_mask_mf
 
+        # Explicitly close individual subtitle TextClip objects to free PIL/numpy
+        # image buffers BEFORE encoding.  MoviePy v2's cascade close is unreliable
+        # and can leave hundreds of rendered text images (50-100KB each) in memory.
+        # The CompositeVideoClip (final_clip) already holds its own frame buffer
+        # references, so closing the source TextClip objects here is safe.
+        if _had_subtitle_layers:
+            for _sc in final_clips:
+                if _sc is not cropped_clip:
+                    try:
+                        _sc.close()
+                    except Exception:
+                        pass
+
         processor = VideoProcessor(font_family, font_size, font_color)
         clip_encoding_candidates = processor.get_clip_render_encoding_candidates()
         selected_encoder_backend = ""
@@ -4113,6 +4162,7 @@ def create_optimized_clip(
                     # render queue indefinitely.
                     _encode_done = threading.Event()
                     _encode_exc: List[Exception] = []
+                    _ffmpeg_process: List[Any] = []
 
                     def _run_encode():
                         try:
@@ -4132,12 +4182,31 @@ def create_optimized_clip(
                     _enc_thread.start()
                     _encode_done.wait(timeout=clip_render_timeout)
                     if _enc_thread.is_alive():
-                        # Thread is still running — timed out
+                        # Thread is still running — timed out. Attempt to kill the
+                        # underlying ffmpeg subprocess to free memory and file handles.
+                        _killed = False
+                        if hasattr(final_clip, 'reader') and hasattr(final_clip.reader, 'process'):
+                            try:
+                                final_clip.reader.process.kill()
+                                _killed = True
+                            except Exception:
+                                pass
+                        if not _killed:
+                            # Bruteforce: find any ffmpeg child of this process.
+                            try:
+                                import signal
+                                import os
+                                _pid = os.getpid()
+                                _cmd = f"pgrep -P {_pid} ffmpeg | xargs kill -9 2>/dev/null; pkill -9 -P {_pid} ffmpeg 2>/dev/null"
+                                subprocess.run(_cmd, shell=True, timeout=5)
+                            except Exception:
+                                pass
                         logger.error(
-                            "Clip encode timed out after %.1fs using %s (%s); aborting",
+                            "Clip encode timed out after %.1fs using %s (%s); aborting, ffmpeg_killed=%s",
                             clip_render_timeout,
                             selected_encoder_backend,
                             selected_encoder_profile,
+                            _killed,
                         )
                         raise RuntimeError(
                             f"Clip render timed out after {clip_render_timeout:.0f}s "
@@ -4174,10 +4243,25 @@ def create_optimized_clip(
             if last_encode_error is not None:
                 raise last_encode_error
 
-        # Cleanup
-        final_clip.close()
-        clip.close()
-        video.close()
+        # Cleanup — always close clips to free mmap'd video buffers and ffmpeg pipes
+        if final_clip is not None:
+            try:
+                final_clip.close()
+            except Exception:
+                pass
+            final_clip = None
+        if clip is not None:
+            try:
+                clip.close()
+            except Exception:
+                pass
+            clip = None
+        if video is not None:
+            try:
+                video.close()
+            except Exception:
+                pass
+            video = None
 
         if render_details_sink is not None:
             render_details_sink.update(
@@ -4200,6 +4284,14 @@ def create_optimized_clip(
         if error_collector is not None:
             error_collector.append(f"[{_anim_label}] {e}")
         return False
+    finally:
+        # Guarantee clip cleanup even on unexpected exceptions to prevent memory leaks.
+        for _clip_obj in (final_clip, clip, video):
+            if _clip_obj is not None:
+                try:
+                    _clip_obj.close()
+                except Exception:
+                    pass
 
 def create_clips_from_segments(
     video_path: Union[Path, str],
@@ -4407,7 +4499,14 @@ def create_clips_from_segments(
             for segment_index, segment in enumerate(segments)
         ]
         for future in as_completed(futures):
-            results.append(future.result())
+            result = future.result()
+            results.append(result)
+
+    # Aggressively reclaim memory after all clips have rendered. MoviePy's
+    # CompositeVideoClip creates circular references (parent↔children via
+    # position/mask closures) that Python's refcounting can't collect.
+    gc.collect()
+    _force_cuda_cache_cleanup()
 
     for result in sorted(results, key=lambda item: int(item.get("clip_index") or 0)):
         clip_info = result.get("clip_info")
@@ -4461,6 +4560,7 @@ def get_available_transitions() -> List[str]:
 
 def apply_transition_effect(clip1_path: Path, clip2_path: Path, transition_path: Path, output_path: Path) -> bool:
     """Apply transition effect between two clips using a transition video."""
+    clip1 = clip2 = transition = final_clip = None
     try:
         from moviepy import VideoFileClip, concatenate_videoclips, vfx
 
@@ -4503,18 +4603,20 @@ def apply_transition_effect(clip1_path: Path, clip2_path: Path, transition_path:
             **encoding_settings
         )
 
-        # Cleanup
-        final_clip.close()
-        clip1.close()
-        clip2.close()
-        transition.close()
-
         logger.info(f"Applied transition effect: {output_path}")
         return True
 
     except Exception as e:
         logger.error(f"Error applying transition effect: {e}")
         return False
+    finally:
+        # Guarantee clip cleanup to prevent memory leaks
+        for _c in (final_clip, clip1, clip2, transition):
+            if _c is not None:
+                try:
+                    _c.close()
+                except Exception:
+                    pass
 
 def create_clips_with_transitions(
     video_path: Union[Path, str],

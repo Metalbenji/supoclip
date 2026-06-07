@@ -242,6 +242,18 @@ async def process_video_task(
             raise
         finally:
             await JobQueue.clear_task_cancelled(task_id)
+            # Aggressively reclaim memory after each task.  MoviePy clips,
+            # numpy arrays, and CUDA tensors from Whisper can accumulate
+            # across tasks without explicit collection.
+            try:
+                import gc
+                gc.collect()
+                import torch
+                if torch.cuda.is_available():
+                    torch.cuda.empty_cache()
+                    torch.cuda.ipc_collect()
+            except Exception:
+                pass
 
 
 # Worker configuration for arq

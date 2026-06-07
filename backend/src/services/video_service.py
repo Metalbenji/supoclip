@@ -802,6 +802,14 @@ class VideoService:
                 process.stdout.close()
             except Exception:
                 pass
+            try:
+                process.kill()
+            except Exception:
+                pass
+            try:
+                process.wait(timeout=5)
+            except Exception:
+                pass
 
         stderr_output = process.stderr.read().decode("utf-8", errors="ignore") if process.stderr else ""
         return_code = process.wait()
