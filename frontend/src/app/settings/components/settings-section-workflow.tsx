@@ -40,7 +40,6 @@ interface SettingsSectionWorkflowProps {
   workflowStatus: string | null;
   workflowError: string | null;
   reviewBeforeRenderEnabled: boolean;
-  transitionsEnabled: boolean;
   timelineEditorEnabled: boolean;
   reviewAutoSelectStrongFaceEnabled: boolean;
   reviewAutoSelectStrongFaceMinScorePercent: number;
@@ -56,7 +55,6 @@ interface SettingsSectionWorkflowProps {
   onRenameWorkflow: (workflowId: string, name: string) => Promise<boolean>;
   onDeleteWorkflow: (workflowId: string) => Promise<boolean>;
   onToggleReviewBeforeRender: () => void;
-  onToggleTransitions: () => void;
   onToggleTimelineEditor: () => void;
   onToggleReviewAutoSelectStrongFace: () => void;
   onReviewAutoSelectStrongFaceMinScorePercentChange: (value: number) => void;
@@ -106,7 +104,6 @@ export function SettingsSectionWorkflow({
   workflowStatus,
   workflowError,
   reviewBeforeRenderEnabled,
-  transitionsEnabled,
   timelineEditorEnabled,
   reviewAutoSelectStrongFaceEnabled,
   reviewAutoSelectStrongFaceMinScorePercent,
@@ -122,7 +119,6 @@ export function SettingsSectionWorkflow({
   onRenameWorkflow,
   onDeleteWorkflow,
   onToggleReviewBeforeRender,
-  onToggleTransitions,
   onToggleTimelineEditor,
   onToggleReviewAutoSelectStrongFace,
   onReviewAutoSelectStrongFaceMinScorePercentChange,
@@ -137,7 +133,6 @@ export function SettingsSectionWorkflow({
     () => ({
       reviewBeforeRenderEnabled,
       timelineEditorEnabled,
-      transitionsEnabled,
       transcriptionProvider,
       whisperModelSize,
       defaultFramingMode,
@@ -153,7 +148,6 @@ export function SettingsSectionWorkflow({
       reviewBeforeRenderEnabled,
       timelineEditorEnabled,
       transcriptionProvider,
-      transitionsEnabled,
       whisperModelSize,
     ],
   );
@@ -354,14 +348,6 @@ export function SettingsSectionWorkflow({
         checked={timelineEditorEnabled}
         disabled={isSaving}
         onToggle={onToggleTimelineEditor}
-      />
-
-      <ToggleCard
-        label="Transitions"
-        description="Add transition effects between consecutive generated clips."
-        checked={transitionsEnabled}
-        disabled={isSaving}
-        onToggle={onToggleTransitions}
       />
 
       <div className="space-y-3 rounded-md border border-gray-200 bg-white p-4">

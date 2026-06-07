@@ -1,5 +1,5 @@
 """
-Media API routes (fonts, transitions, uploads).
+Media API routes (fonts, uploads).
 """
 from fastapi import APIRouter, HTTPException, UploadFile, File
 from fastapi.responses import FileResponse
@@ -145,30 +145,6 @@ async def get_font_file(font_name: str):
     except Exception as e:
         logger.error(f"Error serving font {font_name}: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Error serving font: {str(e)}")
-
-
-@router.get("/transitions")
-async def get_available_transitions():
-    """Get list of available transition effects."""
-    try:
-        from ...video_utils import get_available_transitions
-        transitions = get_available_transitions()
-
-        transition_info = []
-        for transition_path in transitions:
-            transition_file = Path(transition_path)
-            transition_info.append({
-                "name": transition_file.stem,
-                "display_name": transition_file.stem.replace("_", " ").replace("-", " ").title(),
-                "file_path": transition_path
-            })
-
-        logger.info(f"Found {len(transition_info)} available transitions")
-        return {"transitions": transition_info}
-
-    except Exception as e:
-        logger.error(f"Error retrieving transitions: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"Error retrieving transitions: {str(e)}")
 
 
 @router.post("/upload")

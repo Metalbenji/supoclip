@@ -369,18 +369,16 @@ class VideoService:
         font_color: str = "#FFFFFF",
         subtitle_style: Optional[Dict[str, Any]] = None,
         output_aspect_ratio: str = "9:16",
-        transitions_enabled: bool = False,
         progress_callback: Optional[callable] = None,
         filename_prefix: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
-        Create video clips from segments with subtitles, with optional transitions.
+        Create video clips from segments with subtitles.
         Runs in thread pool as video processing is CPU-intensive.
         """
         logger.info(
-            "Creating %s video clips (transitions_enabled=%s)",
+            "Creating %s video clips",
             len(segments),
-            transitions_enabled,
         )
         clips_output_dir = Path(config.temp_dir) / "clips"
         clips_output_dir.mkdir(parents=True, exist_ok=True)
@@ -422,10 +420,9 @@ class VideoService:
                 loop,
             )
 
-        create_clips_with_transitions = VideoService._video_utils_attr("create_clips_with_transitions")
         create_clips_from_segments = VideoService._video_utils_attr("create_clips_from_segments")
-        clip_builder = create_clips_with_transitions if transitions_enabled else create_clips_from_segments
-        render_workers = 1 if transitions_enabled else getattr(config, "render_max_workers", 1)
+        clip_builder = create_clips_from_segments
+        render_workers = getattr(config, "render_max_workers", 1)
         clip_render_timeout = getattr(config, "per_clip_render_timeout_seconds", 300)
         clips_info = await run_in_thread(
             clip_builder,
@@ -443,9 +440,6 @@ class VideoService:
             render_workers,
             clip_render_timeout,
         )
-        if not transitions_enabled:
-            render_diagnostics["transitions_disabled"] = True
-
         logger.info(f"Successfully created {len(clips_info)} clips")
         return {"clips": clips_info, "diagnostics": render_diagnostics}
 
@@ -1310,7 +1304,6 @@ class VideoService:
         font_color: str = "#FFFFFF",
         subtitle_style: Optional[Dict[str, Any]] = None,
         output_aspect_ratio: str = "9:16",
-        transitions_enabled: bool = False,
         progress_callback: Optional[callable] = None,
         cancel_check: Optional[Callable[[], Awaitable[None]]] = None,
         filename_prefix: Optional[str] = None,
@@ -1337,7 +1330,6 @@ class VideoService:
             font_color=font_color,
             subtitle_style=subtitle_style,
             output_aspect_ratio=output_aspect_ratio,
-            transitions_enabled=transitions_enabled,
             progress_callback=progress_callback,
             filename_prefix=filename_prefix,
         )
@@ -1408,7 +1400,6 @@ class VideoService:
         font_size: int = 24,
         font_color: str = "#FFFFFF",
         subtitle_style: Optional[Dict[str, Any]] = None,
-        transitions_enabled: bool = False,
         transcription_provider: str = "local",
         assembly_api_key: Optional[str] = None,
         ai_provider: str = "openai",
@@ -1468,7 +1459,6 @@ class VideoService:
                 font_color=font_color,
                 subtitle_style=subtitle_style,
                 output_aspect_ratio=output_aspect_ratio,
-                transitions_enabled=transitions_enabled,
                 progress_callback=progress_callback,
                 cancel_check=cancel_check,
                 filename_prefix=filename_prefix,

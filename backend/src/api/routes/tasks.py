@@ -1421,7 +1421,6 @@ async def create_task(request: Request, db: AsyncSession = Depends(get_db)):
     font_family = subtitle_style["font_family"]
     font_size = subtitle_style["font_size"]
     font_color = subtitle_style["font_color"]
-    transitions_enabled = _coerce_bool(font_options.get("transitions_enabled"), default=False)
     transcription_options = data.get("transcription_options", {})
     if not isinstance(transcription_options, dict):
         transcription_options = {}
@@ -1617,7 +1616,6 @@ async def create_task(request: Request, db: AsyncSession = Depends(get_db)):
             font_size=font_size,
             font_color=font_color,
             subtitle_style=subtitle_style,
-            transitions_enabled=transitions_enabled,
             transcription_provider=transcription_provider,
             ai_provider=ai_provider,
             ai_model=ai_model,
@@ -1642,7 +1640,6 @@ async def create_task(request: Request, db: AsyncSession = Depends(get_db)):
                 font_family,
                 font_size,
                 font_color,
-                transitions_enabled,
                 transcription_provider,
                 ai_provider,
                 ai_model,
@@ -2426,7 +2423,6 @@ async def finalize_task(task_id: str, request: Request, db: AsyncSession = Depen
             subtitle_style["font_family"],
             int(subtitle_style["font_size"]),
             subtitle_style["font_color"],
-            _coerce_bool(task.get("transitions_enabled"), default=False),
             task.get("transcription_provider") or "local",
             task.get("ai_provider") or _default_ai_provider(),
             None,
@@ -2500,7 +2496,6 @@ async def retry_task(task_id: str, request: Request, db: AsyncSession = Depends(
             subtitle_style["font_family"],
             int(subtitle_style["font_size"]),
             subtitle_style["font_color"],
-            _coerce_bool(task_snapshot.get("transitions_enabled"), default=False),
             task_snapshot.get("transcription_provider") or "local",
             task_snapshot.get("ai_provider") or _default_ai_provider(),
             task_snapshot.get("runtime_info", {}).get("ai_model"),

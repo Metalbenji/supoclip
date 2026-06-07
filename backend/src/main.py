@@ -217,13 +217,13 @@ async def start_task(request: Request):
             ]
             logger.info(f"✅ Created {len(relevant_segments_json)} segment records")
 
-            # Create clips from relevant segments with transitions and custom fonts
-            logger.info("🎬 Starting video clip generation with transitions")
+            # Create clips from relevant segments
+            logger.info("🎬 Starting video clip generation")
             clips_output_dir = Path(config.temp_dir) / "clips"
             logger.info(f"📁 Output directory: {clips_output_dir}")
             logger.info(f"🎨 Font settings - Family: {font_family}, Size: {font_size}, Color: {font_color}")
-            clips_info = create_clips_with_transitions(video_path, relevant_segments_json, clips_output_dir, font_family, font_size, font_color)
-            logger.info(f"✅ Generated {len(clips_info)} video clips with transitions")
+            clips_info = create_clips_from_segments(video_path, relevant_segments_json, clips_output_dir, font_family, font_size, font_color)
+            logger.info(f"✅ Generated {len(clips_info)} video clips")
 
             # Save clips to database
             logger.info("💾 Saving clips to database")
@@ -411,11 +411,11 @@ async def process_video_task(task_id: str, raw_source: dict, user_id: str, font_
                 for segment in relevant_parts.most_relevant_segments
             ]
 
-            logger.info(f"📊 Task {task_id}: Creating {len(relevant_segments_json)} video clips with transitions...")
+            logger.info(f"📊 Task {task_id}: Creating {len(relevant_segments_json)} video clips...")
             clips_output_dir = Path(config.temp_dir) / "clips"
             logger.info(f"🎨 Task {task_id}: Font settings - Family: {font_family}, Size: {font_size}, Color: {font_color}")
-            clips_info = create_clips_with_transitions(video_path, relevant_segments_json, clips_output_dir, font_family, font_size, font_color)
-            logger.info(f"✅ Generated {len(clips_info)} video clips with transitions")
+            clips_info = create_clips_from_segments(video_path, relevant_segments_json, clips_output_dir, font_family, font_size, font_color)
+            logger.info(f"✅ Generated {len(clips_info)} video clips")
 
             logger.info(f"📊 Task {task_id}: Saving clips to database...")
             async with AsyncSessionLocal() as db:
@@ -670,30 +670,6 @@ async def get_font_file(font_name: str):
         logger.error(f"Error serving font {font_name}: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Error serving font: {str(e)}")
 
-@app.get("/transitions")
-async def get_available_transitions():
-    """Get list of available transition effects"""
-    try:
-        from .video_utils import get_available_transitions
-        transitions = get_available_transitions()
-
-        transition_info = []
-        for transition_path in transitions:
-            transition_file = Path(transition_path)
-            transition_info.append({
-                "name": transition_file.stem,
-                "display_name": transition_file.stem.replace("_", " ").replace("-", " ").title(),
-                "file_path": transition_path
-            })
-
-        logger.info(f"Found {len(transition_info)} available transitions")
-        return {"transitions": transition_info}
-
-    except Exception as e:
-        logger.error(f"Error retrieving transitions: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"Error retrieving transitions: {str(e)}")
-
-# endpoint to upload a video
 @app.post("/upload")
 async def upload_video(video: UploadFile = File(...)):
     """Upload a video to the server"""

@@ -91,7 +91,6 @@ async def process_video_task(
     font_family: str = "TikTokSans-Regular",
     font_size: int = 24,
     font_color: str = "#FFFFFF",
-    transitions_enabled: bool = False,
     transcription_provider: str = "local",
     ai_provider: str = "openai",
     ai_model: Optional[str] = None,
@@ -113,16 +112,6 @@ async def process_video_task(
         font_family: Font family for subtitles
         font_size: Font size for subtitles
         font_color: Font color for subtitles
-        transitions_enabled: Whether transition effects should be applied
-        transcription_provider: "local" or "assemblyai"
-        ai_provider: "openai", "google", "anthropic", "zai", or "ollama"
-        ai_model: Optional model override for the selected AI provider
-        subtitle_style: Extra subtitle style controls for rendering
-        ai_routing_mode: Optional z.ai key routing mode ("auto", "subscription", "metered")
-        transcription_options: Optional local transcription overrides and task timeout
-        source_options: Optional source download/runtime overrides
-        render_from_drafts: If true, render using reviewed draft clips
-
     Returns:
         Dict with processing results
     """
@@ -170,7 +159,6 @@ async def process_video_task(
                 font_family=font_family,
                 font_size=font_size,
                 font_color=font_color,
-                transitions_enabled=transitions_enabled,
                 transcription_provider=transcription_provider,
                 ai_provider=ai_provider,
                 ai_model=ai_model,

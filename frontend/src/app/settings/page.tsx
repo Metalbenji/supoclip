@@ -241,7 +241,6 @@ function SettingsPageContent() {
         values: {
           reviewBeforeRenderEnabled: preferencesDraft.reviewBeforeRenderEnabled,
           timelineEditorEnabled: preferencesDraft.timelineEditorEnabled,
-          transitionsEnabled: preferencesDraft.transitionsEnabled,
           transcriptionProvider: preferencesDraft.transcriptionProvider,
           whisperModelSize: preferencesDraft.whisperModelSize,
           defaultFramingMode: preferencesDraft.defaultFramingMode,
@@ -269,7 +268,6 @@ function SettingsPageContent() {
     (prefs: UserPreferences = preferencesDraft) => ({
       reviewBeforeRenderEnabled: prefs.reviewBeforeRenderEnabled,
       timelineEditorEnabled: prefs.timelineEditorEnabled,
-      transitionsEnabled: prefs.transitionsEnabled,
       transcriptionProvider: prefs.transcriptionProvider,
       whisperModelSize: prefs.whisperModelSize,
       defaultFramingMode: prefs.defaultFramingMode,
@@ -847,7 +845,6 @@ function SettingsPageContent() {
           values: {
             reviewBeforeRenderEnabled: preferencesDraft.reviewBeforeRenderEnabled,
             timelineEditorEnabled: preferencesDraft.timelineEditorEnabled,
-            transitionsEnabled: preferencesDraft.transitionsEnabled,
             transcriptionProvider: preferencesDraft.transcriptionProvider,
             whisperModelSize: preferencesDraft.whisperModelSize,
             defaultFramingMode: preferencesDraft.defaultFramingMode,
@@ -1606,7 +1603,6 @@ function SettingsPageContent() {
 
         const nextPreferences: UserPreferences = {
           ...normalizedFontStyle,
-          transitionsEnabled: Boolean(data.transitionsEnabled),
           reviewBeforeRenderEnabled:
             typeof data.reviewBeforeRenderEnabled === "boolean"
               ? data.reviewBeforeRenderEnabled
@@ -1918,7 +1914,6 @@ function SettingsPageContent() {
                 workflowStatus={workflowStatus}
                 workflowError={workflowError}
                 reviewBeforeRenderEnabled={preferencesDraft.reviewBeforeRenderEnabled}
-                transitionsEnabled={preferencesDraft.transitionsEnabled}
                 timelineEditorEnabled={preferencesDraft.timelineEditorEnabled}
                 reviewAutoSelectStrongFaceEnabled={preferencesDraft.reviewAutoSelectStrongFaceEnabled}
                 reviewAutoSelectStrongFaceMinScorePercent={preferencesDraft.reviewAutoSelectStrongFaceMinScorePercent}
@@ -1947,8 +1942,6 @@ function SettingsPageContent() {
                     reviewBeforeRenderEnabled: !prev.reviewBeforeRenderEnabled,
                   }));
                 }}
-                onToggleTransitions={() => {
-                  setPreferencesDraft((prev) => ({ ...prev, transitionsEnabled: !prev.transitionsEnabled }));
                 }}
                 onToggleTimelineEditor={() => {
                   setPreferencesDraft((prev) => ({ ...prev, timelineEditorEnabled: !prev.timelineEditorEnabled }));

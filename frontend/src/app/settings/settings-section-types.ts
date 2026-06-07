@@ -76,7 +76,6 @@ export const MIN_TASK_TIMEOUT_SECONDS = 300;
 export const MAX_TASK_TIMEOUT_SECONDS = 86400;
 
 export interface UserPreferences extends FontStyleOptions {
-  transitionsEnabled: boolean;
   reviewBeforeRenderEnabled: boolean;
   timelineEditorEnabled: boolean;
   defaultProcessingProfile: PersistedProcessingProfile;
@@ -103,7 +102,6 @@ export interface UserPreferences extends FontStyleOptions {
 
 export const DEFAULT_USER_PREFERENCES: UserPreferences = {
   ...DEFAULT_FONT_STYLE_OPTIONS,
-  transitionsEnabled: false,
   reviewBeforeRenderEnabled: true,
   timelineEditorEnabled: true,
   defaultProcessingProfile: "balanced",
@@ -247,7 +245,6 @@ export function arePreferencesEqual(a: UserPreferences, b: UserPreferences): boo
     a.shadowOffsetX === b.shadowOffsetX &&
     a.shadowOffsetY === b.shadowOffsetY &&
     a.dimUnhighlighted === b.dimUnhighlighted &&
-    a.transitionsEnabled === b.transitionsEnabled &&
     a.reviewBeforeRenderEnabled === b.reviewBeforeRenderEnabled &&
     a.timelineEditorEnabled === b.timelineEditorEnabled &&
     a.defaultProcessingProfile === b.defaultProcessingProfile &&

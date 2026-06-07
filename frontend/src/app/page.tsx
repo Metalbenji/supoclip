@@ -112,7 +112,6 @@ export default function Home() {
     () => ({
       reviewBeforeRenderEnabled: preferences.reviewBeforeRenderEnabled,
       timelineEditorEnabled: preferences.timelineEditorEnabled,
-      transitionsEnabled: preferences.transitionsEnabled,
       transcriptionProvider: preferences.transcriptionProvider,
       whisperModelSize: preferences.whisperModelSize,
       defaultFramingMode: preferences.defaultFramingMode,
@@ -183,7 +182,6 @@ export default function Home() {
 
         const nextPreferences: UserPreferences = {
           ...normalizedFontStyle,
-          transitionsEnabled: Boolean(data.transitionsEnabled),
           reviewBeforeRenderEnabled:
             typeof data.reviewBeforeRenderEnabled === "boolean"
               ? data.reviewBeforeRenderEnabled
@@ -497,7 +495,6 @@ export default function Home() {
           dim_unhighlighted: preferences.dimUnhighlighted,
           position: preferences.position,
           animation: preferences.animation,
-          transitions_enabled: workflowPayload.transitionsEnabled,
         },
         transcription_options: {
           provider: workflowPayload.transcriptionProvider,
