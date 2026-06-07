@@ -3054,9 +3054,13 @@ def _generate_ass_subtitles(
 ) -> str:
     """Generate ASS subtitle content from word timings with karaoke highlighting.
 
-    Returns the complete .ass file content as a string.
-    The caller is responsible for writing it to a temp file and passing
-    it to ffmpeg via -vf "ass=<path>".
+    Uses a "sticky karaoke" approach: for each group of words, multiple
+    non-overlapping dialogue events are emitted, each showing ALL words
+    in the group but with different \\c colour overrides marking which
+    words have been spoken (highlighted) vs. not yet spoken (dimmed).
+
+    This avoids the broken approach of emitting single-word dialogue
+    lines that libass positions independently, causing misalignment.
     """
     if not relevant_words:
         return ""
@@ -3126,10 +3130,6 @@ def _generate_ass_subtitles(
         return ""
 
     # Group words into lines of max 3 words
-    # For ASS, we need to create dialogue events for each word group
-    # and use \k tags for karaoke timing within each group
-
-    # Build word groups
     groups: List[List[int]] = []
     current_group: List[int] = []
     for idx in range(len(relevant_words)):
@@ -3153,27 +3153,29 @@ def _generate_ass_subtitles(
         "Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding",
     ]
 
-    # Style: Dimmed base (unhighlighted words shown dimmed)
-    dimmed_primary = _hex_to_ass_color(font_color)
+    # Color constants for inline \c overrides
+    highlight_ass = _hex_to_ass_color(highlight_color)
+    # Dimmed color: same as font_color but with alpha for transparency
+    dimmed_ass = _hex_to_ass_color(font_color)
     if dimmed_alpha > 0:
-        dimmed_primary = f"&H{dimmed_alpha:02X}{dimmed_primary[4:]}"  # insert alpha
+        dimmed_ass = f"&H{dimmed_alpha:02X}{dimmed_ass[4:]}"
 
     ass_styles = []
 
-    # Style 1: Base dimmed (for words not yet highlighted)
+    # Single default style — colours are overridden inline per word
     ass_styles.append(
         "Style: Default,{font},{size},{primary},{secondary},{outline},{back},"
         "{bold},0,0,0,100,100,{spacing},0,1,{outline_w},{shadow_w},2,"
         "{margin_l},{margin_r},{margin_v},1".format(
             font=font_name,
             size=calculated_font_size,
-            primary=dimmed_primary,
-            secondary=_hex_to_ass_color(highlight_color),
+            primary=dimmed_ass,
+            secondary=highlight_ass,
             outline=_hex_to_ass_color(stroke_color),
             back=_hex_to_ass_color(shadow_color),
             bold=-1 if int(subtitle_style.get("font_weight", 600)) >= 600 else 0,
             spacing=letter_spacing,
-            outline_w=stroke_width * 2,  # ASS outline = total outline width
+            outline_w=stroke_width * 2,
             shadow_w=int(shadow_offset_y) if shadow_opacity > 0 else 0,
             margin_l=10,
             margin_r=10,
@@ -3194,7 +3196,24 @@ def _generate_ass_subtitles(
         cs = int(round((seconds - int(seconds)) * 100))
         return f"{h}:{m:02d}:{s:02d}.{cs:02d}"
 
-    # Generate dialogue events with karaoke tags
+    def _build_group_text(group_indices: List[int], highlighted_count: int) -> str:
+        """Build the full group text with \\c colour overrides.
+
+        The first ``highlighted_count`` words get the highlight colour;
+        the rest get the dimmed colour.
+        """
+        parts: List[str] = []
+        for i, global_idx in enumerate(group_indices):
+            word_text = display_words[global_idx] if global_idx < len(display_words) else ""
+            if not word_text:
+                continue
+            if i < highlighted_count:
+                parts.append("{\\c" + highlight_ass + "}" + word_text)
+            else:
+                parts.append("{\\c" + dimmed_ass + "}" + word_text)
+        return " ".join(parts)
+
+    # Generate dialogue events with sticky karaoke
     for group in groups:
         if not group:
             continue
@@ -3207,64 +3226,45 @@ def _generate_ass_subtitles(
         if group_duration < 0.05:
             continue
 
-        # For each word in the group, create a separate dialogue line
-        # with \k tags. Each word gets highlighted in sequence.
-        # We need overlapping dialogue lines: one per word to highlight,
-        # and one base line showing all words dimmed.
+        # Pre-compute word start times for boundary detection
+        word_starts: List[float] = []
+        for global_idx in group:
+            ws = float(relevant_words[global_idx].get("start", 0)) + timing_shift
+            word_starts.append(max(0.0, ws))
 
-        group_text_parts = []
-        for idx in group:
-            word_text = display_words[idx] if idx < len(display_words) else ""
-            group_text_parts.append(word_text)
-        group_text = " ".join(group_text_parts)
-        if not group_text.strip():
-            continue
-
-        # Base dimmed line (shows the whole group dimmed throughout)
-        base_start = _ass_time(group_start)
-        base_end = _ass_time(group_end)
-        ass_lines.append(
-            f"Dialogue: 0,{base_start},{base_end},Default,,0,0,0,,{group_text}"
-        )
-
-        # Highlighted word lines — one per word, overlapping with the base
-        for word_idx_in_group, word_global_idx in enumerate(group):
-            if word_global_idx >= len(relevant_words):
-                continue
-
-            word_start = float(relevant_words[word_global_idx].get("start", 0)) + timing_shift
-            word_end = float(relevant_words[word_global_idx].get("end", 0)) + timing_shift
-            word_start = max(0.0, word_start)
-
-            # Calculate karaoke duration for the word
-            # The highlight starts at word_start and ends when next word starts (or group ends)
-            if word_idx_in_group < len(group) - 1:
-                next_global_idx = group[word_idx_in_group + 1]
-                highlight_end = max(word_end, float(relevant_words[next_global_idx].get("start", 0)) + timing_shift)
+        # Emit one dialogue event per "highlight state".
+        # State 0: no words highlighted yet  (visible from group_start to first word start)
+        # State N: first N words highlighted   (visible from word[N-1] start to word[N] start)
+        # State len(group): all highlighted     (visible from last word start to group_end)
+        #
+        # Each event shows ALL words with correct \c overrides, so libass
+        # renders identical layout — only colours change between states.
+        n = len(group)
+        for state in range(n + 1):
+            # Time range for this state
+            if state == 0:
+                evt_start = group_start
+                evt_end = word_starts[0] if n > 0 else group_end
+            elif state < n:
+                evt_start = word_starts[state - 1]
+                evt_end = word_starts[state] if state < n else group_end
             else:
-                highlight_end = max(word_end, group_end)
-            highlight_end = max(word_start + 0.01, highlight_end)
+                evt_start = word_starts[state - 1]
+                evt_end = group_end
 
-            # Build the text with \k karaoke timing
-            # \k<duration_cs> highlights the following syllable for that many centiseconds
-            # We'll show only the highlighted word (others are dimmed on the base line)
-            word_text = display_words[word_global_idx] if word_global_idx < len(display_words) else ""
-            if not word_text.strip():
+            # Skip degenerate/zero-duration events (except the initial pre-highlight)
+            if state > 0 and evt_end <= evt_start:
+                continue
+            if state == 0 and evt_end <= evt_start:
+                # No gap before first word — skip directly to highlighting
                 continue
 
-            # Build karaoke line: use {\c&H...&} override for the highlight color
-            highlight_ass_color = _hex_to_ass_color(highlight_color)
-            k_duration = int((highlight_end - word_start) * 100)  # centiseconds
+            evt_text = _build_group_text(group, state)
+            if not evt_text.strip():
+                continue
 
-            highlighted_line = (
-                f"{{\\c{highlight_ass_color}}}"
-                f"{word_text}"
-            )
-
-            h_start = _ass_time(word_start)
-            h_end = _ass_time(highlight_end)
             ass_lines.append(
-                f"Dialogue: 1,{h_start},{h_end},Default,,0,0,0,,{highlighted_line}"
+                f"Dialogue: 0,{_ass_time(evt_start)},{_ass_time(evt_end)},Default,,0,0,0,,{evt_text}"
             )
 
     return "\n".join(ass_lines)
