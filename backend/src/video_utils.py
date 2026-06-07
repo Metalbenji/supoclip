@@ -3926,6 +3926,11 @@ def create_clips_from_segments(
                 clip_info = None
                 logger.error("Failed to create clip %s", clip_index)
 
+            # Force GC after every clip to reclaim MoviePy circular refs.
+            # Without this, subtitle TextClips, CompositeVideoClip masks,
+            # and ffmpeg pipe buffers accumulate and eventually OOM.
+            gc.collect()
+
             with progress_state_lock:
                 completed_count += 1
                 current_completed = completed_count
