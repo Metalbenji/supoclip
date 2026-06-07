@@ -3120,13 +3120,15 @@ def _generate_ass_subtitles(
 ) -> str:
     """Generate ASS subtitle content from word timings with karaoke highlighting.
 
-    Uses a "sticky karaoke" approach: for each group of words, multiple
-    non-overlapping dialogue events are emitted, each showing ALL words
-    in the group but with different \\c colour overrides marking which
-    words have been spoken (highlighted) vs. not yet spoken (dimmed).
+    Uses native ASS ``\\k`` karaoke tags.  Each word group becomes a SINGLE
+    dialogue event with ``\\k<N>`` durations.  libass handles the sequential
+    syllable highlighting internally — the text is rendered once as one
+    continuous string, so word alignment is guaranteed.
 
-    This avoids the broken approach of emitting single-word dialogue
-    lines that libass positions independently, causing misalignment.
+    Before the ``\\k`` sweep reaches a syllable the word appears in
+    *PrimaryColour* (dimmed); once the sweep passes, it switches to
+    *SecondaryColour* (highlight).  This gives the classic TikTok-style
+    karaoke look with zero layout jitter.
     """
     if not relevant_words:
         return ""
@@ -3222,16 +3224,20 @@ def _generate_ass_subtitles(
         "Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding",
     ]
 
-    # Color constants for inline \c overrides
+    # Colour constants
     highlight_ass = _hex_to_ass_color(highlight_color)
-    # Dimmed color: same as font_color but with alpha for transparency
+    # PrimaryColour = dimmed (shown before the \k sweep reaches the word)
     dimmed_ass = _hex_to_ass_color(font_color)
     if dimmed_alpha > 0:
         dimmed_ass = f"&H{dimmed_alpha:02X}{dimmed_ass[4:]}"
+    # SecondaryColour = highlight (shown once the \k sweep passes the word)
+    secondary_colour = highlight_ass
 
     ass_styles = []
 
-    # Single default style — colours are overridden inline per word
+    # Single default style: PrimaryColour=dimmed, SecondaryColour=highlight
+    # The \k tag switches each syllable from Primary to Secondary as the
+    # timing sweep progresses left-to-right through the text.
     ass_styles.append(
         "Style: Default,{font},{size},{primary},{secondary},{outline},{back},"
         "{bold},0,0,0,100,100,{spacing},0,1,{outline_w},{shadow_w},2,"
@@ -3239,7 +3245,7 @@ def _generate_ass_subtitles(
             font=font_name,
             size=calculated_font_size,
             primary=dimmed_ass,
-            secondary=highlight_ass,
+            secondary=secondary_colour,
             outline=_hex_to_ass_color(stroke_color),
             back=_hex_to_ass_color(shadow_color),
             bold=-1 if int(subtitle_style.get("font_weight", 600)) >= 600 else 0,
@@ -3265,76 +3271,81 @@ def _generate_ass_subtitles(
         cs = int(round((seconds - int(seconds)) * 100))
         return f"{h}:{m:02d}:{s:02d}.{cs:02d}"
 
-    def _build_group_text(group_indices: List[int], highlighted_count: int) -> str:
-        """Build the full group text with \\c colour overrides.
-
-        The first ``highlighted_count`` words get the highlight colour;
-        the rest get the dimmed colour.
-        """
-        parts: List[str] = []
-        for i, global_idx in enumerate(group_indices):
-            word_text = display_words[global_idx] if global_idx < len(display_words) else ""
-            if not word_text:
-                continue
-            if i < highlighted_count:
-                parts.append("{\\c" + highlight_ass + "}" + word_text)
-            else:
-                parts.append("{\\c" + dimmed_ass + "}" + word_text)
-        return " ".join(parts)
-
-    # Generate dialogue events with sticky karaoke
+    # Generate ONE dialogue event per word group using native \k karaoke.
+    #
+    # The \k<N> tag gives the following syllable a duration of N deciseconds
+    # (tenths of a second).  libass sweeps a highlight cursor from left to
+    # right; syllables already passed switch from PrimaryColour to
+    # SecondaryColour.  This means:
+    #   - Before the sweep: word shown in dimmed colour (PrimaryColour)
+    #   - After the sweep passes: word shown in highlight colour (SecondaryColour)
+    #
+    # We use \k (instant transition) rather than \kf (smooth fade) so the
+    # colour switch is crisp, matching the TikTok karaoke style.
     for group in groups:
         if not group:
             continue
 
-        # Group timing
-        group_start = float(relevant_words[group[0]].get("start", 0)) + timing_shift
-        group_end = float(relevant_words[group[-1]].get("end", 0)) + timing_shift
-        group_start = max(0.0, group_start)
-        group_duration = group_end - group_start
-        if group_duration < 0.05:
+        n = len(group)
+
+        # Compute absolute word timings (clamped + shifted)
+        word_starts: List[float] = []
+        word_ends: List[float] = []
+        for global_idx in group:
+            ws = max(0.0, float(relevant_words[global_idx].get("start", 0)) + timing_shift)
+            we = max(0.0, float(relevant_words[global_idx].get("end", 0)) + timing_shift)
+            word_starts.append(ws)
+            word_ends.append(max(ws + 0.01, we))  # ensure positive duration
+
+        group_start = word_starts[0]
+        group_end = word_ends[-1]
+        if group_end - group_start < 0.05:
             continue
 
-        # Pre-compute word start times for boundary detection
-        word_starts: List[float] = []
-        for global_idx in group:
-            ws = float(relevant_words[global_idx].get("start", 0)) + timing_shift
-            word_starts.append(max(0.0, ws))
-
-        # Emit one dialogue event per "highlight state".
-        # State 0: no words highlighted yet  (visible from group_start to first word start)
-        # State N: first N words highlighted   (visible from word[N-1] start to word[N] start)
-        # State len(group): all highlighted     (visible from last word start to group_end)
+        # Build karaoke text: {\k<dur>}word1 {\k<dur>}word2 {\k<dur>}word3
         #
-        # Each event shows ALL words with correct \c overrides, so libass
-        # renders identical layout — only colours change between states.
-        n = len(group)
-        for state in range(n + 1):
-            # Time range for this state
-            if state == 0:
-                evt_start = group_start
-                evt_end = word_starts[0] if n > 0 else group_end
-            elif state < n:
-                evt_start = word_starts[state - 1]
-                evt_end = word_starts[state] if state < n else group_end
+        # Each \k duration is in deciseconds (tenths of a second).
+        # The timing is relative to the dialogue event start (group_start).
+        #
+        # We need the cumulative timing to match actual word boundaries.
+        # For each word, the \k duration should advance the sweep cursor
+        # from the current position to the start of the NEXT word.
+        # The last word's \k duration covers until group_end.
+        karaoke_parts: List[str] = []
+        cumulative = group_start
+
+        for i in range(n):
+            word_text = display_words[group[i]] if group[i] < len(display_words) else ""
+            if not word_text:
+                # Empty word — still need to advance timing
+                target = word_ends[i]
+            elif i < n - 1:
+                # Advance to the start of the next word (including any gap)
+                target = word_starts[i + 1]
             else:
-                evt_start = word_starts[state - 1]
-                evt_end = group_end
+                # Last word — advance to group end
+                target = group_end
 
-            # Skip degenerate/zero-duration events (except the initial pre-highlight)
-            if state > 0 and evt_end <= evt_start:
-                continue
-            if state == 0 and evt_end <= evt_start:
-                # No gap before first word — skip directly to highlighting
-                continue
+            duration_cs = max(1, int(round((target - cumulative) * 10)))  # deciseconds
+            cumulative = group_start + duration_cs / 10.0  # approximate
 
-            evt_text = _build_group_text(group, state)
-            if not evt_text.strip():
-                continue
+            karaoke_parts.append("{\\k" + str(duration_cs) + "}" + word_text)
 
+        evt_text = " ".join(karaoke_parts)
+
+        # Pre-highlight: if there's a gap before the first word, show all
+        # words dimmed during that gap (no \k sweep yet).
+        pre_gap = word_starts[0] - group_start
+        if pre_gap > 0.05:
+            # Build a plain text line (no \k tags) showing all words dimmed
+            plain_text = " ".join(display_words[group[i]] if group[i] < len(display_words) else "" for i in range(n))
             ass_lines.append(
-                f"Dialogue: 0,{_ass_time(evt_start)},{_ass_time(evt_end)},Default,,0,0,0,,{evt_text}"
+                f"Dialogue: 0,{_ass_time(group_start)},{_ass_time(word_starts[0])},Default,,0,0,0,,{plain_text}"
             )
+
+        ass_lines.append(
+            f"Dialogue: 0,{_ass_time(word_starts[0])},{_ass_time(group_end)},Default,,0,0,0,,{evt_text}"
+        )
 
     return "\n".join(ass_lines)
 
@@ -3419,6 +3430,10 @@ def _render_clip_with_ffmpeg_ass(
             if not output_path.exists() or output_path.stat().st_size <= 0:
                 raise RuntimeError("ffmpeg produced no output")
 
+            logger.info(
+                "[ASS_RENDER] ffmpeg ASS burn succeeded: output=%s size=%d bytes",
+                output_path.name, output_path.stat().st_size,
+            )
             return True
 
         except subprocess.TimeoutExpired:
@@ -3990,6 +4005,19 @@ def create_optimized_clip(
                     )
 
                     if ass_content:
+                        # Diagnostic: dump ASS content so we can verify it in logs
+                        _ass_diag_lines = ass_content.strip().split("\n")
+                        _event_lines = [l for l in _ass_diag_lines if l.startswith("Dialogue:")]
+                        logger.info(
+                            "[ASS_RENDER] Generated ASS: %d lines total, %d dialogue events, "
+                            "font=%s, first_event=%s",
+                            len(_ass_diag_lines), len(_event_lines),
+                            processor.font_path,
+                            _event_lines[0][:120] if _event_lines else "(none)",
+                        )
+                        if _event_lines:
+                            for _dl in _event_lines[:3]:
+                                logger.debug("[ASS_RENDER]   %s", _dl)
                         for encoding_candidate in clip_encoding_candidates:
                             selected_encoder_backend = str(encoding_candidate.get("encoder_backend") or "")
                             selected_encoder_profile = str(encoding_candidate.get("encoder_profile") or "")
