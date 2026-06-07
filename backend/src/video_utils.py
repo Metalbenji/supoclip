@@ -3045,6 +3045,47 @@ def _hex_to_ass_color(hex_color: str) -> str:
     return f"&H00{b}{g}{r}"
 
 
+_font_family_cache: Dict[str, str] = {}
+_font_family_lock = threading.Lock()
+
+
+def _resolve_font_family_name(font_path: str) -> str:
+    """Resolve a font file path to its actual family name for ASS/libass.
+
+    libass uses fontconfig to find fonts, which indexes them by their
+    internal TTF family name — NOT the filename.  For example,
+    ``TikTokSans-Regular.ttf`` has family name ``TikTok Sans``.
+    This function tries ``fc-scan`` first, falls back to the filename stem.
+    """
+    font_path_str = str(font_path)
+    with _font_family_lock:
+        cached = _font_family_cache.get(font_path_str)
+        if cached is not None:
+            return cached
+
+    # Try fc-scan (available if fontconfig is installed)
+    try:
+        result = subprocess.run(
+            ["fc-scan", "--format", "%{family[0]}", font_path_str],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+        family = (result.stdout or "").strip().split("\n")[0].strip()
+        if family:
+            with _font_family_lock:
+                _font_family_cache[font_path_str] = family
+            return family
+    except Exception:
+        pass
+
+    # Fallback: filename stem (may not match but better than nothing)
+    stem = Path(font_path).stem
+    with _font_family_lock:
+        _font_family_cache[font_path_str] = stem
+    return stem
+
+
 def _generate_ass_subtitles(
     relevant_words: List[Dict[str, Any]],
     video_width: int,
@@ -3111,8 +3152,11 @@ def _generate_ass_subtitles(
     margin_bottom = int(video_height * (1.0 - position_percent / 100.0))
     margin_bottom = max(0, min(margin_bottom, video_height - 20))
 
-    # Font filename for ASS — just use the font name, ASS/libass resolves via fontconfig
-    font_name = Path(font_path).stem
+    # Font filename for ASS — resolve the actual font family name rather than
+    # using the filename stem, which may not match the TTF internal name.
+    # fontconfig indexes fonts by their internal family name (e.g. "TikTok Sans")
+    # not by filename (e.g. "TikTokSans-Regular").
+    font_name = _resolve_font_family_name(font_path)
 
     # Karaoke timing shift
     timing_shift = float(KARAOKE_TIMING_SHIFT_SECONDS)
