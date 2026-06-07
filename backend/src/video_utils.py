@@ -4129,19 +4129,6 @@ def create_optimized_clip(
 
                     _mask.make_frame = _safe_mask_mf
 
-        # Explicitly close individual subtitle TextClip objects to free PIL/numpy
-        # image buffers BEFORE encoding.  MoviePy v2's cascade close is unreliable
-        # and can leave hundreds of rendered text images (50-100KB each) in memory.
-        # The CompositeVideoClip (final_clip) already holds its own frame buffer
-        # references, so closing the source TextClip objects here is safe.
-        if _had_subtitle_layers:
-            for _sc in final_clips:
-                if _sc is not cropped_clip:
-                    try:
-                        _sc.close()
-                    except Exception:
-                        pass
-
         processor = VideoProcessor(font_family, font_size, font_color)
         clip_encoding_candidates = processor.get_clip_render_encoding_candidates()
         selected_encoder_backend = ""
