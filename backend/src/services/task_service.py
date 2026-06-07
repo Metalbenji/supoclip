@@ -2741,6 +2741,14 @@ class TaskService:
                     if cancel_check:
                         await cancel_check()
 
+            ai_focus_tags = list((task_record or {}).get("ai_focus_tags") or [])
+            render_filename_prefix = self._build_render_filename_prefix()
+            task_video_overrides = (
+                dict((task_record or {}).get("runtime_info", {}).get("video_preferences_override"))
+                if isinstance((task_record or {}).get("runtime_info", {}).get("video_preferences_override"), dict)
+                else None
+            )
+
             if render_from_drafts:
                 return await self._render_from_drafts(
                     task_id=task_id,
@@ -2755,14 +2763,6 @@ class TaskService:
                     update_progress=update_progress,
                     task_video_overrides=task_video_overrides,
                 )
-
-            ai_focus_tags = list((task_record or {}).get("ai_focus_tags") or [])
-            render_filename_prefix = self._build_render_filename_prefix()
-            task_video_overrides = (
-                dict((task_record or {}).get("runtime_info", {}).get("video_preferences_override"))
-                if isinstance((task_record or {}).get("runtime_info", {}).get("video_preferences_override"), dict)
-                else None
-            )
 
             if review_before_render_enabled:
                 result = await self._process_review_enabled_analysis(
