@@ -241,6 +241,7 @@ function SettingsPageContent() {
         values: {
           reviewBeforeRenderEnabled: preferencesDraft.reviewBeforeRenderEnabled,
           timelineEditorEnabled: preferencesDraft.timelineEditorEnabled,
+          transitionsEnabled: preferencesDraft.transitionsEnabled ?? false,
           transcriptionProvider: preferencesDraft.transcriptionProvider,
           whisperModelSize: preferencesDraft.whisperModelSize,
           defaultFramingMode: preferencesDraft.defaultFramingMode,
@@ -268,6 +269,7 @@ function SettingsPageContent() {
     (prefs: UserPreferences = preferencesDraft) => ({
       reviewBeforeRenderEnabled: prefs.reviewBeforeRenderEnabled,
       timelineEditorEnabled: prefs.timelineEditorEnabled,
+      transitionsEnabled: prefs.transitionsEnabled ?? false,
       transcriptionProvider: prefs.transcriptionProvider,
       whisperModelSize: prefs.whisperModelSize,
       defaultFramingMode: prefs.defaultFramingMode,

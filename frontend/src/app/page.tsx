@@ -112,6 +112,7 @@ export default function Home() {
     () => ({
       reviewBeforeRenderEnabled: preferences.reviewBeforeRenderEnabled,
       timelineEditorEnabled: preferences.timelineEditorEnabled,
+      transitionsEnabled: preferences.transitionsEnabled ?? false,
       transcriptionProvider: preferences.transcriptionProvider,
       whisperModelSize: preferences.whisperModelSize,
       defaultFramingMode: preferences.defaultFramingMode,
