@@ -3304,26 +3304,34 @@ def _generate_ass_subtitles(
 
         # Build karaoke text: {\K<dur>}word1 {\K<dur>}word2 {\K<dur>}word3
         #
-        # Uses uppercase \K (sticky karaoke) so that once the sweep passes a
-        # word it stays highlighted for the rest of the dialogue event.
-        # This gives the TikTok-style look: dimmed -> highlighted -> stays bright.
+        # Uses uppercase \K (sticky karaoke) so that once a syllable's range
+        # has been swept, it stays in SecondaryColour (highlight) forever.
         #
-        # Each \K duration is in centiseconds (hundredths of a second).
-        # The timing is relative to the dialogue event start (group_start).
-        # For word i, the \K duration is the time from the previous word's
-        # start (or event start) to word i's start — i.e. how long the word
-        # stays dimmed before the sweep reaches it and turns it bright.
+        # Each \K<dur> tag means "the following syllable occupies dur
+        # centiseconds of the karaoke timeline."  libass highlights the
+        # syllable while the sweep cursor is inside its range.
+        #
+        # For word i, the \K duration should be the time from word i's start
+        # to word (i+1)'s start (or to word i's end for the last word).
+        # This way the highlight cursor spends the right amount of time on
+        # each word before moving on.
+        #
+        # Example with starts=[0.0, 0.5, 1.0], ends=[0.5, 1.0, 1.5]:
+        #   {\K50}word0 {\K50}word1 {\K50}word2
+        #   Timeline ranges: word0=[0,50) word1=[50,100) word2=[100,150)
+        #   word0 highlighted at 0.0s, word1 at 0.5s, word2 at 1.0s  ✓
         karaoke_parts: List[str] = []
-        cumulative = group_start
 
         for i in range(n):
             word_text = display_words[group[i]] if group[i] < len(display_words) else ""
-            # Target = the moment this word should become highlighted
-            target = word_starts[i]
+            if i < n - 1:
+                # Duration = time until next word starts
+                duration_s = word_starts[i + 1] - word_starts[i]
+            else:
+                # Last word: duration = word's own speech duration
+                duration_s = word_ends[i] - word_starts[i]
 
-            duration_cs = max(1, int(round((target - cumulative) * 100)))  # centiseconds
-            cumulative += duration_cs / 100.0  # advance running clock
-
+            duration_cs = max(1, int(round(duration_s * 100)))  # centiseconds
             karaoke_parts.append("{\\K" + str(duration_cs) + "}" + word_text)
 
         evt_text = " ".join(karaoke_parts)
