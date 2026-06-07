@@ -1,11 +1,10 @@
 import { useId, useEffect, useRef, type ChangeEvent, type CSSProperties } from "react";
-import { Palette, Type } from "lucide-react";
+import { Type } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Slider } from "@/components/ui/slider";
 import {
-  SUBTITLE_PRESETS,
   TEXT_ALIGN_OPTIONS,
   TEXT_TRANSFORM_OPTIONS,
   type SubtitlePresetId,
@@ -66,7 +65,6 @@ interface SettingsSectionFontProps {
 
 const SWATCH_COLORS = ["#FFFFFF", "#000000", "#FFD700", "#FF6B6B", "#4ECDC4", "#45B7D1"];
 const PREVIEW_TEXT = "Your subtitle will look like this";
-const SCROLL_PREVIEW_WORDS = ["This", "subtitle", "will", "look", "amazing", "right"];
 
 function applyTextTransform(text: string, mode: TextTransformOption): string {
   if (mode === "uppercase") {
@@ -318,9 +316,6 @@ export function SettingsSectionFont({
   onSubtitlePresetChange,
   onFontUpload,
 }: SettingsSectionFontProps) {
-  const previewFilterBaseId = useId().replace(/:/g, "");
-  const previewStrokeFilterId = `${previewFilterBaseId}-stroke`;
-  const previewShadowFilterId = `${previewFilterBaseId}-shadow`;
   const previewText = applyTextTransform(PREVIEW_TEXT, textTransform);
   const previewTextAnchor: "start" | "middle" | "end" =
     textAlign === "left" ? "start" : textAlign === "right" ? "end" : "middle";
@@ -332,194 +327,9 @@ export function SettingsSectionFont({
     letterSpacing: `${letterSpacing}px`,
   };
   const previewSvgHeight = Math.max(70, Math.ceil(fontSize * lineHeight * 2.2));
-  const previewStrokeStdDeviation = Math.max(0, strokeBlur / 2);
-  const previewShadowStdDeviation = Math.max(0, shadowBlur / 2);
-
-  // Wheel preview: 4-slot SVG rolls down, clipped to 3 visible rows
-  const wheelContainerRef = useRef<HTMLDivElement>(null);
-  const wheelSlotH = Math.max(28, Math.ceil(fontSize * lineHeight * 1.1));
-
-  // Hormozi preview: slide highlight box across words
-  const hormoziContainerRef = useRef<HTMLDivElement>(null);
-  useEffect(() => {
-    if (animation !== "vertical_scroll") return;
-    const container = wheelContainerRef.current;
-    if (!container) return;
-    const svg = container.querySelector("svg.wheel-svg") as SVGSVGElement | null;
-    if (!svg) return;
-
-    // Select the 4 slot groups
-    const slotGroups = container.querySelectorAll<SVGGElement>("g[data-wslot]");
-    if (slotGroups.length < 4) return;
-
-    const n = SCROLL_PREVIEW_WORDS.length;
-    let idx = 0;
-    let cancelled = false;
-    const HOLD = 900;
-    const SLIDE = 380;
-    const slotH = Math.max(28, Math.ceil(fontSize * lineHeight * 1.1));
-    const dimOpacity = dimUnhighlighted ? 0.35 : 0.7;
-
-    // Returns [incoming, next, current, prev] for word index i
-    function getWords(i: number): string[] {
-      return [
-        SCROLL_PREVIEW_WORDS[(i + 2) % n],
-        SCROLL_PREVIEW_WORDS[(i + 1) % n],
-        SCROLL_PREVIEW_WORDS[i],
-        SCROLL_PREVIEW_WORDS[(i - 1 + n) % n],
-      ];
-    }
-
-    function setSlot(slotIdx: number, text: string, highlighted: boolean) {
-      const g = slotGroups[slotIdx];
-      if (!g) return;
-      const texts = g.querySelectorAll<SVGTextElement>("text");
-      for (const t of texts) t.textContent = text;
-      g.setAttribute("opacity", String(highlighted ? 1 : dimOpacity));
-      // Update fill on the last text element (the fill layer)
-      const fillText = texts[texts.length - 1];
-      if (fillText) fillText.setAttribute("fill", highlighted ? highlightColor : fontColor);
-    }
-
-    // Initialize
-    const words = getWords(0);
-    for (let s = 0; s < 4; s++) setSlot(s, words[s], s === 2);
-    svg.style.transition = "none";
-    svg.style.transform = `translateY(${-slotH}px)`;
-
-    setTimeout(() => {
-      if (cancelled) return;
-      function tick() {
-        if (cancelled) return;
-
-        // Roll down: slide from -slotH to 0
-        svg.style.transition = `transform ${SLIDE}ms cubic-bezier(0.22, 0.61, 0.36, 1)`;
-        svg.style.transform = "translateY(0)";
-
-        setTimeout(() => {
-          if (cancelled) return;
-
-          // Rotate words and snap back
-          idx = (idx + 1) % n;
-          const w = getWords(idx);
-          for (let s = 0; s < 4; s++) setSlot(s, w[s], s === 2);
-
-          svg.style.transition = "none";
-          svg.style.transform = `translateY(${-slotH}px)`;
-
-          setTimeout(() => tick(), HOLD);
-        }, SLIDE + 20);
-      }
-      tick();
-    }, 400);
-
-    return () => { cancelled = true; };
-  }, [animation, fontSize, lineHeight, dimUnhighlighted, highlightColor, fontColor, wheelSlotH]);
-
-  // Hormozi preview: slide highlight box across words using getExtentOfChar
-  useEffect(() => {
-    if (animation !== "hormozi") return;
-    const container = hormoziContainerRef.current;
-    if (!container) return;
-
-    const box = container.querySelector<SVGRectElement>("rect#hormozi-highlight-box");
-    const textEl = container.querySelector<SVGTextElement>("text#hormozi-main-text:not([aria-hidden])");
-    if (!box || !textEl) return;
-
-    const words = previewText.split(" ").filter(Boolean);
-    if (words.length === 0) return;
-
-    let cancelled = false;
-    const WORD_HOLD = 700;
-    const padX = Math.max(6, fontSize * 0.12);
-
-    // Build char index ranges for each word
-    function getWordRanges() {
-      const ranges: [number, number][] = [];
-      let charIdx = 0;
-      for (const word of words) {
-        const start = charIdx;
-        const end = charIdx + word.length;
-        ranges.push([start, end]);
-        charIdx = end + 1; // +1 for space
-      }
-      return ranges;
-    }
-
-    function getWordBox(rangeIdx: number) {
-      const ranges = getWordRanges();
-      if (rangeIdx >= ranges.length) return null;
-      const [startChar, endChar] = ranges[rangeIdx];
-      try {
-        const startExt = textEl.getExtentOfChar(startChar);
-        const endExt = textEl.getExtentOfChar(Math.max(startChar, endChar - 1));
-        const padY = Math.max(4, fontSize * 0.15);
-        const x = startExt.x - padX;
-        const w = (endExt.x + endExt.width) - startExt.x + padX * 2;
-        const y = startExt.y - padY;
-        const h = startExt.height + padY * 2;
-        return { x, y, w, h };
-      } catch {
-        return null;
-      }
-    }
-
-    let wordIdx = 0;
-    function highlightNext() {
-      if (cancelled) return;
-      const wb = getWordBox(wordIdx % words.length);
-      if (wb) {
-        box.setAttribute("x", String(wb.x));
-        box.setAttribute("y", String(wb.y));
-        box.setAttribute("width", String(wb.w));
-        box.setAttribute("height", String(wb.h));
-        box.setAttribute("opacity", "1");
-      }
-      wordIdx++;
-      setTimeout(() => highlightNext(), WORD_HOLD);
-    }
-
-    // Wait for font rendering
-    const timer = setTimeout(() => {
-      box.setAttribute("opacity", "0");
-      highlightNext();
-    }, 500);
-
-    return () => { cancelled = true; clearTimeout(timer); };
-  }, [animation, previewText, fontSize, letterSpacing, textTransform, fontFamily, fontWeight, previewTextAnchor, previewTextX]);
 
   return (
     <div className="space-y-6">
-      {/* Style Preset Selector */}
-      <div className="space-y-2">
-        <Label className="text-sm font-medium text-black flex items-center gap-2">
-          <Palette className="w-4 h-4" />
-          Style Preset
-        </Label>
-        <Select
-          value={subtitlePreset}
-          onValueChange={(value) => onSubtitlePresetChange(value as SubtitlePresetId)}
-          disabled={isSaving || isUploadingFont}
-        >
-          <SelectTrigger className="w-full">
-            <SelectValue placeholder="Select preset" />
-          </SelectTrigger>
-          <SelectContent>
-            {SUBTITLE_PRESETS.map((preset) => (
-              <SelectItem key={preset.id} value={preset.id}>
-                {preset.label}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
-        {(() => {
-          const activePreset = SUBTITLE_PRESETS.find((p) => p.id === subtitlePreset);
-          return activePreset ? (
-            <p className="text-xs text-gray-500">{activePreset.description}</p>
-          ) : null;
-        })()}
-      </div>
-
       {/* Position slider */}
       <div className="space-y-2">
         <Label className="text-sm font-medium text-black">Position: {position}%</Label>
@@ -677,10 +487,7 @@ export function SettingsSectionFont({
       </div>
 
       <div className="space-y-2">
-        <Label className="text-sm font-medium text-black flex items-center gap-2">
-          <Palette className="w-4 h-4" />
-          Font Color
-        </Label>
+        <Label className="text-sm font-medium text-black">Font Color</Label>
         <div className="flex items-center gap-2">
           <input
             type="color"
@@ -942,276 +749,25 @@ export function SettingsSectionFont({
       </div>
 
       <div className="space-y-2">
-        <Label className="text-sm font-medium text-black">Preview {animation !== "none" ? <span className="text-xs text-gray-400 font-normal">(animated)</span> : null}</Label>
+        <Label className="text-sm font-medium text-black">Preview</Label>
         <div className="p-6 bg-black rounded-lg min-h-[120px] flex items-center overflow-visible">
           <div className="relative w-full">
-            {animation === "vertical_scroll" ? (
-              /* ═══════════════════════════════════════════════════════════
-                 Vertical Scroll preview — 4-slot rolling wheel
-                 4 rows in SVG, container clips to 3. SVG translateY
-                 rolls down one slot, then snaps back and rotates words.
-                 Slot 0 = incoming (hidden), 1 = next, 2 = current, 3 = prev.
-                 ═══════════════════════════════════════════════════════════ */
-              <div
-                ref={wheelContainerRef}
-                className="w-full overflow-hidden"
-                style={{ height: wheelSlotH * 3 }}
-              >
-                <svg
-                  className="wheel-svg block w-full"
-                  width="100%"
-                  height={wheelSlotH * 4}
-                  role="img"
-                  aria-label="wheel preview"
-                >
-                  <defs>
-                    {shadowOpacity > 0 && (
-                      <filter id={`${previewShadowFilterId}-wheel`} x="-50%" y="-50%" width="200%" height="200%" colorInterpolationFilters="sRGB">
-                        <feOffset in="SourceAlpha" dx={shadowOffsetX} dy={shadowOffsetY} result="shadow-offset" />
-                        <feGaussianBlur in="shadow-offset" stdDeviation={previewShadowStdDeviation} result="shadow-blur" />
-                        <feFlood floodColor={shadowColor} floodOpacity={shadowOpacity} result="shadow-color" />
-                        <feComposite in="shadow-color" in2="shadow-blur" operator="in" result="shadow-only" />
-                      </filter>
-                    )}
-                    {strokeWidth > 0 && (
-                      <filter id={`${previewStrokeFilterId}-wheel`} x="-50%" y="-50%" width="200%" height="200%" colorInterpolationFilters="sRGB">
-                        <feMorphology in="SourceAlpha" operator="dilate" radius={strokeWidth} result="stroke-expanded" />
-                        <feComposite in="stroke-expanded" in2="SourceAlpha" operator="out" result="stroke-outer" />
-                        <feFlood floodColor={strokeColor} result="stroke-color" />
-                        <feComposite in="stroke-color" in2="stroke-outer" operator="in" result="stroke-only" />
-                        <feGaussianBlur in="stroke-only" stdDeviation={previewStrokeStdDeviation} result="stroke-final" />
-                      </filter>
-                    )}
-                  </defs>
-                  {/* Slot 0: incoming (hidden above viewport) */}
-                  <g data-wslot="0" opacity="0.35">
-                    {shadowOpacity > 0 && (
-                      <text aria-hidden x={previewTextX} y={wheelSlotH * 0.5} textAnchor={previewTextAnchor} dominantBaseline="middle" style={previewTextStyle} fill="#FFFFFF" filter={`url(#${previewShadowFilterId}-wheel)`}>{SCROLL_PREVIEW_WORDS[2]}</text>
-                    )}
-                    {strokeWidth > 0 && (
-                      <text aria-hidden x={previewTextX} y={wheelSlotH * 0.5} textAnchor={previewTextAnchor} dominantBaseline="middle" style={previewTextStyle} fill="#FFFFFF" filter={`url(#${previewStrokeFilterId}-wheel)`}>{SCROLL_PREVIEW_WORDS[2]}</text>
-                    )}
-                    <text x={previewTextX} y={wheelSlotH * 0.5} textAnchor={previewTextAnchor} dominantBaseline="middle" style={previewTextStyle} fill={fontColor}>{SCROLL_PREVIEW_WORDS[2]}</text>
-                  </g>
-                  {/* Slot 1: next word (top visible) */}
-                  <g data-wslot="1" opacity="0.35">
-                    {shadowOpacity > 0 && (
-                      <text aria-hidden x={previewTextX} y={wheelSlotH * 1.5} textAnchor={previewTextAnchor} dominantBaseline="middle" style={previewTextStyle} fill="#FFFFFF" filter={`url(#${previewShadowFilterId}-wheel)`}>{SCROLL_PREVIEW_WORDS[1]}</text>
-                    )}
-                    {strokeWidth > 0 && (
-                      <text aria-hidden x={previewTextX} y={wheelSlotH * 1.5} textAnchor={previewTextAnchor} dominantBaseline="middle" style={previewTextStyle} fill="#FFFFFF" filter={`url(#${previewStrokeFilterId}-wheel)`}>{SCROLL_PREVIEW_WORDS[1]}</text>
-                    )}
-                    <text x={previewTextX} y={wheelSlotH * 1.5} textAnchor={previewTextAnchor} dominantBaseline="middle" style={previewTextStyle} fill={fontColor}>{SCROLL_PREVIEW_WORDS[1]}</text>
-                  </g>
-                  {/* Slot 2: current word (center, highlighted) */}
-                  <g data-wslot="2" opacity="1">
-                    {shadowOpacity > 0 && (
-                      <text aria-hidden x={previewTextX} y={wheelSlotH * 2.5} textAnchor={previewTextAnchor} dominantBaseline="middle" style={previewTextStyle} fill="#FFFFFF" filter={`url(#${previewShadowFilterId}-wheel)`}>{SCROLL_PREVIEW_WORDS[0]}</text>
-                    )}
-                    {strokeWidth > 0 && (
-                      <text aria-hidden x={previewTextX} y={wheelSlotH * 2.5} textAnchor={previewTextAnchor} dominantBaseline="middle" style={previewTextStyle} fill="#FFFFFF" filter={`url(#${previewStrokeFilterId}-wheel)`}>{SCROLL_PREVIEW_WORDS[0]}</text>
-                    )}
-                    <text x={previewTextX} y={wheelSlotH * 2.5} textAnchor={previewTextAnchor} dominantBaseline="middle" style={previewTextStyle} fill={highlightColor}>{SCROLL_PREVIEW_WORDS[0]}</text>
-                  </g>
-                  {/* Slot 3: previous word (bottom visible) */}
-                  <g data-wslot="3" opacity="0.35">
-                    {shadowOpacity > 0 && (
-                      <text aria-hidden x={previewTextX} y={wheelSlotH * 3.5} textAnchor={previewTextAnchor} dominantBaseline="middle" style={previewTextStyle} fill="#FFFFFF" filter={`url(#${previewShadowFilterId}-wheel)`}>{SCROLL_PREVIEW_WORDS[SCROLL_PREVIEW_WORDS.length - 1]}</text>
-                    )}
-                    {strokeWidth > 0 && (
-                      <text aria-hidden x={previewTextX} y={wheelSlotH * 3.5} textAnchor={previewTextAnchor} dominantBaseline="middle" style={previewTextStyle} fill="#FFFFFF" filter={`url(#${previewStrokeFilterId}-wheel)`}>{SCROLL_PREVIEW_WORDS[SCROLL_PREVIEW_WORDS.length - 1]}</text>
-                    )}
-                    <text x={previewTextX} y={wheelSlotH * 3.5} textAnchor={previewTextAnchor} dominantBaseline="middle" style={previewTextStyle} fill={fontColor}>{SCROLL_PREVIEW_WORDS[SCROLL_PREVIEW_WORDS.length - 1]}</text>
-                  </g>
-                </svg>
-              </div>
-            ) : animation === "dropdown_bounce" ? (
-              /* ═══════════════════════════════════════════════════════════
-                 Dropdown Bounce preview — letters drop from above
-                 CSS animation: each letter starts above its final position
-                 and bounces down into place, staggered per letter.
-                 ═══════════════════════════════════════════════════════════ */
-              <div
-                className="w-full flex items-center justify-center overflow-hidden"
-                style={{ height: Math.max(70, Math.ceil(fontSize * 2.2)) }}
-              >
-                <div
-                  className="flex items-end"
-                  style={{ gap: 0, font: `${fontWeight} ${fontSize}px ${fontFamily}` }}
-                >
-                  {previewText.split("").map((char, i) => (
-                    <span
-                      key={i}
-                      style={{
-                        display: "inline-block",
-                        color: fontColor,
-                        paintOrder: "stroke fill",
-                        textShadow: `${Math.max(shadowOffsetX, 1)}px ${Math.max(shadowOffsetY, 2)}px ${Math.max(Math.ceil(shadowBlur * 1.5), 3)}px ${shadowColor}`,
-                        WebkitTextStroke: strokeWidth > 0
-                          ? `${strokeWidth}px ${strokeColor}`
-                          : "none",
-                        animation: `dropdownBounce 0.8s ease-out ${i * 0.05}s both`,
-                        transformOrigin: "bottom center",
-                      }}
-                    >
-                      {char === " " ? "\u00A0" : char}
-                    </span>
-                  ))}
-                </div>
-                <style>{`
-                  @keyframes dropdownBounce {
-                    0% { transform: translateY(-${Math.ceil(fontSize * 1.5)}px); opacity: 0; }
-                    40% { opacity: 1; }
-                    65% { transform: translateY(4px); }
-                    80% { transform: translateY(-2px); }
-                    90% { transform: translateY(1px); }
-                    100% { transform: translateY(0); opacity: 1; }
-                  }
-                `}</style>
-              </div>
-            ) : animation === "hormozi" ? (
-              /* ═══════════════════════════════════════════════════════════
-                 Hormozi preview — yellow box behind each word
-                 Full text rendered normally. JS measures word positions
-                 via getExtentOfChar and sizes/moves a single rect.
-                 ═══════════════════════════════════════════════════════════ */
-              <div
-                ref={hormoziContainerRef}
-                className="w-full relative"
-                style={{ height: Math.max(70, Math.ceil(fontSize * 1.6)) }}
-              >
-                <svg
-                  className="block w-full overflow-visible"
-                  height={Math.max(70, Math.ceil(fontSize * 1.6))}
-                  role="img"
-                  aria-label="hormozi preview"
-                >
-                  <defs>
-                    {shadowOpacity > 0 && (
-                      <filter id={`${previewShadowFilterId}-hormozi`} x="-50%" y="-50%" width="200%" height="200%" colorInterpolationFilters="sRGB">
-                        <feOffset in="SourceAlpha" dx={shadowOffsetX} dy={shadowOffsetY} result="shadow-offset" />
-                        <feGaussianBlur in="shadow-offset" stdDeviation={previewShadowStdDeviation} result="shadow-blur" />
-                        <feFlood floodColor={shadowColor} floodOpacity={shadowOpacity} result="shadow-color" />
-                        <feComposite in="shadow-color" in2="shadow-blur" operator="in" result="shadow-only" />
-                      </filter>
-                    )}
-                    {strokeWidth > 0 && (
-                      <filter id={`${previewStrokeFilterId}-hormozi`} x="-50%" y="-50%" width="200%" height="200%" colorInterpolationFilters="sRGB">
-                        <feMorphology in="SourceAlpha" operator="dilate" radius={strokeWidth} result="stroke-expanded" />
-                        <feComposite in="stroke-expanded" in2="SourceAlpha" operator="out" result="stroke-outer" />
-                        <feFlood floodColor={strokeColor} result="stroke-color" />
-                        <feComposite in="stroke-color" in2="stroke-outer" operator="in" result="stroke-only" />
-                        <feGaussianBlur in="stroke-only" stdDeviation={previewStrokeStdDeviation} result="stroke-final" />
-                      </filter>
-                    )}
-                  </defs>
-                  {/* Highlight box — positioned by JS */}
-                  <rect
-                    id="hormozi-highlight-box"
-                    x="0"
-                    y="0"
-                    width="0"
-                    height={fontSize * 1.3}
-                    rx={Math.max(4, fontSize * 0.06)}
-                    ry={Math.max(4, fontSize * 0.06)}
-                    fill={highlightColor}
-                    opacity={0}
-                    style={{ transition: "all 150ms ease" }}
-                  />
-                  {shadowOpacity > 0 && (
-                    <text
-                      aria-hidden
-                      x={previewTextX}
-                      y={Math.round(Math.max(70, Math.ceil(fontSize * 1.6)) / 2)}
-                      textAnchor={previewTextAnchor}
-                      dominantBaseline="central"
-                      style={previewTextStyle}
-                      fill="#FFFFFF"
-                      filter={`url(#${previewShadowFilterId}-hormozi)`}
-                    >{previewText}</text>
-                  )}
-                  {strokeWidth > 0 && (
-                    <text
-                      aria-hidden
-                      x={previewTextX}
-                      y={Math.round(Math.max(70, Math.ceil(fontSize * 1.6)) / 2)}
-                      textAnchor={previewTextAnchor}
-                      dominantBaseline="central"
-                      style={previewTextStyle}
-                      fill="#FFFFFF"
-                      filter={`url(#${previewStrokeFilterId}-hormozi)`}
-                    >{previewText}</text>
-                  )}
-                  <text
-                    id="hormozi-main-text"
-                    x={previewTextX}
-                    y={Math.round(Math.max(70, Math.ceil(fontSize * 1.6)) / 2)}
-                    textAnchor={previewTextAnchor}
-                    dominantBaseline="central"
-                    style={previewTextStyle}
-                    fill={fontColor}
-                  >{previewText}</text>
-                </svg>
-              </div>
-            ) : (
-              /* ═══════════════════════════════════════════════════════════
-                 Karaoke preview — word-by-word highlight (Classic / Minimal)
-                 Base text in fontColor. JS cycles through words, overlaying
-                 each word in highlightColor using getExtentOfChar. When
-                 dimUnhighlighted is on, non-highlighted words dim.
-                 ═══════════════════════════════════════════════════════════ */
-              <KaraokePreview
-                previewText={previewText}
-                previewTextStyle={previewTextStyle}
-                previewTextX={previewTextX}
-                previewTextAnchor={previewTextAnchor}
-                fontSize={fontSize}
-                highlightColor={highlightColor}
-                fontColor={fontColor}
-                dimUnhighlighted={dimUnhighlighted}
-                letterSpacing={letterSpacing}
-                textTransform={textTransform}
-                fontFamily={fontFamily}
-                fontWeight={fontWeight}
-                strokeColor={strokeColor}
-                strokeWidth={strokeWidth}
-              />
-            )}
-            <style>{`
-              @keyframes subtitleScrollIn {
-                0% { transform: translateY(-100%); opacity: 0; }
-                25% { opacity: 1; }
-                100% { transform: translateY(0); opacity: 1; }
-              }
-              @keyframes scrollRowHighlight {
-                0% { transform: translateY(100%); opacity: 0; }
-                30% { transform: translateY(0); opacity: 1; }
-                100% { transform: translateY(0); opacity: 1; }
-              }
-              @keyframes wheelRowIn {
-                0% { transform: translateY(-40px); opacity: 0; }
-                20% { transform: translateY(0); opacity: 1; }
-                100% { transform: translateY(0); opacity: 1; }
-              }
-              @keyframes wheelSpin {
-                0% {
-                  transform: translateY(-30px);
-                  opacity: 0;
-                }
-                40% {
-                  transform: translateY(0);
-                  opacity: 1;
-                }
-                60% {
-                  transform: translateY(0);
-                  opacity: 1;
-                }
-                100% {
-                  transform: translateY(30px);
-                  opacity: 0;
-                }
-              }
-            `}</style>
+            <KaraokePreview
+              previewText={previewText}
+              previewTextStyle={previewTextStyle}
+              previewTextX={previewTextX}
+              previewTextAnchor={previewTextAnchor}
+              fontSize={fontSize}
+              highlightColor={highlightColor}
+              fontColor={fontColor}
+              dimUnhighlighted={dimUnhighlighted}
+              letterSpacing={letterSpacing}
+              textTransform={textTransform}
+              fontFamily={fontFamily}
+              fontWeight={fontWeight}
+              strokeColor={strokeColor}
+              strokeWidth={strokeWidth}
+            />
           </div>
         </div>
       </div>

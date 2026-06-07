@@ -1,7 +1,7 @@
 export const TEXT_TRANSFORM_OPTIONS = ["none", "uppercase", "lowercase", "capitalize"] as const;
 export const TEXT_ALIGN_OPTIONS = ["left", "center", "right"] as const;
 export const SUBTITLE_POSITION_OPTIONS = ["bottom", "center", "top"] as const;
-export const SUBTITLE_ANIMATION_OPTIONS = ["none", "vertical_scroll", "hormozi", "dropdown_bounce"] as const;
+export const SUBTITLE_ANIMATION_OPTIONS = ["none"] as const;
 
 export type TextTransformOption = (typeof TEXT_TRANSFORM_OPTIONS)[number];
 export type TextAlignOption = (typeof TEXT_ALIGN_OPTIONS)[number];
@@ -56,7 +56,7 @@ export const DEFAULT_FONT_STYLE_OPTIONS: FontStyleOptions = {
   subtitlePreset: "classic",
 };
 
-export const SUBTITLE_PRESET_IDS = ["classic", "hormozi", "minimal", "vertical_scroll", "dropdown_bounce"] as const;
+export const SUBTITLE_PRESET_IDS = ["classic"] as const;
 export type SubtitlePresetId = (typeof SUBTITLE_PRESET_IDS)[number];
 
 export interface SubtitlePreset {
@@ -74,8 +74,8 @@ export interface SubtitlePreset {
 export const SUBTITLE_PRESETS: ReadonlyArray<SubtitlePreset> = [
   {
     id: "classic",
-    label: "Classic",
-    description: "The original TikTok-style subtitles with balanced stroke and shadow.",
+    label: "Classic Karaoke",
+    description: "The original TikTok-style karaoke subtitles with word-by-word highlight, balanced stroke and shadow.",
     style: {
       fontFamily: "TikTokSans-Regular",
       fontWeight: 600,
@@ -90,89 +90,6 @@ export const SUBTITLE_PRESETS: ReadonlyArray<SubtitlePreset> = [
       dimUnhighlighted: true,
       position: 75,
       animation: "none",
-    },
-  },
-  {
-    id: "hormozi",
-    label: "Hormozi",
-    description: "Bold uppercase subtitles with heavy shadow. Based on the Alex Hormozi viral style.",
-    style: {
-      fontFamily: "Anton-Regular",
-      fontWeight: 900,
-      textTransform: "uppercase",
-      letterSpacing: 2,
-      strokeColor: "#000000",
-      strokeWidth: 0,
-      strokeBlur: 0,
-      shadowColor: "#000000",
-      shadowOpacity: 0.8,
-      shadowBlur: 4,
-      shadowOffsetX: 0,
-      shadowOffsetY: 3,
-      dimUnhighlighted: true,
-      position: 50,
-      animation: "hormozi",
-    },
-  },
-  {
-    id: "minimal",
-    label: "Minimal",
-    description: "Clean, lightweight subtitles with thin stroke and soft shadow.",
-    style: {
-      fontFamily: "Inter-Variable",
-      fontWeight: 400,
-      strokeColor: "#000000",
-      strokeWidth: 1,
-      strokeBlur: 0.3,
-      shadowColor: "#000000",
-      shadowOpacity: 0.3,
-      shadowBlur: 1,
-      shadowOffsetX: 0,
-      shadowOffsetY: 1,
-      dimUnhighlighted: false,
-      position: 75,
-      animation: "none",
-    },
-  },
-  {
-    id: "vertical_scroll",
-    label: "Vertical Scroll",
-    description: "Subtitles scroll smoothly from top to center. Great for podcast-style content.",
-    style: {
-      fontFamily: "Poppins-SemiBold",
-      fontWeight: 600,
-      letterSpacing: 1,
-      strokeColor: "#000000",
-      strokeWidth: 2,
-      strokeBlur: 0.5,
-      shadowColor: "#000000",
-      shadowOpacity: 0.6,
-      shadowBlur: 3,
-      shadowOffsetX: 0,
-      shadowOffsetY: 2,
-      dimUnhighlighted: true,
-      position: 45,
-      animation: "vertical_scroll",
-    },
-  },
-  {
-    id: "dropdown_bounce",
-    label: "Dropdown Bounce",
-    description: "Each letter drops in from above and bounces into place, word by word.",
-    style: {
-      fontFamily: "TikTokSans-Regular",
-      fontWeight: 600,
-      strokeColor: "#000000",
-      strokeWidth: 2,
-      strokeBlur: 0.6,
-      shadowColor: "#000000",
-      shadowOpacity: 0.5,
-      shadowBlur: 2,
-      shadowOffsetX: 0,
-      shadowOffsetY: 2,
-      dimUnhighlighted: true,
-      position: 75,
-      animation: "dropdown_bounce",
     },
   },
 ];

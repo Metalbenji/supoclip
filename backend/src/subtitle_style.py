@@ -9,7 +9,7 @@ HEX_COLOR_PATTERN = re.compile(r"^#[0-9A-Fa-f]{6}$")
 TEXT_TRANSFORM_OPTIONS = {"none", "uppercase", "lowercase", "capitalize"}
 TEXT_ALIGN_OPTIONS = {"left", "center", "right"}
 SUBTITLE_POSITION_OPTIONS = {"bottom", "center", "top"}
-SUBTITLE_ANIMATION_OPTIONS = {"none", "vertical_scroll", "hormozi", "dropdown_bounce"}
+SUBTITLE_ANIMATION_OPTIONS = {"none"}
 
 # Position can be a string ("top", "center", "bottom") or a number (10-90 representing %).
 _POSITION_STRING_MAP = {"top": 15, "center": 45, "bottom": 75}
@@ -151,8 +151,7 @@ def normalize_subtitle_style(raw: Optional[Dict[str, Any]]) -> Dict[str, Any]:
     elif isinstance(position, str) and position.strip().lower() in SUBTITLE_POSITION_OPTIONS:
         normalized["position"] = _POSITION_STRING_MAP[position.strip().lower()]
 
-    animation = source.get("animation")
-    if isinstance(animation, str) and animation.strip().lower() in SUBTITLE_ANIMATION_OPTIONS:
-        normalized["animation"] = animation.strip().lower()
+    # Animation is always "none" (classic karaoke) — other styles have been removed.
+    normalized["animation"] = "none"
 
     return normalized
