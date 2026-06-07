@@ -209,10 +209,35 @@ class VideoProcessor:
         self.font_family = font_family
         self.font_size = font_size
         self.font_color = font_color
-        self.font_path = str(Path(__file__).parent.parent / "fonts" / f"{font_family}.ttf")
-        # Fallback to default font if custom font doesn't exist
-        if not Path(self.font_path).exists():
-            self.font_path = str(Path(__file__).parent.parent / "fonts" / "THEBOLDFONT-FREEVERSION.ttf")
+        self.font_path = self._resolve_font_file(font_family)
+
+    @staticmethod
+    def _resolve_font_file(font_family: str) -> str:
+        """Resolve a font family name to an actual .ttf file path.
+
+        Tries exact match first (e.g. 'Roboto-Variable' -> 'Roboto-Variable.ttf'),
+        then prefix match (e.g. 'Roboto' -> 'Roboto-Variable.ttf'),
+        then case-insensitive prefix match.
+        Falls back to THEBOLDFONT-FREEVERSION.ttf if nothing matches.
+        """
+        fonts_dir = Path(__file__).parent.parent / "fonts"
+        normalized = font_family.strip().lower().replace(" ", "")
+
+        # Exact match
+        exact = fonts_dir / f"{font_family}.ttf"
+        if exact.exists():
+            return str(exact)
+
+        # Prefix match (case-insensitive) — handles 'Roboto' -> 'Roboto-Variable.ttf'
+        for f in fonts_dir.iterdir():
+            if f.suffix.lower() == ".ttf" and f.stem.lower().replace(" ", "").startswith(normalized):
+                return str(f)
+
+        # Fallback
+        fallback = fonts_dir / "THEBOLDFONT-FREEVERSION.ttf"
+        if fallback.exists():
+            return str(fallback)
+        raise FileNotFoundError(f"No fonts found in {fonts_dir}")
 
     def get_optimal_encoding_settings(self, target_quality: str = "high") -> Dict[str, Any]:
         """Get optimal encoding settings for different quality levels."""
