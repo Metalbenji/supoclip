@@ -1942,7 +1942,6 @@ function SettingsPageContent() {
                     reviewBeforeRenderEnabled: !prev.reviewBeforeRenderEnabled,
                   }));
                 }}
-                }}
                 onToggleTimelineEditor={() => {
                   setPreferencesDraft((prev) => ({ ...prev, timelineEditorEnabled: !prev.timelineEditorEnabled }));
                 }}
