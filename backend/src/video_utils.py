@@ -2370,6 +2370,38 @@ def analyze_clip_framing(
         target_ratio=resolved_target_ratio,
         output_aspect_ratio=normalized_output_aspect_ratio,
     )
+
+    # If the source already matches the target aspect ratio, skip the
+    # expensive face-detection pipeline entirely — the crop is the full
+    # frame with zero offsets.
+    original_ratio = original_width / max(1, original_height)
+    if abs(original_ratio - resolved_target_ratio) < 1e-4:
+        logger.info(
+            "[FRAMING] Source %dx%d already matches target ratio %.4f — "
+            "skipping face detection.",
+            original_width, original_height, resolved_target_ratio,
+        )
+        return {
+            "crop_width": crop_width,
+            "crop_height": crop_height,
+            "fixed_crop_offsets": (0, 0),
+            "tracking_points": [],
+            "face_centers": [],
+            "framing_metadata": {
+                "face_detected": False,
+                "face_detection_rate": 0.0,
+                "crop_confidence": "native_ratio",
+                "suggested_crop_mode": "full_frame",
+                "detection_state": "skipped_source_matches_target",
+                "sampled_frames": 0,
+                "reliable_face_frames": 0,
+                "crop_width": crop_width,
+                "crop_height": crop_height,
+                "fixed_crop_offsets": [0, 0],
+                "tracking_points": [],
+                "face_centers": [],
+            },
+        }
     normalized_face_detection_mode = _normalize_face_detection_mode(face_detection_mode)
     normalized_fallback_crop_position = _normalize_fallback_crop_position(fallback_crop_position)
     normalized_face_anchor_profile = _normalize_face_anchor_profile(face_anchor_profile)
