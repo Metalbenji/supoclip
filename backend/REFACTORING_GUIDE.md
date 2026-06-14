@@ -113,17 +113,17 @@ Update `Dockerfile` CMD or docker-compose command:
 
 ```dockerfile
 # Change from:
-CMD [".venv/bin/uvicorn", "src.main:app", "--host", "0.0.0.0", "--port", "8080"]
+CMD [".venv/bin/uvicorn", "src.main:app", "--host", "0.0.0.0", "--port", "8181"]
 
 # To:
-CMD [".venv/bin/uvicorn", "src.main_refactored:app", "--host", "0.0.0.0", "--port", "8080"]
+CMD [".venv/bin/uvicorn", "src.main_refactored:app", "--host", "0.0.0.0", "--port", "8181"]
 ```
 
 Or in `docker-compose.yml`:
 
 ```yaml
 supoclip-backend:
-  command: [".venv/bin/uvicorn", "src.main_refactored:app", "--host", "0.0.0.0", "--port", "8080"]
+  command: [".venv/bin/uvicorn", "src.main_refactored:app", "--host", "0.0.0.0", "--port", "8181"]
 ```
 
 ### Step 5: Restart Services
@@ -139,19 +139,19 @@ docker-compose up -d --build
 
 ```bash
 # Basic health
-curl http://localhost:8080/health
+curl http://localhost:8181/health
 
 # Database health
-curl http://localhost:8080/health/db
+curl http://localhost:8181/health/db
 
 # Redis health (new!)
-curl http://localhost:8080/health/redis
+curl http://localhost:8181/health/redis
 ```
 
 ### 2. Create a Task
 
 ```bash
-curl -X POST http://localhost:8080/tasks/ \
+curl -X POST http://localhost:8181/tasks/ \
   -H "Content-Type: application/json" \
   -H "user_id: YOUR_USER_ID" \
   -d '{
@@ -178,7 +178,7 @@ Response:
 ### 3. Watch Real-time Progress (SSE)
 
 ```bash
-curl -N http://localhost:8080/tasks/{task_id}/progress
+curl -N http://localhost:8181/tasks/{task_id}/progress
 ```
 
 You'll see streaming events like:
@@ -201,13 +201,13 @@ data: {"status":"completed"}
 ### 4. Get Task Details
 
 ```bash
-curl http://localhost:8080/tasks/{task_id}
+curl http://localhost:8181/tasks/{task_id}
 ```
 
 ### 5. Get Clips
 
 ```bash
-curl http://localhost:8080/tasks/{task_id}/clips
+curl http://localhost:8181/tasks/{task_id}/clips
 ```
 
 ## 📊 Monitoring Workers
@@ -243,14 +243,14 @@ If issues arise, you can rollback:
 ```yaml
 # docker-compose.yml
 supoclip-backend:
-  command: [".venv/bin/uvicorn", "src.main:app", "--host", "0.0.0.0", "--port", "8080"]
+  command: [".venv/bin/uvicorn", "src.main:app", "--host", "0.0.0.0", "--port", "8181"]
 ```
 
 ### Option 2: Keep Both Running
 
 You can run both versions simultaneously on different ports for gradual migration:
 
-- Old: `src.main:app` on port 8080
+- Old: `src.main:app` on port 8181
 - New: `src.main_refactored:app` on port 8001
 
 ## 🎯 Performance Improvements

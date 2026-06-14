@@ -19,8 +19,8 @@ cp .env.sample .env
 
 Then open:
 - Frontend: `http://${APP_HOST}:${FRONTEND_HOST_PORT}` (default `http://localhost:3000`)
-- Backend API: `http://${APP_HOST}:${BACKEND_HOST_PORT}` (default `http://localhost:8080`)
-- API docs: `http://${APP_HOST}:${BACKEND_HOST_PORT}/docs` (default `http://localhost:8080/docs`)
+- Backend API: `http://${APP_HOST}:${BACKEND_HOST_PORT}` (default `http://localhost:8181`)
+- API docs: `http://${APP_HOST}:${BACKEND_HOST_PORT}/docs` (default `http://localhost:8181/docs`)
 
 ## Documentation Map
 

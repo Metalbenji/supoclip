@@ -527,7 +527,7 @@ export default function TaskPage() {
   const progressRef = useRef(progress);
   const progressMessageRef = useRef(progressMessage);
   const sourceTypeRef = useRef<string | undefined>(task?.source_type);
-  const apiUrl = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8080";
+  const apiUrl = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8181";
   const workflowLabel = useMemo(() => (task ? getTaskWorkflowLabel(task) : null), [task]);
   const taskId = Array.isArray(params.id) ? params.id[0] : params.id;
   const userId = session?.user?.id;

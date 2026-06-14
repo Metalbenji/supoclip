@@ -32,7 +32,7 @@ async def wait_for_status(
 
 async def main() -> None:
     parser = argparse.ArgumentParser(description="Manual smoke test for create -> transcript -> draft -> finalize pipeline.")
-    parser.add_argument("--api-url", default="http://localhost:8080")
+    parser.add_argument("--api-url", default="http://localhost:8181")
     parser.add_argument("--user-id", required=True)
     parser.add_argument("--source-url", required=True)
     parser.add_argument("--timeout-seconds", type=int, default=1800)

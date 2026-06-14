@@ -45,7 +45,7 @@ This is the single source of truth for MrglSnips runtime environment variables.
 | `ADMIN_API_KEY` | No | - | backend | Optional key for admin task-management endpoints (send as `x-admin-key`). |
 | `APP_HOST` | No | `localhost` | docs, startup output | Hostname used to build default browser-facing local URLs. |
 | `FRONTEND_HOST_PORT` | No | `3000` | docker-compose, startup output | Host port published for frontend container port `3000`. |
-| `BACKEND_HOST_PORT` | No | `8080` | docker-compose, startup output | Host port published for backend container port `8080`. |
+| `BACKEND_HOST_PORT` | No | `8181` | docker-compose, startup output | Host port published for backend container port `8181`. |
 | `POSTGRES_HOST_PORT` | No | `5433` | docker-compose | Host port published for PostgreSQL container port `5432`. |
 | `REDIS_HOST_PORT` | No | `6379` | docker-compose | Host port published for Redis container port `6379`. |
 | `BETTER_AUTH_TRUSTED_ORIGINS` | No | `http://localhost:3000,http://127.0.0.1:3000` | frontend | Comma-separated Better Auth origin allowlist for local/dev. |

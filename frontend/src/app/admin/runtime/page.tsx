@@ -25,7 +25,7 @@ export default function RuntimeAdminPage() {
   const [error, setError] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [isCleaning, setIsCleaning] = useState(false);
-  const apiUrl = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8080";
+  const apiUrl = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8181";
 
   useEffect(() => {
     const load = async () => {

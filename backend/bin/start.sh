@@ -14,4 +14,4 @@ fi
 source .venv/bin/activate
 
 # Start the application
-uvicorn src.main:app --host 0.0.0.0 --port 8080 --reload
+uvicorn src.main:app --host 0.0.0.0 --port 8181 --reload

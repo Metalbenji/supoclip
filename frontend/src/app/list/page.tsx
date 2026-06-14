@@ -35,7 +35,7 @@ export default function ListPage() {
   const [isDeletingAll, setIsDeletingAll] = useState(false);
   const [nowMs, setNowMs] = useState(() => Date.now());
 
-  const apiUrl = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8080";
+  const apiUrl = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8181";
 
   const fetchTasks = useCallback(async (showLoader = true) => {
     if (!session?.user?.id) return;

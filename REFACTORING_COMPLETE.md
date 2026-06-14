@@ -106,14 +106,14 @@ Migration applied successfully ✅
 
 ### 1. Health Checks
 ```bash
-curl http://localhost:8080/health          # ✅ healthy
-curl http://localhost:8080/health/db       # ✅ connected
-curl http://localhost:8080/health/redis    # ✅ connected
+curl http://localhost:8181/health          # ✅ healthy
+curl http://localhost:8181/health/db       # ✅ connected
+curl http://localhost:8181/health/redis    # ✅ connected
 ```
 
 ### 2. Create a Task
 ```bash
-curl -X POST http://localhost:8080/tasks/ \
+curl -X POST http://localhost:8181/tasks/ \
   -H "Content-Type: application/json" \
   -H "user_id: YOUR_USER_ID" \
   -d '{
@@ -134,7 +134,7 @@ Response:
 
 ### 3. Watch Real-time Progress (SSE)
 ```bash
-curl -N http://localhost:8080/tasks/{task_id}/progress
+curl -N http://localhost:8181/tasks/{task_id}/progress
 ```
 
 You'll see:
@@ -175,7 +175,7 @@ Currently, the frontend polls every 3 seconds. It should switch to SSE:
 setInterval(() => fetch(`/tasks/${id}`), 3000)
 
 // New: SSE
-const eventSource = new EventSource(`http://localhost:8080/tasks/${id}/progress`);
+const eventSource = new EventSource(`http://localhost:8181/tasks/${id}/progress`);
 
 eventSource.addEventListener('progress', (e) => {
   const data = JSON.parse(e.data);
@@ -224,7 +224,7 @@ docker exec -it supoclip-redis redis-cli
 
 - **Full Guide**: `backend/REFACTORING_GUIDE.md`
 - **Architecture**: See directory structure above
-- **API Docs**: http://localhost:8080/docs
+- **API Docs**: http://localhost:8181/docs
 
 ## ✅ All Tests Passed
 
