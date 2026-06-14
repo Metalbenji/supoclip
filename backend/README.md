@@ -33,13 +33,13 @@ cd backend
 uv venv .venv
 source .venv/bin/activate
 uv sync
-uvicorn src.main_refactored:app --reload --host 0.0.0.0 --port 8000
+uvicorn src.main_refactored:app --reload --host 0.0.0.0 --port 8080
 ```
 
 Legacy entrypoint (still present):
 
 ```bash
-uvicorn src.main:app --reload --host 0.0.0.0 --port 8000
+uvicorn src.main:app --reload --host 0.0.0.0 --port 8080
 ```
 
 ## Configuration
@@ -102,7 +102,7 @@ Backend is started by `docker-compose.yml` with:
 ## API Docs
 
 When running locally or via Docker:
-- Swagger UI: `http://${APP_HOST}:${BACKEND_HOST_PORT}/docs` (default `http://localhost:8000/docs`)
+- Swagger UI: `http://${APP_HOST}:${BACKEND_HOST_PORT}/docs` (default `http://localhost:8080/docs`)
 - Task runtime statuses include: `queued`, `processing`, `awaiting_review`, `completed`, `error`
 - AI model discovery: `GET /tasks/ai-settings/{provider}/models`
   - key providers use saved user key first, then env fallback

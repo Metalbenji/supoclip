@@ -78,7 +78,7 @@ function formatProviderLabel(provider: AiProvider): string {
 
 export default function Home() {
   const router = useRouter();
-  const apiUrl = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
+  const apiUrl = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8080";
   const { data: session, isPending } = useSession();
 
   const [url, setUrl] = useState("");

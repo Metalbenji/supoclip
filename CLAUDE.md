@@ -149,10 +149,10 @@ source .venv/bin/activate  # macOS/Linux
 uv sync
 
 # Run development server (recommended entrypoint, aligned with Docker)
-uvicorn src.main_refactored:app --reload --host 0.0.0.0 --port 8000
+uvicorn src.main_refactored:app --reload --host 0.0.0.0 --port 8080
 
 # Legacy entrypoint (still available)
-uvicorn src.main:app --reload --host 0.0.0.0 --port 8000
+uvicorn src.main:app --reload --host 0.0.0.0 --port 8080
 ```
 
 **Prerequisites:**
@@ -247,7 +247,7 @@ docker-compose up -d --build
 
 Services:
 - Frontend: `http://${APP_HOST}:${FRONTEND_HOST_PORT}` (default `http://localhost:3000`)
-- Backend: `http://${APP_HOST}:${BACKEND_HOST_PORT}` (default `http://localhost:8000`, API docs at `/docs`)
+- Backend: `http://${APP_HOST}:${BACKEND_HOST_PORT}` (default `http://localhost:8080`, API docs at `/docs`)
 - PostgreSQL: `APP_HOST:POSTGRES_HOST_PORT` (default `localhost:5432`)
 - Redis: `APP_HOST:REDIS_HOST_PORT` (default `localhost:6379`)
 - Local mapping reference: `docs/local-host-mappings.md`
@@ -374,7 +374,7 @@ The AI (via Pydantic AI) selects 3-7 segments based on:
 
 ## Testing and Development Tips
 
-- Backend API docs available at `http://${APP_HOST}:${BACKEND_HOST_PORT}/docs` (default `http://localhost:8000/docs`, Swagger UI)
+- Backend API docs available at `http://${APP_HOST}:${BACKEND_HOST_PORT}/docs` (default `http://localhost:8080/docs`, Swagger UI)
 - Check backend logs for detailed processing steps (uses emoji logging 🚀📝✅❌)
 - Frontend uses React 19 and Next.js 15 - be aware of breaking changes
 - Database initialized via `init.sql` on first PostgreSQL container start

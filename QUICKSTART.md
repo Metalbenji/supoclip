@@ -40,7 +40,7 @@ Edit the `.env` file in the project root and add your API keys:
 # Local host mappings (single place to adjust localhost ports/URLs)
 APP_HOST=localhost
 FRONTEND_HOST_PORT=3000
-BACKEND_HOST_PORT=8000
+BACKEND_HOST_PORT=8080
 
 # Choose one AI provider for clip selection
 OPENAI_API_KEY=your_openai_key_here
@@ -92,8 +92,8 @@ TRANSCRIPTION_PROVIDER=local
 ### 3. Access the Application
 
 - **Frontend**: `http://${APP_HOST}:${FRONTEND_HOST_PORT}` (default `http://localhost:3000`)
-- **Backend API**: `http://${APP_HOST}:${BACKEND_HOST_PORT}` (default `http://localhost:8000`)
-- **API Documentation**: `http://${APP_HOST}:${BACKEND_HOST_PORT}/docs` (default `http://localhost:8000/docs`)
+- **Backend API**: `http://${APP_HOST}:${BACKEND_HOST_PORT}` (default `http://localhost:8080`)
+- **API Documentation**: `http://${APP_HOST}:${BACKEND_HOST_PORT}/docs` (default `http://localhost:8080/docs`)
 
 ## Manual Docker Commands
 
@@ -172,7 +172,7 @@ Local URL/port mapping reference: `docs/local-host-mappings.md`
 | `ADMIN_API_KEY` | - | Optional key for admin endpoints (send via `x-admin-key`) |
 | `APP_HOST` | `localhost` | Hostname used for local URL defaults |
 | `FRONTEND_HOST_PORT` | `3000` | Host port bound to frontend container port `3000` |
-| `BACKEND_HOST_PORT` | `8000` | Host port bound to backend container port `8000` |
+| `BACKEND_HOST_PORT` | `8080` | Host port bound to backend container port `8080` |
 | `POSTGRES_HOST_PORT` | `5433` | Host port bound to PostgreSQL container port `5432` |
 | `REDIS_HOST_PORT` | `6379` | Host port bound to Redis container port `6379` |
 | `BETTER_AUTH_TRUSTED_ORIGINS` | `http://localhost:3000,http://127.0.0.1:3000` | Better Auth origin allowlist |
@@ -284,7 +284,7 @@ docker-compose up -d
 MrglSnips runs 5 Docker containers by default for the local transcription setup:
 
 1. **Frontend** (Next.js 15) - Port 3000
-2. **Backend** (FastAPI + Python) - Port 8000
+2. **Backend** (FastAPI + Python) - Port 8080
 3. **Worker** (ARQ background processor)
 4. **PostgreSQL** - Port 5432
 5. **Redis** - Port 6379
@@ -339,7 +339,7 @@ For production use:
 - Read the full project-state docs in `AGENTS.md` (and `CLAUDE.md` for Claude-specific compatibility)
 - Review all env vars in `docs/config.md`
 - Review local URL/port mappings in `docs/local-host-mappings.md`
-- Check out the API docs at `http://${APP_HOST}:${BACKEND_HOST_PORT}/docs` (default `http://localhost:8000/docs`)
+- Check out the API docs at `http://${APP_HOST}:${BACKEND_HOST_PORT}/docs` (default `http://localhost:8080/docs`)
 - View example clips in the frontend
 - Customize fonts by uploading `.ttf` files from the font menu in the app (or add files directly to `backend/fonts/`)
 - Install a curated free subtitle font pack: `./backend/bin/install_subtitle_font_pack.sh`
@@ -348,5 +348,5 @@ For production use:
 ## Getting Help
 
 - Check logs: `docker-compose logs -f`
-- View API documentation: `http://${APP_HOST}:${BACKEND_HOST_PORT}/docs` (default `http://localhost:8000/docs`)
+- View API documentation: `http://${APP_HOST}:${BACKEND_HOST_PORT}/docs` (default `http://localhost:8080/docs`)
 - Report issues: Create a GitHub issue with logs and error messages

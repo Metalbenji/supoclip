@@ -134,7 +134,7 @@ ENV PATH=/usr/local/cuda/bin:${PATH}
 
 RUN mkdir -p /app/uploads /app/clips /app/logs /tmp
 
-EXPOSE 8000
+EXPOSE 8080
 
 ENTRYPOINT ["/app/entrypoint.sh"]
-CMD [".venv/bin/uvicorn", "src.main:app", "--host", "0.0.0.0", "--port", "8000"]
+CMD [".venv/bin/uvicorn", "src.main:app", "--host", "0.0.0.0", "--port", "8080"]
