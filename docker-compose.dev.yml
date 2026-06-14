@@ -6,7 +6,7 @@
 #
 # This runs on shifted ports so nothing clashes:
 #   Frontend:  http://localhost:3001
-#   Backend:   http://localhost:8001
+#   Backend:   http://localhost:8182
 #   Postgres:  localhost:5434
 #   Redis:     localhost:6380
 
@@ -14,7 +14,7 @@ services:
   frontend:
     container_name: supoclip-dev-frontend
     environment:
-      - NEXT_PUBLIC_API_URL=http://${APP_HOST:-localhost}:${BACKEND_HOST_PORT:-8001}
+      - NEXT_PUBLIC_API_URL=http://${APP_HOST:-localhost}:${BACKEND_HOST_PORT:-8182}
       - DATABASE_URL=postgresql://supoclip:supoclip_password@supoclip-dev-postgres:5432/supoclip
       - BETTER_AUTH_SECRET=${BETTER_AUTH_SECRET:-supoclip_dev_secret_DIM_UNHIGHLIGHTED}
       - BETTER_AUTH_URL=http://${APP_HOST:-localhost}:${FRONTEND_HOST_PORT:-3001}
